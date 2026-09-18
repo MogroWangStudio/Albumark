@@ -1,0 +1,10 @@
+node_modules/
+dist/
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# 系统与日志
+.DS_Store
+*.log

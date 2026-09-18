@@ -1,0 +1,75 @@
+/* 辑印 Albumark · 设计令牌
+   唯一强调色取自品牌 Logo（#FFA72F）；层级由字号、字重与间距表达，不靠彩色堆砌。 */
+
+:root {
+  color-scheme: dark light;
+
+  --accent: #ffa72f;
+  --accent-strong: #e88f0e;
+  --accent-contrast: #3a2400;
+  --accent-soft: rgba(255, 167, 47, 0.15);
+
+  /* 深色（默认）：暖近黑，配合照片内容 */
+  --bg: #131110;
+  --canvas: #0b0a09;
+  --surface: rgba(30, 27, 24, 0.78);
+  --surface-solid: #201d1a;
+  --raised: #2a2622;
+  --hover: rgba(255, 255, 255, 0.06);
+  --active: rgba(255, 255, 255, 0.1);
+  --text: #f0ede8;
+  --text-2: #aca69d;
+  --text-3: #7a746c;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --danger: #e5604a;
+  --ok: #8fbf6f;
+
+  --font:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', system-ui,
+    sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+
+  --r-s: 6px;
+  --r-m: 10px;
+  --r-l: 14px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.38);
+  --shadow-3: 0 18px 56px rgba(0, 0, 0, 0.5);
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 120ms;
+  --dur: 220ms;
+  --dur-slow: 380ms;
+
+  --blur-material: blur(20px) saturate(160%);
+
+  --control-h: 30px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f1ec;
+    --canvas: #e7e3dd;
+    --surface: rgba(252, 250, 247, 0.82);
+    --surface-solid: #fcfaf7;
+    --raised: #ffffff;
+    --hover: rgba(0, 0, 0, 0.05);
+    --active: rgba(0, 0, 0, 0.09);
+    --text: #26221e;
+    --text-2: #6e675e;
+    --text-3: #9c948a;
+    --line: rgba(0, 0, 0, 0.08);
+    --line-strong: rgba(0, 0, 0, 0.16);
+    --accent-contrast: #2e1d00;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --surface: var(--surface-solid);
+    --blur-material: none;
+  }
+}
