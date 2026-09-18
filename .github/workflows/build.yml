@@ -36,9 +36,9 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
-      # 便携版只产出单个可执行文件，跳过安装器打包
+      # 便携版只产出单个可执行文件，跳过安装器打包（Tauri 2 用 --no-bundle，--bundles 不再接受 none）
       - name: 构建便携版
-        run: npm run tauri build -- --bundles none
+        run: npm run tauri build -- --no-bundle
 
       - name: 收集产物
         shell: pwsh
