@@ -1,14 +1,14 @@
 apply plugin: 'com.android.application'
 
 android {
-    namespace = "studio.mogrowang.albumark"
+    namespace = "com.mws.albumark"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "studio.mogrowang.albumark"
+        applicationId "com.mws.albumark"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0"
+        versionName "0.1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

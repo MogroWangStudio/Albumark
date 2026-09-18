@@ -1,4 +1,4 @@
-package studio.mogrowang.albumark;
+package com.mws.albumark;
 
 import com.getcapacitor.BridgeActivity;
 

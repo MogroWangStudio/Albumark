@@ -93,6 +93,14 @@ npx cap sync android   # 同步 Web 资源与插件
 npx cap open android   # 在 Android Studio 中构建运行
 ```
 
+### 持续集成（GitHub Actions）
+
+推送到 `main` 或打 `v*` 标签时自动构建，产物在 Actions 页面下载（支持手动触发）：
+
+- **Windows x64 便携版**：单文件 exe（目标机器需系统自带的 WebView2 运行时）
+- **macOS arm64**：`.dmg` 与 `.app`（未签名）
+- **Android**：debug APK 可直接安装；release APK 未签名，需自行配置签名后发布
+
 ## 已知限制（v0.1.0）
 
 - 仅支持 JPG 输入；导出为重编码 JPEG，**不回写 EXIF**（如需保留元数据请期待后续版本）

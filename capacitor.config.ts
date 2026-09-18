@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
-  appId: 'studio.mogrowang.albumark',
+  appId: 'com.mws.albumark',
   appName: '辑印',
   webDir: 'dist',
 }

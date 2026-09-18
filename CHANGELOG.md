@@ -4,6 +4,20 @@
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+
+- GitHub Actions 自动构建（推送到 main 或打 `v*` 标签触发，支持手动触发）：
+  - Windows x64 便携版（单文件 exe，跳过安装器）
+  - macOS arm64（.dmg 与 .app）
+  - Android APK（debug 可直接安装；release 未签名）
+
+### 变更
+
+- 应用标识统一为 `com.mws.albumark`（Tauri identifier / Capacitor appId / Android
+  applicationId 与 namespace），Android `versionName` 对齐为 0.1.0
+
 ## [0.1.0] - 2026-09-18
 
 首个公开版本。

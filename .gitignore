@@ -8,3 +8,6 @@ src-tauri/gen/schemas/
 # 系统与日志
 .DS_Store
 *.log
+
+# 本地开发工具状态
+.zcode/
