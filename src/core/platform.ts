@@ -5,6 +5,32 @@ export const isCapacitor =
   !!(window as unknown as { Capacitor?: unknown }).Capacitor &&
   !isTauri
 
+/**
+ * 程序（exe）所在目录，便携版数据默认放这里。
+ * 官方 path.executableDir 底层在 Windows/macOS 返回空值（dirs crate 不支持），
+ * 因此走自定义 Rust 命令取 current_exe 的父目录。
+ */
+export async function executableDir(): Promise<string> {
+  if (!isTauri) return ''
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<string>('exe_dir')
+  } catch {
+    return ''
+  }
+}
+
+/** 系统应用数据目录（%APPDATA% 等），exe_dir 取不到时的兜底。 */
+export async function appDataDir(): Promise<string> {
+  if (!isTauri) return ''
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<string>('app_data_root')
+  } catch {
+    return ''
+  }
+}
+
 export async function pickDirectory(title = '选择文件夹'): Promise<string | null> {
   if (!isTauri) return null
   const { open } = await import('@tauri-apps/plugin-dialog')

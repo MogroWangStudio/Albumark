@@ -19,6 +19,7 @@ import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import { TOKENS, missingTokens } from '@/core/tokens'
 import { toast } from '@/stores/toast'
+import { useFontsStore, FONT_CATEGORY_LABELS } from '@/stores/fonts'
 import { useTemplatesStore } from '@/stores/templates'
 import { usePresetsStore } from '@/stores/presets'
 import { useWatermarkStore } from '@/stores/watermark'
@@ -42,6 +43,7 @@ const props = withDefaults(
 const wm = useWatermarkStore()
 const templates = useTemplatesStore()
 const presets = usePresetsStore()
+const fonts = useFontsStore()
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const replaceTargetId = ref<string | null>(null)
@@ -49,7 +51,6 @@ const showSave = ref(false)
 const saveName = ref('')
 const contentEl = ref<HTMLTextAreaElement | null>(null)
 const showCustomFont = ref(false)
-const customFontName = ref('')
 
 const selectedText = computed(() =>
   wm.selected?.type === 'text' ? (wm.selected as TextLayer) : null,
@@ -58,18 +59,24 @@ const selectedImage = computed(() =>
   wm.selected?.type === 'image' ? (wm.selected as ImageLayer) : null,
 )
 
-const FONT_OPTIONS = [
-  { value: '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif', label: '系统黑体' },
-  { value: '"Songti SC", "STSong", "SimSun", serif', label: '宋体' },
-  { value: '"Kaiti SC", "STKaiti", "KaiTi", serif', label: '楷体' },
-  { value: 'Arial, "Helvetica Neue", sans-serif', label: 'Arial' },
-  { value: 'Georgia, "Times New Roman", serif', label: 'Georgia' },
-  { value: 'ui-monospace, "SF Mono", Menlo, monospace', label: '等宽字体' },
-]
+const DEFAULT_FONT = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif'
 
 const isCustomFont = computed(
-  () => !!selectedText.value && !FONT_OPTIONS.some((f) => f.value === selectedText.value!.fontFamily),
+  () => !!selectedText.value && selectedText.value.fontFamily !== DEFAULT_FONT && !fontInList(selectedText.value.fontFamily),
 )
+
+function fontInList(fontFamily: string): boolean {
+  return fonts.fonts.some((f) => `"${f.family}"` === fontFamily) || fontLabelOf(fontFamily) !== null
+}
+
+/** 内置分组里按值反查显示名（兜底清单场景） */
+function fontLabelOf(value: string): string | null {
+  for (const g of fonts.grouped()) {
+    const hit = g.items.find((f) => `"${f.family}"` === value)
+    if (hit) return hit.family
+  }
+  return null
+}
 
 const BLEND_OPTIONS = [
   { value: 'normal', label: '正常' },
@@ -100,16 +107,27 @@ const missing = computed(() => {
   return missingTokens(t.content, props.exif, props.baseName)
 })
 
-/* 像素距离 ↔ 百分比偏移 */
-const offX = computed(() => (wm.selected ? (wm.selected.offsetX / 100) * props.imgW : 0))
-const offY = computed(() => (wm.selected ? (wm.selected.offsetY / 100) * props.imgH : 0))
+/* 像素距离 ↔ 偏移：偏移按图片「长边」的百分比存储，
+   横竖屏切换时长边不变，像素数值不会互换 */
+const long = computed(() => Math.max(props.imgW, props.imgH))
+const offX = computed(() => (wm.selected ? (wm.selected.offsetX / 100) * long.value : 0))
+const offY = computed(() => (wm.selected ? (wm.selected.offsetY / 100) * long.value : 0))
 function setOffsetX(px: number): void {
   if (!wm.selected) return
-  wm.update(wm.selected.id, { offsetX: (px / props.imgW) * 100 })
+  wm.update(wm.selected.id, { offsetX: (px / long.value) * 100 })
 }
 function setOffsetY(px: number): void {
   if (!wm.selected) return
-  wm.update(wm.selected.id, { offsetY: (px / props.imgH) * 100 })
+  wm.update(wm.selected.id, { offsetY: (px / long.value) * 100 })
+}
+
+/* 文字大小：以当前参照图长边上的像素值呈现（不同尺寸照片按比例换算） */
+const fontPx = computed(() =>
+  selectedText.value ? (selectedText.value.scale / 100) * long.value : 0,
+)
+function setFontPx(px: number): void {
+  if (!selectedText.value) return
+  wm.update(selectedText.value.id, { scale: (px / long.value) * 100 })
 }
 
 function pickImage(replaceId: string | null): void {
@@ -190,31 +208,24 @@ function insertToken(key: string): void {
   }
 }
 
-/* 自定义字体：优先扫描系统字体（Chromium 内核），否则手动输入名称 */
-interface FontDataLike {
-  family: string
+/* 自定义字体：字体列表由 fonts store 提供（系统扫描或兜底清单），也支持手动键入名称 */
+const manualFontName = ref('')
+function openCustomFont(): void {
+  showCustomFont.value = true
+  void fonts.ensureFonts()
 }
-function supportLocalFonts(): boolean {
-  return typeof (window as { queryLocalFonts?: unknown }).queryLocalFonts === 'function'
-}
-const scannedFonts = ref<string[]>([])
 async function scanFonts(): Promise<void> {
-  try {
-    const fonts = (await (window as unknown as {
-      queryLocalFonts: () => Promise<FontDataLike[]>
-    }).queryLocalFonts()) as FontDataLike[]
-    scannedFonts.value = [...new Set(fonts.map((f) => f.family))].sort((a, b) => a.localeCompare(b))
-    if (!scannedFonts.value.length) toast('没有扫描到系统字体，可手动输入名称')
-  } catch {
-    toast('无法访问系统字体，可手动输入名称', 'error')
-  }
+  await fonts.ensureFonts()
+  if (fonts.denied) toast('无法访问系统字体，可手动输入名称', 'error')
+  else if (!fonts.fonts.length) toast('没有扫描到系统字体，可手动输入名称')
 }
 function applyCustomFont(): void {
   const t = selectedText.value
-  const name = customFontName.value.trim()
+  const name = manualFontName.value.trim()
   if (!t || !name) return
   wm.update(t.id, { fontFamily: `"${name}"` })
   showCustomFont.value = false
+  manualFontName.value = ''
   toast(`已使用字体「${name}」`, 'success')
 }
 </script>
@@ -302,47 +313,58 @@ function applyCustomFont(): void {
             <span>字体</span>
             <select
               class="select"
-              :value="isCustomFont ? '__custom__' : selectedText!.fontFamily"
+              :value="isCustomFont ? '__current__' : selectedText!.fontFamily"
+              @focus="fonts.ensureFonts()"
+              @pointerdown="fonts.ensureFonts()"
               @change="
                 ($event.target as HTMLSelectElement).value === '__custom__'
-                  ? (showCustomFont = true)
+                  ? openCustomFont()
                   : wm.update(selectedText!.id, { fontFamily: ($event.target as HTMLSelectElement).value })
               "
             >
-              <option v-if="isCustomFont" value="__custom__">
+              <option v-if="isCustomFont" value="__current__">
                 自定义：{{ selectedText!.fontFamily.replace(/"/g, '') }}
               </option>
-              <option v-for="f in FONT_OPTIONS" :key="f.label" :value="f.value">{{ f.label }}</option>
-              <option value="__custom__">自定义字体…</option>
+              <option :value="DEFAULT_FONT">系统默认</option>
+              <optgroup
+                v-for="g in fonts.grouped()"
+                :key="g.category"
+                :label="FONT_CATEGORY_LABELS[g.category]"
+              >
+                <option v-for="f in g.items" :key="f.family" :value="`&quot;${f.family}&quot;`">
+                  {{ f.family }}
+                </option>
+              </optgroup>
+              <option value="__custom__">手动输入字体名…</option>
             </select>
           </label>
-          <label class="field">
-            <span>字重</span>
-            <select
-              class="select"
-              :value="String(selectedText!.fontWeight)"
-              @change="wm.update(selectedText!.id, { fontWeight: Number(($event.target as HTMLSelectElement).value) })"
-            >
-              <option value="300">细</option>
-              <option value="400">常规</option>
-              <option value="500">中等</option>
-              <option value="600">半粗</option>
-              <option value="700">粗</option>
-            </select>
-          </label>
+          <div class="field">
+            <span>字重（可变字体无极调节）</span>
+            <AppSlider
+              :model-value="selectedText!.fontWeight"
+              :min="100"
+              :max="900"
+              :step="1"
+              @update:model-value="wm.update(selectedText!.id, { fontWeight: $event })"
+              @reset="wm.update(selectedText!.id, { fontWeight: 600 })"
+            />
+          </div>
         </div>
+        <p v-if="fonts.loading" class="hint">正在读取系统字体…</p>
+        <p v-else-if="fonts.denied" class="hint">浏览器未授权读取系统字体，以下为常用字体清单，也可手动键入。</p>
         <div v-if="showCustomFont" class="custom-font">
           <input
-            v-model="customFontName"
+            v-model="manualFontName"
             class="text-input"
             list="local-font-list"
             placeholder="输入系统已安装的字体名称"
             spellcheck="false"
+            @keyup.enter="applyCustomFont"
           />
           <datalist id="local-font-list">
-            <option v-for="f in scannedFonts" :key="f" :value="f" />
+            <option v-for="f in fonts.fonts" :key="f.family" :value="f.family" />
           </datalist>
-          <AppButton v-if="supportLocalFonts()" size="sm" @click="scanFonts">扫描系统字体</AppButton>
+          <AppButton size="sm" @click="scanFonts">重新扫描</AppButton>
           <AppButton size="sm" variant="primary" @click="applyCustomFont">应用</AppButton>
           <AppButton size="sm" variant="ghost" @click="showCustomFont = false">取消</AppButton>
         </div>
@@ -530,8 +552,8 @@ function applyCustomFont(): void {
         </div>
         <AppSlider
           :model-value="offX"
-          :min="-Math.round(imgW * 0.6)"
-          :max="Math.round(imgW * 0.6)"
+          :min="-Math.round(long * 0.6)"
+          :max="Math.round(long * 0.6)"
           label="距锚点 · 水平"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="setOffsetX"
@@ -539,23 +561,35 @@ function applyCustomFont(): void {
         />
         <AppSlider
           :model-value="offY"
-          :min="-Math.round(imgH * 0.6)"
-          :max="Math.round(imgH * 0.6)"
+          :min="-Math.round(long * 0.6)"
+          :max="Math.round(long * 0.6)"
           label="距锚点 · 垂直"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="setOffsetY"
           @reset="setOffsetY(0)"
         />
-        <p class="hint">以锚点为起点，按当前照片的像素距离确定位置；不同尺寸的照片按比例换算。</p>
+        <p class="hint">以锚点为起点、按当前照片长边的像素距离定位；横竖屏切换时数值不变，不同尺寸照片按比例换算。</p>
         <AppSlider
-          :model-value="wm.selected.scale"
-          :min="wm.selected.type === 'image' ? 1 : 0.5"
-          :max="wm.selected.type === 'image' ? 80 : 40"
+          v-if="wm.selected!.type === 'text'"
+          :model-value="fontPx"
+          :min="8"
+          :max="Math.round(long * 0.35)"
+          :step="0.5"
+          label="文字大小"
+          :format="(v) => `${Math.round(v)} px`"
+          @update:model-value="setFontPx"
+          @reset="setFontPx(Math.round(long * 0.036))"
+        />
+        <AppSlider
+          v-else
+          :model-value="wm.selected!.scale"
+          :min="1"
+          :max="80"
           :step="0.1"
-          :label="wm.selected.type === 'image' ? '素材高度' : '文字大小'"
+          label="素材高度"
           :format="(v) => `${v.toFixed(1)}%`"
           @update:model-value="wm.update(wm.selected!.id, { scale: $event })"
-          @reset="wm.update(wm.selected!.id, { scale: wm.selected!.type === 'image' ? 20 : 3.6 })"
+          @reset="wm.update(wm.selected!.id, { scale: 20 })"
         />
         <AppSlider
           :model-value="wm.selected.rotation"

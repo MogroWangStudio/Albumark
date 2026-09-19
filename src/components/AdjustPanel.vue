@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Aperture, Circle, CloudMoon, Droplet, RotateCcw, Sun, SunDim, Thermometer } from 'lucide-vue-next'
+import { Aperture, Circle, CloudMoon, Contrast, Droplet, RotateCcw, Sun, SunDim, Thermometer } from 'lucide-vue-next'
 import type { Component } from 'vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
+import CurveEditor from '@/components/ui/CurveEditor.vue'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { ADJUST_DEFS, isNeutral, type Adjustments } from '@/types/adjust'
@@ -15,6 +16,7 @@ const images = useImagesStore()
 const icons: Record<string, Component> = {
   exposure: Aperture,
   brightness: Sun,
+  contrast: Contrast,
   highlights: SunDim,
   shadows: CloudMoon,
   temperature: Thermometer,
@@ -30,10 +32,16 @@ const target = computed<Adjustments>(() =>
   individual.value && activeId.value ? adjust.perImage[activeId.value] : adjust.values,
 )
 
+function sameAdjust(a: Adjustments, b: Adjustments): boolean {
+  return (
+    ADJUST_DEFS.every(({ key }) => a[key] === b[key]) &&
+    JSON.stringify(a.curve ?? []) === JSON.stringify(b.curve ?? [])
+  )
+}
+
 const matchesGlobal = computed(() => {
   if (!individual.value || !activeId.value) return false
-  const a = target.value
-  return ADJUST_DEFS.every(({ key }) => a[key] === adjust.values[key])
+  return sameAdjust(target.value, adjust.values)
 })
 
 function onReset(): void {
@@ -62,6 +70,7 @@ function onReset(): void {
       :icon="icons[def.key]"
       @reset="individual ? adjust.resetToGlobal(activeId) : adjust.set(def.key, 0)"
     />
+    <CurveEditor v-model="target.curve" />
     <div class="foot">
       <AppButton
         variant="ghost"
@@ -73,7 +82,7 @@ function onReset(): void {
       </AppButton>
     </div>
     <p class="note">
-      调节默认应用到全部照片，与水印一同导出；开启「单独调节」后，这张照片使用独立参数，不再应用全局调节。双击名称可复位单项。
+      调节默认应用到全部照片，与水印一同导出；开启「单独调节」后，这张照片使用独立参数，不再应用全局调节。双击名称可复位单项，双击数值可直接键入。
     </p>
   </div>
 </template>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Link2Off, MapPin, X } from 'lucide-vue-next'
+import { Copy, Link2, Link2Off, MapPin, X } from 'lucide-vue-next'
 import { exifSummaryLine } from '@/core/exif'
 import { isTauri, pickImagePaths } from '@/core/platform'
 import { useImagesStore } from '@/stores/images'
@@ -22,6 +22,18 @@ const infoLine = computed(() => {
 })
 
 const missingCount = computed(() => images.items.filter((i) => i.missing).length)
+
+/** 项目里复制与链接两种来源共存时，在缩略图上标出入库方式的小图标 */
+const mixedKinds = computed(() => {
+  let copy = false
+  let link = false
+  for (const i of images.items) {
+    if (i.kind === 'link') link = true
+    else copy = true
+    if (copy && link) return true
+  }
+  return false
+})
 
 async function relinkActive(): Promise<void> {
   const a = active.value
@@ -53,6 +65,10 @@ async function removeSelected(): Promise<void> {
           decoding="async"
         />
         <Link2Off v-else-if="item.missing" :size="18" class="missing-icon" />
+        <span v-if="mixedKinds && !item.missing" class="kind" :title="item.kind === 'link' ? '链接源文件' : '已复制原文件'">
+          <Link2 v-if="item.kind === 'link'" :size="9" />
+          <Copy v-else :size="9" />
+        </span>
         <span class="idx">{{ i + 1 }}</span>
         <button class="rm" aria-label="移除这张" @click.stop="ws.removeImage(item.id)">
           <X :size="11" />
@@ -141,6 +157,18 @@ async function removeSelected(): Promise<void> {
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   font-variant-numeric: tabular-nums;
+}
+.kind {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--accent);
 }
 .rm {
   position: absolute;

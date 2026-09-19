@@ -5,7 +5,7 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
-import { isTauri, pickDirectory } from '@/core/platform'
+import { isTauri, pickDirectory, executableDir, appDataDir } from '@/core/platform'
 import { useSettingsStore, type PreviewQuality, type ThemeMode } from '@/stores/settings'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -34,8 +34,8 @@ const dataDirShown = ref('')
 onMounted(async () => {
   if (isTauri) {
     try {
-      const { join, executableDir } = await import('@tauri-apps/api/path')
-      const base = settings.dataDir ? settings.dataDir : await executableDir()
+      const { join } = await import('@tauri-apps/api/path')
+      const base = settings.dataDir || (await executableDir()) || (await appDataDir())
       dataDirShown.value = await join(base, 'AlbumarkData')
     } catch {
       dataDirShown.value = settings.dataDir
@@ -48,7 +48,7 @@ async function changeDataDir(): Promise<void> {
   if (dir) {
     settings.dataDir = dir
     dataDirShown.value = dir
-    void ws.loadRecent()
+    void ws.init()
   }
 }
 
@@ -137,7 +137,7 @@ async function relaunchOobe(): Promise<void> {
     </template>
 
     <footer class="about">
-      <span>辑印 Albumark v0.3.0</span>
+      <span>辑印 Albumark v0.4.0</span>
       <span class="sep">·</span>
       <span>本地优先处理，不上传照片</span>
       <span class="sep">·</span>

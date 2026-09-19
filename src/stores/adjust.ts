@@ -4,10 +4,10 @@ import { NEUTRAL, type AdjustKey, type Adjustments } from '@/types/adjust'
 
 const PERSIST_KEY = 'albumark.adjust.v1'
 
-function load(): Record<AdjustKey, number> {
+function load(): Adjustments {
   try {
     const raw = window.localStorage.getItem(PERSIST_KEY)
-    if (raw) return { ...NEUTRAL, ...(JSON.parse(raw) as Record<AdjustKey, number>) }
+    if (raw) return { ...NEUTRAL, ...(JSON.parse(raw) as Partial<Adjustments>) }
   } catch {
     /* 忽略损坏数据 */
   }
@@ -20,16 +20,17 @@ function plain(a: Adjustments): Adjustments {
 
 export const useAdjustStore = defineStore('adjust', () => {
   /** 全局调节：应用到所有未开启「单独调节」的照片 */
-  const values = reactive(load())
+  const values = reactive(load()) as Adjustments
   /** 单独调节的照片：id → 独立参数（存在即为开启），随会话结束不持久化 */
   const perImage = ref<Record<string, Adjustments>>({})
 
-  function set(key: AdjustKey, v: number): void {
+  function set(key: Exclude<AdjustKey, 'curve'>, v: number): void {
     values[key] = v
   }
 
   function reset(): void {
     Object.assign(values, NEUTRAL)
+    delete values.curve
   }
 
   function isIndividual(id: string | null): boolean {

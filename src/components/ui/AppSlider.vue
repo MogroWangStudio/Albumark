@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { Component } from 'vue'
 
 const props = withDefaults(
@@ -48,6 +48,43 @@ const fillStyle = computed(() => {
 function onInput(e: Event): void {
   emit('update:modelValue', Number((e.target as HTMLInputElement).value))
 }
+
+/* ---------- 双击数值：键盘直接输入 ---------- */
+
+const editing = ref(false)
+const editVal = ref('')
+const editEl = ref<HTMLInputElement | null>(null)
+
+function startEdit(): void {
+  if (props.disabled) return
+  editVal.value = String(props.modelValue)
+  editing.value = true
+}
+
+watch(editing, async (v) => {
+  if (!v) return
+  await nextTick()
+  editEl.value?.focus()
+  editEl.value?.select()
+})
+
+function commitEdit(): void {
+  if (!editing.value) return
+  editing.value = false
+  const n = Number(editVal.value.trim().replace(/[^\d.+-eE]/g, ''))
+  if (!Number.isFinite(n)) return
+  let v = Math.min(props.max, Math.max(props.min, n))
+  if (props.step > 0) {
+    v = Math.round((v - props.min) / props.step) * props.step + props.min
+    v = Number(v.toFixed(4))
+  }
+  emit('update:modelValue', v)
+}
+
+function onEditKey(e: KeyboardEvent): void {
+  if (e.key === 'Enter') commitEdit()
+  else if (e.key === 'Escape') editing.value = false
+}
 </script>
 
 <template>
@@ -55,7 +92,24 @@ function onInput(e: Event): void {
     <div class="head" :title="title" @dblclick="emit('reset')">
       <span v-if="icon" class="icon"><component :is="icon" :size="14" /></span>
       <label>{{ label }}</label>
-      <span class="val">{{ display }}</span>
+      <input
+        v-if="editing"
+        ref="editEl"
+        v-model="editVal"
+        class="val-edit"
+        type="text"
+        inputmode="decimal"
+        spellcheck="false"
+        @keydown="onEditKey"
+        @blur="commitEdit"
+        @dblclick.stop
+      />
+      <span
+        v-else
+        class="val"
+        title="双击键入数值"
+        @dblclick.stop="startEdit"
+      >{{ display }}</span>
     </div>
     <input
       type="range"
@@ -93,6 +147,26 @@ label {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--text);
+  cursor: text;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+.val:hover {
+  background: var(--hover);
+}
+.val-edit {
+  margin-left: auto;
+  width: 76px;
+  height: 20px;
+  padding: 0 5px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  text-align: right;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  outline: none;
 }
 input[type='range'] {
   -webkit-appearance: none;
@@ -126,7 +200,7 @@ input[type='range']::-webkit-slider-thumb {
   height: 18px;
   margin-top: -6px;
   border-radius: 50%;
-  background: linear-gradient(to bottom, #ffffff, #eceae6);
+  background: #f4f2ee;
   border: 0.5px solid rgba(0, 0, 0, 0.25);
   box-shadow:
     0 1px 3px rgba(0, 0, 0, 0.45),
@@ -165,7 +239,7 @@ input[type='range']::-moz-range-thumb {
   height: 18px;
   border: 0.5px solid rgba(0, 0, 0, 0.25);
   border-radius: 50%;
-  background: linear-gradient(to bottom, #ffffff, #eceae6);
+  background: #f4f2ee;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
   transition: transform var(--dur-hover) var(--ease-soft);
 }

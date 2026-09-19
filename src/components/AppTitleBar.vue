@@ -15,7 +15,7 @@ const ws = useWorkspaceStore()
 const pressed = ref(false)
 
 // 药丸集合组里的三个控件：工作区 / 导入 / 设置
-const canImport = computed(() => ws.inWorkspace)/* Tauri 桌面端：无边框窗口 + 自绘窗控按钮 */
+const canImport = computed(() => ws.inProject)
 let win: { minimize(): void; toggleMaximize(): void; close(): void } | null = null
 
 if (isTauri) {
@@ -36,7 +36,7 @@ function onClose(): void {
 </script>
 
 <template>
-  <header class="titlebar material">
+  <header class="titlebar material" data-tauri-drag-region>
     <div class="left" data-tauri-drag-region>
       <button
         class="logo-btn"
@@ -48,9 +48,14 @@ function onClose(): void {
       >
         <LogoText class="logo" />
       </button>
-      <button v-if="ws.inWorkspace" class="ws-chip" :title="ws.current?.path || '本次会话'" @click="emit('openWorkspace')">
+      <button
+        v-if="ws.inProject || ws.dir"
+        class="ws-chip"
+        :title="ws.current?.path || ws.dir?.path || '本次会话'"
+        @click="emit('openWorkspace')"
+      >
         <FolderOpen :size="12" />
-        <span>{{ ws.current?.name }}</span>
+        <span>{{ ws.current?.name ?? ws.dir?.name ?? '工作区' }}</span>
       </button>
     </div>
 
@@ -88,6 +93,8 @@ function onClose(): void {
   padding: var(--safe-top) calc(10px + var(--safe-right)) 0 calc(10px + var(--safe-left));
   flex: none;
   user-select: none;
+  /* 无边框窗口的拖拽区：整条标题栏都可拖（按钮落点由子元素自己接管） */
+  -webkit-app-region: drag;
 }
 .left {
   display: flex;
@@ -95,6 +102,12 @@ function onClose(): void {
   gap: 10px;
   min-width: 0;
   align-self: stretch;
+}
+.pill,
+.win-controls,
+.logo-btn,
+.ws-chip {
+  -webkit-app-region: no-drag;
 }
 .logo-btn {
   display: inline-flex;

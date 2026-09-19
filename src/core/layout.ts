@@ -21,10 +21,13 @@ export function anchorPoint(anchor: string, imgW: number, imgH: number): { x: nu
   return { x: (col / 2) * imgW, y: (row / 2) * imgH }
 }
 
-/** 图层中心：锚点 + 偏移（偏移为图片宽/高的百分比，跨分辨率保持构图一致）。 */
+/** 图层中心：锚点 + 偏移。
+ * 偏移以图片「长边」的百分比存储——横竖屏切换时长边不变，
+ * 两个方向的像素距离数值保持一致，不会互相换位。 */
 export function layerCenter(l: WatermarkLayer, imgW: number, imgH: number): { cx: number; cy: number } {
   const a = anchorPoint(l.anchor, imgW, imgH)
-  return { cx: a.x + (l.offsetX / 100) * imgW, cy: a.y + (l.offsetY / 100) * imgH }
+  const long = Math.max(imgW, imgH)
+  return { cx: a.x + (l.offsetX / 100) * long, cy: a.y + (l.offsetY / 100) * long }
 }
 
 export interface TextMetricsResult {

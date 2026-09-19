@@ -25,7 +25,7 @@ const PERF: Record<string, { final: number; draft: number; dprCap: number }> = {
   eco: { final: 880, draft: 440, dprCap: 1 },
 }
 
-const wrap = ref<HTMLDivElement | null>(null)
+const frame = ref<HTMLDivElement | null>(null)
 const cvBase = ref<HTMLCanvasElement | null>(null)
 const cvOverlay = ref<HTMLCanvasElement | null>(null)
 
@@ -104,11 +104,21 @@ function scheduleOverlay(): void {
   overlayRaf = true
   requestAnimationFrame(() => {
     overlayRaf = false
+    // 素材齐备时同步绘制（即时反馈）；缺素材先画已有内容，加载后补一帧
+    if (!hasMissingAssets()) {
+      drawBase()
+      drawOverlay()
+      return
+    }
     void syncAssets().then(() => {
       drawBase()
       drawOverlay()
     })
   })
+}
+
+function hasMissingAssets(): boolean {
+  return wm.layers.some((l) => l.type === 'image' && !assetBmps.has((l as { assetId: string }).assetId))
 }
 
 async function ensureBitmap(): Promise<ImageBitmap | null> {
@@ -400,6 +410,11 @@ function onWheel(e: WheelEvent): void {
   scheduleHiRes()
 }
 
+/** 中键按下时阻止 Chromium 的自动滚动光标 */
+function onMouseDown(e: MouseEvent): void {
+  if (e.button === 1) e.preventDefault()
+}
+
 /* ---------- 指针手势：图层拖拽 / 平移 / 双指捏合 / 双击 ---------- */
 
 interface PointerState {
@@ -504,6 +519,13 @@ function onPointerDown(e: PointerEvent): void {
 
   const p = toImagePx(e.clientX, e.clientY)
   const list = wm.layers
+  // 中键只负责平移预览，不选中 / 不拖动图层
+  if (e.button === 1) {
+    wm.selectedId = null
+    snapLines.value = null
+    gesture = { type: 'pan', startPan: { x: pan.x, y: pan.y }, startClient: { x: e.clientX, y: e.clientY } }
+    return
+  }
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     if (!l.visible) continue
@@ -563,6 +585,7 @@ function onPointerMove(e: PointerEvent): void {
     const cssPerImg = resultMap.scale / dpr
     const imgW = resultMap.w
     const imgH = resultMap.h
+    const long = Math.max(imgW, imgH)
     const proposedX = gesture.startCx + (e.clientX - gesture.startClient.x) / cssPerImg
     const proposedY = gesture.startCy + (e.clientY - gesture.startClient.y) / cssPerImg
     const snapped = applySnap(proposedX, proposedY, gid)
@@ -573,8 +596,8 @@ function onPointerMove(e: PointerEvent): void {
     const a = anchorPoint(layer.anchor, imgW, imgH)
     snapLines.value = snapped.lines.x !== undefined || snapped.lines.y !== undefined ? snapped.lines : null
     wm.update(gid, {
-      offsetX: ((cx - a.x) / imgW) * 100,
-      offsetY: ((cy - a.y) / imgH) * 100,
+      offsetX: ((cx - a.x) / long) * 100,
+      offsetY: ((cy - a.y) / long) * 100,
     })
     return
   }
@@ -715,7 +738,7 @@ watch(
 )
 
 onMounted(() => {
-  if (wrap.value) {
+  if (frame.value) {
     ro = new ResizeObserver((entries) => {
       const r = entries[0]?.contentRect
       if (!r) return
@@ -727,7 +750,7 @@ onMounted(() => {
       drawOverlay()
       scheduleBase()
     })
-    ro.observe(wrap.value)
+    ro.observe(frame.value)
   }
 })
 
@@ -750,28 +773,34 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="wrap" class="canvas-wrap">
-    <canvas
-      ref="cvBase"
-      class="canvas"
-      @pointerdown="onPointerDown"
-      @pointermove="onPointerMove"
-      @pointerup="onPointerUp"
-      @pointercancel="onPointerUp"
-      @wheel="onWheel"
-    />
-    <canvas ref="cvOverlay" class="canvas overlay" aria-hidden="true" />
-    <div
-      v-if="hasSelection && selRect"
-      class="sel"
-      :style="{
-        left: `${selRect.left}px`,
-        top: `${selRect.top}px`,
-        width: `${selRect.width}px`,
-        height: `${selRect.height}px`,
-        transform: `rotate(${selRect.rotate}deg)`,
-      }"
-    />
+  <div class="canvas-wrap">
+    <div ref="frame" class="frame">
+      <canvas
+        ref="cvBase"
+        class="canvas"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerUp"
+        @wheel="onWheel"
+        @mousedown="onMouseDown"
+        @auxclick.prevent
+        @contextmenu.prevent
+      />
+      <canvas ref="cvOverlay" class="canvas overlay" aria-hidden="true" />
+      <div
+        v-if="hasSelection && selRect"
+        class="sel"
+        :style="{
+          left: `${selRect.left}px`,
+          top: `${selRect.top}px`,
+          width: `${selRect.width}px`,
+          height: `${selRect.height}px`,
+          transform: `rotate(${selRect.rotate}deg)`,
+        }"
+      />
+    </div>
+    <div class="zoom-badge" aria-live="off">{{ Math.round(zoom * 100) }}%</div>
   </div>
 </template>
 
@@ -780,6 +809,11 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   background: var(--canvas);
+}
+/* 预览安全区：图片适配与命中计算都基于这一帧，移动端避开系统手势条 */
+.frame {
+  position: absolute;
+  inset: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
 }
 .canvas {
   position: absolute;
@@ -803,5 +837,21 @@ onBeforeUnmount(() => {
   border-radius: 3px;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   transition: box-shadow var(--dur-fast) var(--ease);
+}
+.zoom-badge {
+  position: absolute;
+  left: calc(10px + var(--safe-left));
+  bottom: calc(10px + var(--safe-bottom));
+  z-index: 5;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  backdrop-filter: var(--blur-material);
+  -webkit-backdrop-filter: var(--blur-material);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  pointer-events: none;
 }
 </style>

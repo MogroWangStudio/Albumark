@@ -49,11 +49,13 @@ async function handle(job: RenderJob): Promise<void> {
   if (
     a.brightness !== 0 ||
     a.exposure !== 0 ||
+    a.contrast !== 0 ||
     a.shadows !== 0 ||
     a.highlights !== 0 ||
     a.temperature !== 0 ||
     a.tint !== 0 ||
-    a.vignette !== 0
+    a.vignette !== 0 ||
+    (a.curve && a.curve.length >= 4)
   ) {
     const image = ctx.getImageData(0, 0, w, h)
     applyAdjustments(image.data, w, h, a)

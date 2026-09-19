@@ -71,6 +71,18 @@ export const useImagesStore = defineStore('images', () => {
     activeId.value = id
   }
 
+  /** 按方向键顺序切换当前照片（循环），返回是否切换成功。 */
+  function step(delta: 1 | -1): boolean {
+    const list = items.value
+    if (list.length < 2) return false
+    const i = list.findIndex((x) => x.id === activeId.value)
+    const next = list[(((i < 0 ? 0 : i) + delta) % list.length + list.length) % list.length]
+    if (!next) return false
+    selectedIds.value = new Set([next.id])
+    activeId.value = next.id
+    return true
+  }
+
   async function addBlobs(entries: { blob: Blob; name: string }[]): Promise<void> {
     if (!entries.length) return
     const added: ImageItem[] = entries.map(({ blob, name }) => ({
@@ -178,6 +190,7 @@ export const useImagesStore = defineStore('images', () => {
     active,
     count,
     select,
+    step,
     addFiles,
     addFromUrl,
     remove,
