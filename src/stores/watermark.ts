@@ -9,6 +9,7 @@ import type {
   TextLayer,
   WatermarkLayer,
 } from '@/types/watermark'
+import { migrateLayer } from '@/types/watermark'
 import type { SerializedAsset } from '@/types/watermark'
 
 export interface WatermarkAsset {
@@ -21,14 +22,21 @@ export interface WatermarkAsset {
 
 const PERSIST_KEY = 'albumark.watermark.v1'
 
+/** 锚点九宫格的默认边距（相对图片宽/高的百分比）。 */
+function defaultOffset(anchor: AnchorPreset): { offsetX: number; offsetY: number } {
+  const col = anchor.endsWith('left') ? 1 : anchor.endsWith('center') ? 0 : -1
+  const row = anchor.startsWith('top') ? 1 : anchor.startsWith('middle') ? 0 : -1
+  return { offsetX: col * 4, offsetY: row * 4 }
+}
+
 export function makeTextLayer(patch: Partial<TextLayer> = {}): TextLayer {
   return {
     id: uid(),
     type: 'text',
     name: '文本水印',
     visible: true,
-    x: 96,
-    y: 92,
+    anchor: 'bottom-right',
+    ...defaultOffset('bottom-right'),
     scale: 3.6,
     rotation: 0,
     opacity: 100,
@@ -47,13 +55,6 @@ export function makeTextLayer(patch: Partial<TextLayer> = {}): TextLayer {
     background: { enabled: false, color: '#000000', opacity: 45, padding: 6, radius: 14 },
     ...patch,
   }
-}
-
-/** 锚点九宫格 → 图层中心（百分比），四周留 4% 边距。 */
-export function anchorToXY(anchor: AnchorPreset): { x: number; y: number } {
-  const row = anchor.startsWith('top') ? 0 : anchor.startsWith('middle') ? 1 : 2
-  const col = anchor.endsWith('left') ? 0 : anchor.endsWith('center') ? 1 : 2
-  return { x: 4 + col * 46, y: 4 + row * 46 }
 }
 
 export const useWatermarkStore = defineStore('watermark', () => {
@@ -82,8 +83,9 @@ export const useWatermarkStore = defineStore('watermark', () => {
       type: 'image',
       name,
       visible: true,
-      x: 50,
-      y: 50,
+      anchor: 'middle-center',
+      offsetX: 0,
+      offsetY: 0,
       scale: 20,
       rotation: 0,
       opacity: 100,
@@ -154,10 +156,10 @@ export const useWatermarkStore = defineStore('watermark', () => {
     layers.value.splice(j, 0, l)
   }
 
+  /** 点击九宫格：设为定位锚点，并把偏移重置为该角落的默认边距。 */
   function positionPreset(anchor: AnchorPreset): void {
     if (!selectedId.value) return
-    const { x, y } = anchorToXY(anchor)
-    update(selectedId.value, { x, y })
+    update(selectedId.value, { anchor, ...defaultOffset(anchor) })
   }
 
   /** 深拷贝为纯数据：响应式 Proxy 无法传给 Worker（结构化克隆限制）。 */
@@ -184,7 +186,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
         assets.value[a.id] = { ...a, blob: null }
       }
     }
-    layers.value = layersData.map((l) => structuredClone(l))
+    layers.value = layersData.map((l) => migrateLayer(structuredClone(l)))
     selectedId.value = layers.value[0]?.id ?? null
   }
 
@@ -218,7 +220,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
       if (!raw) return false
       const data = JSON.parse(raw) as { layers: WatermarkLayer[]; assets: SerializedAsset[] }
       if (!Array.isArray(data.layers) || !data.layers.length) return false
-      layers.value = data.layers
+      layers.value = data.layers.map((l) => migrateLayer(l))
       for (const a of data.assets ?? []) {
         assets.value[a.id] = { ...a, blob: null }
       }

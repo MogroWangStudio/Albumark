@@ -48,3 +48,17 @@ export function formatShutter(t: number): string {
   if (t >= 1) return `${Math.round(t * 10) / 10}s`
   return `1/${Math.round(1 / t)}s`
 }
+
+/** 摘要一行：机型 · 焦距 光圈 快门 感光度（缺项自动略过）。 */
+export function exifSummaryLine(e?: ExifSummary): string {
+  if (!e) return ''
+  const parts: string[] = []
+  if (e.model) parts.push(e.model)
+  const shoot: string[] = []
+  if (e.focalLength) shoot.push(`${Math.round(e.focalLength)}mm`)
+  if (e.fNumber) shoot.push(`f/${Math.round(e.fNumber * 10) / 10}`)
+  if (e.exposureTime) shoot.push(formatShutter(e.exposureTime))
+  if (e.iso) shoot.push(`ISO ${e.iso}`)
+  if (shoot.length) parts.push(shoot.join(' '))
+  return parts.join(' · ')
+}

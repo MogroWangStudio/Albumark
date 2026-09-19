@@ -1,11 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
-import {
-  anchorToXY,
-  makeTextLayer,
-  useWatermarkStore,
-} from './watermark'
+import { makeTextLayer, useWatermarkStore } from './watermark'
 import { toast } from './toast'
 import type { WatermarkTemplate } from '@/types/watermark'
 
@@ -21,20 +17,21 @@ interface SavedTemplate {
 
 /** 内置模板：每次应用生成全新 id，避免跨图状态串扰。 */
 function builtinTemplates(): WatermarkTemplate[] {
-  const pos = anchorToXY('bottom-right')
   const signature = makeTextLayer({
     name: '签名',
     content: '辑印 Albumark',
-    x: pos.x,
-    y: pos.y,
+    anchor: 'bottom-right',
+    offsetX: -4,
+    offsetY: -4,
     scale: 3.6,
     shadow: { enabled: true, blur: 18, opacity: 55, x: 0, y: 8 },
   })
   const tile = makeTextLayer({
     name: '平铺文字',
     content: '辑印 Albumark',
-    x: 50,
-    y: 50,
+    anchor: 'middle-center',
+    offsetX: 0,
+    offsetY: 0,
     scale: 3,
     rotation: -30,
     opacity: 30,
@@ -42,12 +39,12 @@ function builtinTemplates(): WatermarkTemplate[] {
     shadow: { enabled: false, blur: 0, opacity: 0, x: 0, y: 0 },
     tile: { enabled: true, gapX: 140, gapY: 110 },
   })
-  const exifPos = anchorToXY('bottom-left')
   const exifBar = makeTextLayer({
     name: 'EXIF 参数条',
     content: '{机型}　{镜头}\n{焦距}　{光圈}　{快门}　{感光度}',
-    x: exifPos.x,
-    y: exifPos.y,
+    anchor: 'bottom-left',
+    offsetX: 4,
+    offsetY: -4,
     scale: 2.2,
     lineHeight: 1.6,
     letterSpacing: 2,

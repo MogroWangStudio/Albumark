@@ -2,21 +2,18 @@
 import { computed } from 'vue'
 import { FolderOpen, Package } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
-import AppDialog from '@/components/ui/AppDialog.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import { isTauri } from '@/core/platform'
 import { useExportStore } from '@/stores/export'
 import { useImagesStore } from '@/stores/images'
 
-const props = defineProps<{ open: boolean }>()
-const emit = defineEmits<{ close: [] }>()
-
 const ex = useExportStore()
 const images = useImagesStore()
 
 const running = computed(() => ex.phase === 'running')
 const finished = computed(() => ex.phase === 'done')
+const exportable = computed(() => images.items.some((i) => i.blob))
 
 const longEdgeModel = computed({
   get: () => String(ex.longEdge),
@@ -28,19 +25,13 @@ const modeModel = computed({
   set: (v: unknown) => (ex.mode = v as 'zip' | 'folder'),
 })
 
-function requestClose(): void {
-  if (running.value) return
-  ex.reset()
-  emit('close')
-}
-
 async function start(): Promise<void> {
   await ex.run()
 }
 </script>
 
 <template>
-  <AppDialog :open="props.open" title="导出照片" :width="460" @close="requestClose">
+  <div class="export">
     <template v-if="!running && !finished">
       <p class="lead">
         将导出全部 {{ images.count }} 张照片，当前水印与调节会一并应用。导出为重新编码的
@@ -80,10 +71,9 @@ async function start(): Promise<void> {
         />
         <p v-if="!isTauri" class="hint">当前为浏览器版本，仅支持导出 ZIP；桌面端可直接写入文件夹。</p>
       </div>
-      <div class="actions">
-        <AppButton variant="ghost" @click="requestClose">取消</AppButton>
-        <AppButton variant="primary" @click="start"><Package :size="15" />开始导出</AppButton>
-      </div>
+      <AppButton variant="primary" class="start" :disabled="!exportable" @click="start">
+        <Package :size="15" />开始导出
+      </AppButton>
     </template>
 
     <template v-else-if="running">
@@ -113,11 +103,11 @@ async function start(): Promise<void> {
           <AppButton v-if="ex.resultPath" @click="ex.openResult()">
             <FolderOpen :size="15" />打开所在文件夹
           </AppButton>
-          <AppButton variant="primary" @click="requestClose">完成</AppButton>
+          <AppButton variant="primary" @click="ex.reset()">完成</AppButton>
         </div>
       </div>
     </template>
-  </AppDialog>
+  </div>
 </template>
 
 <style scoped>
@@ -152,11 +142,9 @@ async function start(): Promise<void> {
   font-size: 11.5px;
   color: var(--text-3);
 }
-.actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
+.start {
+  width: 100%;
+  margin-top: 6px;
 }
 .progress-area {
   padding: 8px 0;
@@ -202,12 +190,10 @@ async function start(): Promise<void> {
 .done-area {
   padding: 4px 0;
 }
-.spin {
-  animation: spin 1s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
 }
 </style>

@@ -19,10 +19,15 @@ export interface BaseLayer {
   id: string
   name: string
   visible: boolean
-  /** 图层中心 X（图片宽度百分比 0-100） */
-  x: number
-  /** 图层中心 Y（图片高度百分比 0-100） */
-  y: number
+  /**
+   * 定位锚点（九宫格）。图层中心 = 锚点 + 偏移，
+   * 偏移以图片宽/高的百分比存储，跨分辨率保持构图一致。
+   */
+  anchor: AnchorPreset
+  /** 相对锚点的水平偏移（图片宽度百分比，可为负） */
+  offsetX: number
+  /** 相对锚点的垂直偏移（图片高度百分比，可为负） */
+  offsetY: number
   /** 基准尺寸占图片长边的百分比 */
   scale: number
   /** 旋转角度（度） */
@@ -105,6 +110,23 @@ export type AnchorPreset =
   | 'bottom-left'
   | 'bottom-center'
   | 'bottom-right'
+
+/** 旧版百分比坐标 → 锚点 + 偏移 的迁移。 */
+export function migrateLayer<T extends WatermarkLayer>(l: T): T {
+  if ('anchor' in l && typeof l.anchor === 'string') return l
+  const legacy = l as unknown as { x?: number; y?: number }
+  const x = typeof legacy.x === 'number' ? legacy.x : 50
+  const y = typeof legacy.y === 'number' ? legacy.y : 50
+  const col = x < 25 ? 0 : x < 75 ? 1 : 2
+  const row = y < 25 ? 0 : y < 75 ? 1 : 2
+  const anchor = (['top', 'middle', 'bottom'][row] +
+    '-' +
+    (['left', 'center', 'right'][col] as string)) as AnchorPreset
+  const rest = { ...l } as Record<string, unknown>
+  delete rest.x
+  delete rest.y
+  return { ...rest, anchor, offsetX: x - col * 50, offsetY: y - row * 50 } as T
+}
 
 export type TextLayerPatch = Partial<Omit<TextLayer, 'type'>>
 export type ImageLayerPatch = Partial<Omit<ImageLayer, 'type'>>

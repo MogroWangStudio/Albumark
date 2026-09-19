@@ -1,8 +1,38 @@
 <script setup lang="ts">
-import { X } from 'lucide-vue-next'
+import { computed } from 'vue'
+import { Link2Off, MapPin, X } from 'lucide-vue-next'
+import { exifSummaryLine } from '@/core/exif'
+import { isTauri, pickImagePaths } from '@/core/platform'
 import { useImagesStore } from '@/stores/images'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const images = useImagesStore()
+const ws = useWorkspaceStore()
+
+const active = computed(() => images.active)
+const infoLine = computed(() => {
+  const a = active.value
+  if (!a) return ''
+  const parts: string[] = []
+  if (a.width && a.height) parts.push(`${a.width}×${a.height}`)
+  parts.push(a.name)
+  const ex = exifSummaryLine(a.exif)
+  if (ex) parts.push(ex)
+  return parts.join(' · ')
+})
+
+const missingCount = computed(() => images.items.filter((i) => i.missing).length)
+
+async function relinkActive(): Promise<void> {
+  const a = active.value
+  if (!a) return
+  const [path] = await pickImagePaths('定位原文件')
+  if (path) await ws.relink(a.id, path)
+}
+
+async function removeSelected(): Promise<void> {
+  for (const id of [...images.selectedIds]) await ws.removeImage(id)
+}
 </script>
 
 <template>
@@ -12,7 +42,7 @@ const images = useImagesStore()
         v-for="(item, i) in images.items"
         :key="item.id"
         class="thumb"
-        :class="{ active: item.id === images.activeId, selected: images.selectedIds.has(item.id) }"
+        :class="{ active: item.id === images.activeId, selected: images.selectedIds.has(item.id), missing: item.missing }"
         @click="images.select(item.id, $event.metaKey || $event.ctrlKey)"
       >
         <img
@@ -22,18 +52,32 @@ const images = useImagesStore()
           draggable="false"
           decoding="async"
         />
+        <Link2Off v-else-if="item.missing" :size="18" class="missing-icon" />
         <span class="idx">{{ i + 1 }}</span>
-        <button class="rm" aria-label="移除这张" @click.stop="images.remove([item.id])">
+        <button class="rm" aria-label="移除这张" @click.stop="ws.removeImage(item.id)">
           <X :size="11" />
         </button>
       </div>
     </div>
     <div class="foot">
       <span class="count">{{ images.count }} 张照片</span>
-      <span v-if="images.selectedIds.size > 1" class="sep">·</span>
-      <span v-if="images.selectedIds.size > 1">已选 {{ images.selectedIds.size }} 张</span>
+      <template v-if="images.selectedIds.size > 1">
+        <span class="sep">·</span>
+        <span>已选 {{ images.selectedIds.size }} 张</span>
+      </template>
+      <template v-else-if="infoLine">
+        <span class="sep">·</span>
+        <span class="info" :title="infoLine">{{ infoLine }}</span>
+      </template>
       <span class="flex" />
-      <button v-if="images.selectedIds.size > 1" class="link" @click="images.remove([...images.selectedIds])">移除所选</button>
+      <button
+        v-if="isTauri && missingCount > 0"
+        class="link warn"
+        @click="relinkActive()"
+      >
+        <MapPin :size="12" />{{ missingCount }} 张源文件失联，重新定位
+      </button>
+      <button v-if="images.selectedIds.size > 1" class="link" @click="removeSelected">移除所选</button>
       <button v-if="images.count" class="link" @click="images.clear()">清空</button>
     </div>
   </div>
@@ -67,6 +111,13 @@ const images = useImagesStore()
   height: 100%;
   object-fit: cover;
 }
+.thumb.missing {
+  display: grid;
+  place-items: center;
+  border-style: dashed;
+  border-color: var(--line-strong);
+  color: var(--text-3);
+}
 .thumb:hover {
   border-color: var(--line-strong);
 }
@@ -75,6 +126,9 @@ const images = useImagesStore()
 }
 .thumb.active {
   border-color: var(--accent);
+}
+.missing-icon {
+  opacity: 0.7;
 }
 .idx {
   position: absolute;
@@ -112,11 +166,25 @@ const images = useImagesStore()
   padding-top: 4px;
   font-size: 12px;
   color: var(--text-3);
+  min-width: 0;
+}
+.count {
+  flex: none;
+}
+.info {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .flex {
   flex: 1;
 }
 .link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-2);
   font-size: 12px;
   padding: 2px 6px;
@@ -126,5 +194,11 @@ const images = useImagesStore()
 .link:hover {
   color: var(--text);
   background: var(--hover);
+}
+.link.warn {
+  color: var(--accent);
+}
+.link.warn:hover {
+  color: var(--accent-strong);
 }
 </style>

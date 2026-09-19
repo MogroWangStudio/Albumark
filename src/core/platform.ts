@@ -5,11 +5,29 @@ export const isCapacitor =
   !!(window as unknown as { Capacitor?: unknown }).Capacitor &&
   !isTauri
 
-export async function pickDirectory(): Promise<string | null> {
+export async function pickDirectory(title = '选择文件夹'): Promise<string | null> {
   if (!isTauri) return null
   const { open } = await import('@tauri-apps/plugin-dialog')
-  const dir = await open({ directory: true, multiple: false, title: '选择导出文件夹' })
+  const dir = await open({ directory: true, multiple: false, title })
   return typeof dir === 'string' ? dir : null
+}
+
+/** 桌面端选择若干 JPG 照片，返回绝对路径。 */
+export async function pickImagePaths(title = '选择照片'): Promise<string[]> {
+  if (!isTauri) return []
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const paths = await open({
+    multiple: true,
+    title,
+    filters: [{ name: 'JPEG 照片', extensions: ['jpg', 'jpeg'] }],
+  })
+  return Array.isArray(paths) ? paths : paths ? [paths] : []
+}
+
+/** 桌面端读取文件字节。 */
+export async function readFileBytes(path: string): Promise<Uint8Array> {
+  const fs = await import('@tauri-apps/plugin-fs')
+  return await fs.readFile(path)
 }
 
 export async function writeFilesToDir(

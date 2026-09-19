@@ -1,37 +1,54 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import AppToolbar from '@/components/AppToolbar.vue'
+import { Droplets, SlidersHorizontal, Upload } from 'lucide-vue-next'
+import AppTitleBar from '@/components/AppTitleBar.vue'
 import AdjustPanel from '@/components/AdjustPanel.vue'
-import ExportSheet from '@/components/ExportSheet.vue'
+import ExportPanel from '@/components/ExportPanel.vue'
 import ImportOverlay from '@/components/ImportOverlay.vue'
 import LibraryStrip from '@/components/LibraryStrip.vue'
 import PreviewCanvas from '@/components/PreviewCanvas.vue'
 import SettingsDialog from '@/components/SettingsDialog.vue'
 import UrlImportDialog from '@/components/UrlImportDialog.vue'
 import WatermarkPanel from '@/components/WatermarkPanel.vue'
-import AppSegment from '@/components/ui/AppSegment.vue'
+import WatermarkStudio from '@/components/WatermarkStudio.vue'
+import WorkspaceLauncher from '@/components/WorkspaceLauncher.vue'
+import AppTabs from '@/components/ui/AppTabs.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
-import { useExportStore } from '@/stores/export'
+import { isTauri } from '@/core/platform'
 import { useImagesStore } from '@/stores/images'
 import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const images = useImagesStore()
 const wm = useWatermarkStore()
 const templates = useTemplatesStore()
-const exportStore = useExportStore()
+const ws = useWorkspaceStore()
 
-const panel = ref<'watermark' | 'adjust'>('watermark')
+const view = ref<'main' | 'studio'>('main')
+const panel = ref<'watermark' | 'adjust' | 'export'>('watermark')
 const urlOpen = ref(false)
-const exportOpen = ref(false)
 const settingsOpen = ref(false)
+const launcherOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragDepth = ref(0)
 
 const hasImages = computed(() => images.count > 0)
+/** 工作区门控：未进入工作区时只有启动器可用 */
+const inWorkspace = computed(() => ws.inWorkspace)
+const showLauncher = computed(() => !inWorkspace.value || launcherOpen.value)
+
+// 进入工作区后自动收起启动器
+watch(
+  () => ws.inWorkspace,
+  (v) => {
+    if (v) launcherOpen.value = false
+  },
+)
 
 onMounted(async () => {
   if (!wm.hydrate()) await templates.apply('builtin-signature')
+  if (isTauri) void watchNativeDrop()
 })
 
 watch(
@@ -41,6 +58,7 @@ watch(
 )
 
 function openPicker(): void {
+  if (!inWorkspace.value) return
   fileInput.value?.click()
 }
 
@@ -48,10 +66,11 @@ async function onPick(e: Event): Promise<void> {
   const input = e.target as HTMLInputElement
   const files = Array.from(input.files ?? [])
   input.value = ''
-  await images.addFiles(files)
+  if (!inWorkspace.value) return
+  await ws.addFiles(files.map((file) => ({ file })))
 }
 
-// 拖拽导入（支持整个文件夹递归）
+// 拖拽导入（浏览器：递归遍历文件夹；桌面端另走原生拖入事件）
 async function walkEntry(entry: FileSystemEntry, out: File[]): Promise<void> {
   if (entry.isFile) {
     await new Promise<void>((resolve) => {
@@ -83,11 +102,13 @@ async function walkEntry(entry: FileSystemEntry, out: File[]): Promise<void> {
 }
 
 function onDragEnter(e: DragEvent): void {
+  if (!inWorkspace.value) return
   e.preventDefault()
   if (e.dataTransfer?.types.includes('Files')) dragDepth.value++
 }
 
 function onDragOver(e: DragEvent): void {
+  if (!inWorkspace.value) return
   e.preventDefault()
 }
 
@@ -97,6 +118,7 @@ function onDragLeave(): void {
 
 async function onDrop(e: DragEvent): Promise<void> {
   dragDepth.value = 0
+  if (!inWorkspace.value || isTauri) return
   const dt = e.dataTransfer
   if (!dt) return
   const files: File[] = []
@@ -107,20 +129,41 @@ async function onDrop(e: DragEvent): Promise<void> {
     for (const en of entries) await walkEntry(en, files)
   }
   if (!files.length) files.push(...Array.from(dt.files ?? []))
-  if (files.length) await images.addFiles(files)
+  if (files.length) await ws.addFiles(files.map((file) => ({ file })))
+}
+
+/** Tauri 桌面端：Webview 拦截文件拖入，改用原生事件拿绝对路径 */
+let unlistenDrop: (() => void) | null = null
+async function watchNativeDrop(): Promise<void> {
+  try {
+    const { getCurrentWebview } = await import('@tauri-apps/api/webview')
+    unlistenDrop = await getCurrentWebview().onDragDropEvent((ev) => {
+      if (ev.payload.type !== 'drop') return
+      if (!ws.inWorkspace) return
+      void ws.addFromPaths(ev.payload.paths)
+    })
+  } catch {
+    /* 非 Tauri 环境忽略 */
+  }
 }
 
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
+    if (view.value === 'studio') {
+      view.value = 'main'
+      return
+    }
     urlOpen.value = false
     settingsOpen.value = false
-    // 导出进行中不允许关闭，避免误触丢失进度展示
-    if (exportStore.phase !== 'running') exportOpen.value = false
+    if (inWorkspace.value) launcherOpen.value = false
   }
 }
 
 onMounted(() => window.addEventListener('keydown', onKeydown))
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  unlistenDrop?.()
+})
 </script>
 
 <template>
@@ -131,37 +174,49 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     @dragleave="onDragLeave"
     @drop.prevent="onDrop"
   >
-    <AppToolbar
+    <AppTitleBar
+      @open-workspace="launcherOpen = true"
       @import="openPicker"
-      @export-sheet="exportOpen = true"
       @settings="settingsOpen = true"
     />
 
-    <div class="workspace">
-      <main class="stage">
-        <PreviewCanvas v-if="hasImages" />
-        <ImportOverlay v-else @pick="openPicker" @open-url="urlOpen = true" />
-      </main>
+    <WatermarkStudio v-if="view === 'studio'" @back="view = 'main'" />
 
-      <aside class="inspector material">
-        <div class="inspector-head">
-          <AppSegment
-            v-model="panel"
-            :options="[
-              { value: 'watermark', label: '水印' },
-              { value: 'adjust', label: '调节' },
-            ]"
+    <template v-else>
+      <div class="workspace">
+        <main class="stage">
+          <WorkspaceLauncher
+            v-if="showLauncher"
+            :closable="inWorkspace"
+            @close="launcherOpen = false"
           />
-        </div>
-        <WatermarkPanel v-show="panel === 'watermark'" />
-        <AdjustPanel v-show="panel === 'adjust'" />
-      </aside>
-    </div>
+          <PreviewCanvas v-else-if="hasImages" />
+          <ImportOverlay v-else @pick="openPicker" @open-url="urlOpen = true" />
+        </main>
 
-    <LibraryStrip />
+        <aside v-if="inWorkspace" class="inspector material">
+          <div class="inspector-head">
+            <AppTabs
+              v-model="panel"
+              :options="[
+                { value: 'watermark', label: '水印', icon: Droplets },
+                { value: 'adjust', label: '调节', icon: SlidersHorizontal },
+                { value: 'export', label: '导出', icon: Upload },
+              ]"
+            />
+          </div>
+          <div class="inspector-body">
+            <WatermarkPanel v-show="panel === 'watermark'" @studio="view = 'studio'" />
+            <AdjustPanel v-show="panel === 'adjust'" />
+            <ExportPanel v-show="panel === 'export'" />
+          </div>
+        </aside>
+      </div>
+
+      <LibraryStrip v-if="inWorkspace && hasImages" />
+    </template>
 
     <UrlImportDialog :open="urlOpen" @close="urlOpen = false" />
-    <ExportSheet :open="exportOpen" @close="exportOpen = false" />
     <SettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
     <ToastHost />
 
@@ -197,6 +252,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   min-width: 0;
   min-height: 0;
   background: var(--canvas);
+  overflow: hidden;
 }
 .inspector {
   border-left: 1px solid var(--line);
@@ -209,9 +265,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
   border-bottom: 1px solid var(--line);
   flex: none;
 }
-.inspector :deep(.panel-scroll) {
+.inspector-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+}
+.inspector-body :deep(.panel-scroll) {
   padding: 14px;
 }
 .drop-ring {

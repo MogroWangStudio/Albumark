@@ -66,6 +66,12 @@ export async function runExport(
       if (i >= items.length) break
       const item = items[i]
       onProgress(finished, items.length, item.name)
+      if (!item.blob) {
+        onItemError?.(item.name, new Error('源文件缺失，无法导出'))
+        finished++
+        onProgress(finished, items.length, item.name)
+        continue
+      }
       try {
         const layers = payload.layers.map((l) =>
           l.type === 'text'

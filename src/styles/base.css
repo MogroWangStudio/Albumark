@@ -3,6 +3,8 @@
 *::after {
   box-sizing: border-box;
   margin: 0;
+  /* 安卓 WebView 点按默认的蓝色高亮块：全部移除，反馈由各控件自己承担 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 html,
@@ -41,6 +43,8 @@ button {
   border: none;
   padding: 0;
   cursor: pointer;
+  /* 触屏：去掉双击缩放延迟，同时保留画布手势所需的 touch-action 覆盖 */
+  touch-action: manipulation;
 }
 
 button:disabled {

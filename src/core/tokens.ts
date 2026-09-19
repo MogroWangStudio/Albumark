@@ -55,3 +55,19 @@ function round1(n: number): string {
 export function resolveTokens(text: string, exif?: ExifSummary, fileName?: string): string {
   return text.replace(/\{(\w+)\}/g, (raw, key: string) => resolveToken(key, exif, fileName) ?? raw)
 }
+
+/** 找出内容中用到、但当前照片解析不出值的令牌（用于常驻缺失警告）。 */
+export function missingTokens(
+  text: string,
+  exif?: ExifSummary,
+  fileName?: string,
+): TokenDef[] {
+  const keys = new Set<string>()
+  for (const m of text.matchAll(/\{(\w+)\}/g)) keys.add(m[1])
+  const out: TokenDef[] = []
+  for (const t of TOKENS) {
+    if (!keys.has(t.key)) continue
+    if (resolveToken(t.key, exif, fileName) === undefined) out.push(t)
+  }
+  return out
+}

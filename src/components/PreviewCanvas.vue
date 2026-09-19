@@ -1,26 +1,36 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import type { WatermarkLayer } from '@/types/watermark'
-import { hitTest, measureLayer } from '@/core/layout'
+import { anchorPoint, hitTest, layerCenter, measureLayer } from '@/core/layout'
+import { drawLayers, type AssetMap } from '@/core/draw'
 import { renderClient } from '@/core/renderer'
 import { resolveTokens } from '@/core/tokens'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
+import { useSettingsStore } from '@/stores/settings'
 import { useWatermarkStore } from '@/stores/watermark'
 
 const images = useImagesStore()
 const wm = useWatermarkStore()
 const adjust = useAdjustStore()
+const settings = useSettingsStore()
 
-const MIN_ZOOM = 1
 const MAX_ZOOM = 12
 const DBL_TAP_ZOOM = 2.5
 
+/** 预览质量 → 精修长边上限 / 草稿长边上限 / 叠加层 DPR 上限 */
+const PERF: Record<string, { final: number; draft: number; dprCap: number }> = {
+  high: { final: 1600, draft: 720, dprCap: 2 },
+  balanced: { final: 1200, draft: 560, dprCap: 1.5 },
+  eco: { final: 880, draft: 440, dprCap: 1 },
+}
+
 const wrap = ref<HTMLDivElement | null>(null)
-const cv = ref<HTMLCanvasElement | null>(null)
+const cvBase = ref<HTMLCanvasElement | null>(null)
+const cvOverlay = ref<HTMLCanvasElement | null>(null)
 
 const view = reactive({ w: 0, h: 0, dpr: 1 })
-/** 视图缩放：1 = 适应窗口 */
+/** 视图缩放：minZoom（安全区）= 适应窗口 */
 const zoom = ref(1)
 /** 平移（CSS px，相对视口中心） */
 const pan = reactive({ x: 0, y: 0 })
@@ -35,21 +45,27 @@ const selRect = ref<{
   height: number
   rotate: number
 } | null>(null)
+/** 吸附参考线（图片坐标系中的 x/y），拖动中显示 */
+const snapLines = ref<{ x?: number; y?: number } | null>(null)
 
 let mctx: CanvasRenderingContext2D | null = null
 let srcBitmap: ImageBitmap | null = null
 let srcId: string | null = null
 /** 合成结果位图缓存：缩放/平移只重绘，不重新渲染 */
 let resultBmp: ImageBitmap | null = null
-let renderSeq = 0
+let baseSeq = 0
 let finalTimer: number | null = null
 let settleTimer: number | null = null
-let rafPending = false
+let overlayRaf = false
 let viewAnim = 0
 let ro: ResizeObserver | null = null
+/** 水印素材位图缓存：叠加层在主线程直接绘制 */
+const assetBmps: AssetMap = new Map()
 
 const active = computed(() => images.active)
 const hasSelection = computed(() => !!wm.selectedId)
+const minZoom = computed(() => Math.min(1, Math.max(0.3, settings.minZoom)))
+const perf = computed(() => PERF[settings.previewQuality] ?? PERF.high!)
 
 function measureContext(): CanvasRenderingContext2D {
   if (!mctx) {
@@ -65,7 +81,7 @@ function resolvedLayer(l: WatermarkLayer): WatermarkLayer {
 }
 
 function resolvedLayers(): WatermarkLayer[] {
-  // 先取纯数据副本，再做令牌替换（响应式 Proxy 无法跨 Worker 克隆）
+  // 先取纯数据副本，再做令牌替换（响应式 Proxy 无法直接用于克隆）
   const a = active.value
   return wm.plainLayers().map((l) =>
     l.type === 'text'
@@ -74,25 +90,30 @@ function resolvedLayers(): WatermarkLayer[] {
   )
 }
 
-function schedule(): void {
-  if (!active.value) {
-    selRect.value = null
-    return
-  }
-  if (!rafPending) {
-    rafPending = true
-    requestAnimationFrame(() => {
-      rafPending = false
-      void renderNow(true)
-    })
-  }
+/* ---------- 分层渲染：Worker 只负责底图（解码+调节），水印叠加层在主线程 ---------- */
+
+function scheduleBase(): void {
+  if (!active.value) return
+  void renderBase(true)
   if (finalTimer) window.clearTimeout(finalTimer)
-  finalTimer = window.setTimeout(() => void renderNow(false), 160)
+  finalTimer = window.setTimeout(() => void renderBase(false), 160)
+}
+
+function scheduleOverlay(): void {
+  if (overlayRaf) return
+  overlayRaf = true
+  requestAnimationFrame(() => {
+    overlayRaf = false
+    void syncAssets().then(() => {
+      drawBase()
+      drawOverlay()
+    })
+  })
 }
 
 async function ensureBitmap(): Promise<ImageBitmap | null> {
   const a = active.value
-  if (!a) return null
+  if (!a || !a.blob) return null
   if (srcBitmap && srcId === a.id) return srcBitmap
   if (srcBitmap) {
     srcBitmap.close()
@@ -108,39 +129,71 @@ async function ensureBitmap(): Promise<ImageBitmap | null> {
   }
 }
 
-async function renderNow(draft: boolean): Promise<void> {
+async function renderBase(draft: boolean): Promise<void> {
   const a = active.value
-  if (!a || !cv.value) return
+  if (!a || !cvBase.value) return
   const bmp = await ensureBitmap()
   if (!bmp) return
-  const seq = ++renderSeq
+  const seq = ++baseSeq
   const viewLong = Math.max(view.w, view.h) * view.dpr || 800
-  const maxLong = draft ? Math.min(720, viewLong) : Math.min(1600, viewLong)
-  const assets = await wm.assetPayloads(wm.layers)
+  const maxLong = draft
+    ? Math.min(perf.value.draft, viewLong)
+    : Math.min(perf.value.final, viewLong)
   srcBitmap = null // 即将转移给 Worker
   try {
     const res = await renderClient.renderPreview(
       bmp,
-      assets,
-      resolvedLayers(),
+      [],
+      [],
       adjust.snapshotFor(a.id),
       maxLong,
     )
-    if (seq !== renderSeq) return // 过期结果：新一轮渲染已重新解码源图
+    if (seq !== baseSeq) return
     srcBitmap = res.srcBack
     srcId = a.id
     if (resultBmp) resultBmp.close()
     resultBmp = res.bitmap
-    redraw()
+    drawBase()
+    drawOverlay()
   } catch {
     srcBitmap = null
     srcId = null
   }
 }
 
-/** 按当前 zoom/pan 把缓存的结果位图绘制到画布，并更新映射与选框。 */
-function redraw(): void {
-  const canvas = cv.value
+/** 保持素材位图缓存与图层引用一致（异步加载缺失项后重绘叠加层）。 */
+async function syncAssets(): Promise<void> {
+  const needed = new Set(
+    wm.layers.filter((l) => l.type === 'image').map((l) => (l as { assetId: string }).assetId),
+  )
+  let dirty = false
+  for (const key of [...assetBmps.keys()]) {
+    if (!needed.has(key)) {
+      assetBmps.get(key)?.close()
+      assetBmps.delete(key)
+      dirty = true
+    }
+  }
+  const missing = [...needed].filter((id) => !assetBmps.has(id))
+  if (missing.length) {
+    const payloads = await wm.assetPayloads(wm.layers)
+    for (const p of payloads) {
+      if (!assetBmps.has(p.id)) {
+        try {
+          assetBmps.set(p.id, await createImageBitmap(p.blob))
+        } catch {
+          /* 无效素材跳过 */
+        }
+      }
+    }
+    dirty = true
+  }
+  if (dirty) drawOverlay()
+}
+
+/** 把缓存的结果位图绘制到底图画布，并更新映射。 */
+function drawBase(): void {
+  const canvas = cvBase.value
   const bmp = resultBmp
   if (!canvas || !bmp) return
   const dpr = view.dpr || 1
@@ -165,6 +218,72 @@ function redraw(): void {
   resultMap.scale = scale
   resultMap.ox = ox
   resultMap.oy = oy
+}
+
+/** 水印叠加层：主线程矢量绘制，拖动时只重绘这一层，不再经过 Worker。 */
+function drawOverlay(): void {
+  const canvas = cvOverlay.value
+  const bmp = resultBmp
+  if (!canvas || !bmp) return
+  const dpr = Math.min(view.dpr || 1, perf.value.dprCap)
+  const cw = Math.max(1, Math.round(view.w * dpr))
+  const ch = Math.max(1, Math.round(view.h * dpr))
+  if (canvas.width !== cw) canvas.width = cw
+  if (canvas.height !== ch) canvas.height = ch
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  const fit = Math.min(cw / bmp.width, ch / bmp.height)
+  const scale = fit * zoom.value
+  const ox = (cw - bmp.width * scale) / 2 + pan.x * dpr
+  const oy = (ch - bmp.height * scale) / 2 + pan.y * dpr
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, cw, ch)
+  ctx.translate(ox, oy)
+  ctx.scale(scale, scale)
+
+  const layers = resolvedLayers()
+  drawLayers(ctx, bmp.width, bmp.height, layers, assetBmps)
+
+  // 吸附参考线
+  const snap = snapLines.value
+  if (snap) {
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255, 167, 47, 0.9)'
+    ctx.lineWidth = 1 / scale
+    ctx.setLineDash([6 / scale, 4 / scale])
+    if (snap.x !== undefined) {
+      ctx.beginPath()
+      ctx.moveTo(snap.x, 0)
+      ctx.lineTo(snap.x, bmp.height)
+      ctx.stroke()
+    }
+    if (snap.y !== undefined) {
+      ctx.beginPath()
+      ctx.moveTo(0, snap.y)
+      ctx.lineTo(bmp.width, snap.y)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  // 选中图层的锚点十字
+  const sel = wm.selected
+  if (sel) {
+    const a = anchorPoint(sel.anchor, bmp.width, bmp.height)
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255, 167, 47, 0.75)'
+    ctx.lineWidth = 1 / scale
+    const r = 7 / scale
+    ctx.beginPath()
+    ctx.arc(a.x, a.y, r, 0, Math.PI * 2)
+    ctx.moveTo(a.x - r * 1.8, a.y)
+    ctx.lineTo(a.x + r * 1.8, a.y)
+    ctx.moveTo(a.x, a.y - r * 1.8)
+    ctx.lineTo(a.x, a.y + r * 1.8)
+    ctx.stroke()
+    ctx.restore()
+  }
+
   updateSelRect()
 }
 
@@ -187,7 +306,7 @@ function updateSelRect(): void {
 }
 
 function toImagePx(clientX: number, clientY: number): { x: number; y: number } {
-  const canvas = cv.value!
+  const canvas = cvBase.value!
   const dpr = view.dpr || 1
   const rect = canvas.getBoundingClientRect()
   const dx = (clientX - rect.left) * dpr
@@ -244,7 +363,8 @@ function animateViewTo(tz: number, tpx: number, tpy: number): void {
     zoom.value = sz + (tz - sz) * e
     pan.x = spx + (tpx - spx) * e
     pan.y = spy + (tpy - spy) * e
-    redraw()
+    drawBase()
+    drawOverlay()
     if (k < 1) viewAnim = requestAnimationFrame(step)
     else {
       viewAnim = 0
@@ -257,7 +377,7 @@ function animateViewTo(tz: number, tpx: number, tpy: number): void {
 /** 以某点（视口 CSS 坐标）为锚改变缩放，保持该点下的图像位置不动 */
 function zoomAt(cx: number, cy: number, nextZoom: number): void {
   const z0 = zoom.value
-  const z1 = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom))
+  const z1 = Math.min(MAX_ZOOM, Math.max(minZoom.value, nextZoom))
   if (z1 === z0) return
   const rcx = cx - view.w / 2
   const rcy = cy - view.h / 2
@@ -265,14 +385,15 @@ function zoomAt(cx: number, cy: number, nextZoom: number): void {
   pan.y = rcy - ((rcy - pan.y) / z0) * z1
   zoom.value = z1
   hardClampPan()
-  redraw()
+  drawBase()
+  drawOverlay()
 }
 
 function onWheel(e: WheelEvent): void {
   if (!resultBmp) return
   e.preventDefault()
   stopViewAnim()
-  const rect = cv.value!.getBoundingClientRect()
+  const rect = cvBase.value!.getBoundingClientRect()
   // 触控板捏合带 ctrlKey，增量小、更细腻
   const k = e.ctrlKey ? 0.01 : 0.0016
   zoomAt(e.clientX - rect.left, e.clientY - rect.top, zoom.value * Math.exp(-e.deltaY * k))
@@ -291,7 +412,7 @@ const pointers = new Map<number, PointerState>()
 
 type Gesture =
   | { type: 'idle' }
-  | { type: 'layer'; id: string; startClient: { x: number; y: number }; startX: number; startY: number }
+  | { type: 'layer'; id: string; startClient: { x: number; y: number }; startCx: number; startCy: number }
   | { type: 'pan'; startPan: { x: number; y: number }; startClient: { x: number; y: number } }
   | {
       type: 'pinch'
@@ -305,7 +426,7 @@ let gesture: Gesture = { type: 'idle' }
 let lastTap: { t: number; x: number; y: number } | null = null
 
 function relCenter(clientX: number, clientY: number): { x: number; y: number } {
-  const rect = cv.value!.getBoundingClientRect()
+  const rect = cvBase.value!.getBoundingClientRect()
   return { x: clientX - rect.left - view.w / 2, y: clientY - rect.top - view.h / 2 }
 }
 
@@ -318,8 +439,46 @@ function pinchInfo(): { dist: number; mid: { x: number; y: number } } {
   }
 }
 
+/** 拖动中的吸附：把图层中心吸附到图片中线、安全边距线与其他图层中心。 */
+function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy: number; lines: { x?: number; y?: number } } {
+  const out: { cx: number; cy: number; lines: { x?: number; y?: number } } = { cx, cy, lines: {} }
+  if (!settings.wmSnap || !resultMap.w) return out
+  const dpr = view.dpr || 1
+  const cssPerImg = resultMap.scale / dpr
+  const threshold = 8 / cssPerImg // 8 CSS px 容差（图片 px）
+  const imgW = resultMap.w
+  const imgH = resultMap.h
+  const xs: number[] = [imgW / 2, imgW * 0.04, imgW * 0.96]
+  const ys: number[] = [imgH / 2, imgH * 0.04, imgH * 0.96]
+  for (const l of wm.layers) {
+    if (l.id === excludeId || !l.visible) continue
+    const c = layerCenter(l, imgW, imgH)
+    xs.push(c.cx)
+    ys.push(c.cy)
+  }
+  let best = threshold
+  for (const x of xs) {
+    const d = Math.abs(cx - x)
+    if (d < best) {
+      best = d
+      out.cx = x
+      out.lines.x = x
+    }
+  }
+  best = threshold
+  for (const y of ys) {
+    const d = Math.abs(cy - y)
+    if (d < best) {
+      best = d
+      out.cy = y
+      out.lines.y = y
+    }
+  }
+  return out
+}
+
 function onPointerDown(e: PointerEvent): void {
-  const canvas = cv.value
+  const canvas = cvBase.value
   if (!canvas || !resultMap.w) return
   stopViewAnim()
   if (settleTimer) {
@@ -338,6 +497,7 @@ function onPointerDown(e: PointerEvent): void {
       startMid: mid,
       startPan: { x: pan.x, y: pan.y },
     }
+    snapLines.value = null
     return
   }
   if (pointers.size > 2) return
@@ -350,17 +510,19 @@ function onPointerDown(e: PointerEvent): void {
     const box = measureLayer(resolvedLayer(l), resultMap.w, resultMap.h, measureContext())
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
+      const c = layerCenter(l, resultMap.w, resultMap.h)
       gesture = {
         type: 'layer',
         id: l.id,
         startClient: { x: e.clientX, y: e.clientY },
-        startX: l.x,
-        startY: l.y,
+        startCx: c.cx,
+        startCy: c.cy,
       }
       return
     }
   }
   wm.selectedId = null
+  snapLines.value = null
   gesture = { type: 'pan', startPan: { x: pan.x, y: pan.y }, startClient: { x: e.clientX, y: e.clientY } }
 }
 
@@ -378,8 +540,8 @@ function onPointerMove(e: PointerEvent): void {
     const raw = gesture.startZoom * (dist / gesture.startDist)
     // 捏合允许短暂越过边界，松手回弹
     let z = raw
-    if (z < MIN_ZOOM) z = MIN_ZOOM - rubberband(MIN_ZOOM - z, MAX_ZOOM - MIN_ZOOM)
-    else if (z > MAX_ZOOM) z = MAX_ZOOM + rubberband(z - MAX_ZOOM, MAX_ZOOM - MIN_ZOOM)
+    if (z < minZoom.value) z = minZoom.value - rubberband(minZoom.value - z, MAX_ZOOM - minZoom.value)
+    else if (z > MAX_ZOOM) z = MAX_ZOOM + rubberband(z - MAX_ZOOM, MAX_ZOOM - minZoom.value)
     zoom.value = z
     // 捏合中点下的图像点保持不动（1:1 跟手）
     const u = {
@@ -388,21 +550,32 @@ function onPointerMove(e: PointerEvent): void {
     }
     pan.x = mid.x - u.x * z
     pan.y = mid.y - u.y * z
-    redraw()
+    drawBase()
+    drawOverlay()
     return
   }
 
   if (gesture.type === 'layer') {
-    const canvas = cv.value
-    if (!canvas) return
+    const canvas = cvBase.value
+    if (!canvas || !resultMap.w) return
+    const gid = gesture.id
     const dpr = view.dpr || 1
-    const imageCssW = (resultMap.w * resultMap.scale) / dpr
-    const imageCssH = (resultMap.h * resultMap.scale) / dpr
-    const dxPct = ((e.clientX - gesture.startClient.x) / imageCssW) * 100
-    const dyPct = ((e.clientY - gesture.startClient.y) / imageCssH) * 100
-    const nx = Math.min(100, Math.max(0, gesture.startX + dxPct))
-    const ny = Math.min(100, Math.max(0, gesture.startY + dyPct))
-    wm.update(gesture.id, { x: nx, y: ny })
+    const cssPerImg = resultMap.scale / dpr
+    const imgW = resultMap.w
+    const imgH = resultMap.h
+    const proposedX = gesture.startCx + (e.clientX - gesture.startClient.x) / cssPerImg
+    const proposedY = gesture.startCy + (e.clientY - gesture.startClient.y) / cssPerImg
+    const snapped = applySnap(proposedX, proposedY, gid)
+    const cx = Math.min(imgW, Math.max(0, snapped.cx))
+    const cy = Math.min(imgH, Math.max(0, snapped.cy))
+    const layer = wm.layers.find((l) => l.id === gid)
+    if (!layer) return
+    const a = anchorPoint(layer.anchor, imgW, imgH)
+    snapLines.value = snapped.lines.x !== undefined || snapped.lines.y !== undefined ? snapped.lines : null
+    wm.update(gid, {
+      offsetX: ((cx - a.x) / imgW) * 100,
+      offsetY: ((cy - a.y) / imgH) * 100,
+    })
     return
   }
 
@@ -420,7 +593,8 @@ function onPointerMove(e: PointerEvent): void {
       view.h,
       true,
     )
-    redraw()
+    drawBase()
+    drawOverlay()
   }
 }
 
@@ -433,7 +607,7 @@ function onPointerUp(e: PointerEvent): void {
     if (pointers.size < 2) {
       gesture = { type: 'idle' }
       // 松手回弹：缩放回到合法区间，平移回到边界内
-      const tz = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom.value))
+      const tz = Math.min(MAX_ZOOM, Math.max(minZoom.value, zoom.value))
       const d = displaySize()
       zoom.value = tz
       const tx = clampPanAxis(pan.x, d.w, view.w, false)
@@ -442,7 +616,8 @@ function onPointerUp(e: PointerEvent): void {
         animateViewTo(tz, tx, ty)
       } else {
         hardClampPan()
-        redraw()
+        drawBase()
+        drawOverlay()
       }
       scheduleHiRes()
     }
@@ -450,19 +625,25 @@ function onPointerUp(e: PointerEvent): void {
   }
 
   if (pointers.size > 0) {
-    if (g.type === 'layer' || g.type === 'pan') gesture = { type: 'idle' }
+    if (g.type === 'layer' || g.type === 'pan') {
+      gesture = { type: 'idle' }
+      snapLines.value = null
+      scheduleOverlay()
+    }
     return
   }
 
   gesture = { type: 'idle' }
+  snapLines.value = null
+  scheduleOverlay()
 
   // 双击/双触：快速且几乎未移动的两次点按 → 放大/还原
   const now = performance.now()
   const isTap = pt && !pt.moved && now - pt.downT < 300
   if (isTap && lastTap && now - lastTap.t < 340 && Math.hypot(pt!.x - lastTap.x, pt!.y - lastTap.y) < 28) {
     lastTap = null
-    if (zoom.value > MIN_ZOOM + 0.01) {
-      animateViewTo(MIN_ZOOM, 0, 0)
+    if (zoom.value > minZoom.value + 0.01) {
+      animateViewTo(minZoom.value, 0, 0)
     } else {
       // 计算锚定该点、且已约束到边界内的目标视图，再从当前值动画过去
       const c = relCenter(pt!.x, pt!.y)
@@ -502,22 +683,28 @@ function scheduleHiRes(): void {
     if (!resultBmp || !active.value) return
     const desired = Math.round(Math.max(view.w, view.h) * zoom.value * (view.dpr || 1))
     const current = Math.max(resultBmp.width, resultBmp.height)
-    if (desired > current + 100) void renderNow(false)
+    if (desired > current + 100) void renderBase(false)
   }, 280)
 }
 
 function resetView(): void {
   stopViewAnim()
-  zoom.value = MIN_ZOOM
+  zoom.value = minZoom.value
   pan.x = 0
   pan.y = 0
 }
 
 /* ---------- 渲染调度 ---------- */
 
+// 底图相关变化才走 Worker；水印图层变化只重绘叠加层
 watch(
-  [active, () => wm.layers, () => adjust.values, () => adjust.perImage, () => view.w, () => view.h],
-  () => schedule(),
+  [active, () => adjust.values, () => adjust.perImage, () => settings.previewQuality],
+  () => scheduleBase(),
+  { deep: true },
+)
+watch(
+  [() => wm.layers, () => wm.selectedId],
+  () => scheduleOverlay(),
   { deep: true },
 )
 
@@ -536,7 +723,9 @@ onMounted(() => {
       view.h = r.height
       view.dpr = window.devicePixelRatio || 1
       hardClampPan()
-      schedule()
+      drawBase()
+      drawOverlay()
+      scheduleBase()
     })
     ro.observe(wrap.value)
   }
@@ -555,13 +744,15 @@ onBeforeUnmount(() => {
     resultBmp.close()
     resultBmp = null
   }
+  for (const bmp of assetBmps.values()) bmp.close()
+  assetBmps.clear()
 })
 </script>
 
 <template>
   <div ref="wrap" class="canvas-wrap">
     <canvas
-      ref="cv"
+      ref="cvBase"
       class="canvas"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
@@ -569,6 +760,7 @@ onBeforeUnmount(() => {
       @pointercancel="onPointerUp"
       @wheel="onWheel"
     />
+    <canvas ref="cvOverlay" class="canvas overlay" aria-hidden="true" />
     <div
       v-if="hasSelection && selRect"
       class="sel"
@@ -590,11 +782,16 @@ onBeforeUnmount(() => {
   background: var(--canvas);
 }
 .canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
   cursor: grab;
   touch-action: none;
+}
+.overlay {
+  pointer-events: none;
 }
 .canvas:active {
   cursor: grabbing;

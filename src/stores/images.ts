@@ -20,31 +20,33 @@ const PARALLEL = 4
  * 解码一次得到尺寸 + 缩略图；EXIF 只读元数据段，代价很小。
  * 全部属性一次性写回，避免逐字段触发响应式更新。
  */
-async function processItem(item: ImageItem): Promise<boolean> {
+export async function processItem(item: ImageItem): Promise<boolean> {
   const patch: Partial<ImageItem> = {}
-  try {
-    const bmp = await createImageBitmap(item.blob)
-    patch.width = bmp.width
-    patch.height = bmp.height
+  if (item.blob) {
     try {
-      const long = Math.max(bmp.width, bmp.height) || 1
-      const s = Math.min(1, THUMB_LONG / long)
-      const tw = Math.max(1, Math.round(bmp.width * s))
-      const th = Math.max(1, Math.round(bmp.height * s))
-      const oc = new OffscreenCanvas(tw, th)
-      const ctx = oc.getContext('2d')
-      if (ctx) {
-        ctx.drawImage(bmp, 0, 0, tw, th)
-        const thumb = await oc.convertToBlob({ type: 'image/jpeg', quality: 0.82 })
-        patch.thumbUrl = URL.createObjectURL(thumb)
+      const bmp = await createImageBitmap(item.blob)
+      patch.width = bmp.width
+      patch.height = bmp.height
+      try {
+        const long = Math.max(bmp.width, bmp.height) || 1
+        const s = Math.min(1, THUMB_LONG / long)
+        const tw = Math.max(1, Math.round(bmp.width * s))
+        const th = Math.max(1, Math.round(bmp.height * s))
+        const oc = new OffscreenCanvas(tw, th)
+        const ctx = oc.getContext('2d')
+        if (ctx) {
+          ctx.drawImage(bmp, 0, 0, tw, th)
+          const thumb = await oc.convertToBlob({ type: 'image/jpeg', quality: 0.82 })
+          patch.thumbUrl = URL.createObjectURL(thumb)
+        }
+      } finally {
+        bmp.close()
       }
-    } finally {
-      bmp.close()
+    } catch {
+      /* 解码失败：保留 0 尺寸与占位底色 */
     }
-  } catch {
-    /* 解码失败：保留 0 尺寸与占位底色 */
+    patch.exif = await readExif(item.blob)
   }
-  patch.exif = await readExif(item.blob)
   Object.assign(item, patch)
   return !!patch.exif
 }
@@ -151,5 +153,37 @@ export const useImagesStore = defineStore('images', () => {
     activeId.value = null
   }
 
-  return { items, activeId, selectedIds, active, count, select, addFiles, addFromUrl, remove, clear }
+  /** 工作区装载：整体替换图库内容（清掉旧缩略图 URL）。 */
+  function setItems(next: ImageItem[]): void {
+    clear()
+    items.value = next
+    activeId.value = next[0]?.id ?? null
+  }
+
+  /** 工作区增量追加已经处理好的图片条目。 */
+  function adopt(item: ImageItem): void {
+    items.value.push(item)
+    if (!activeId.value) activeId.value = item.id
+  }
+
+  function patchItem(id: string, patch: Partial<ImageItem>): void {
+    const item = items.value.find((i) => i.id === id)
+    if (item) Object.assign(item, patch)
+  }
+
+  return {
+    items,
+    activeId,
+    selectedIds,
+    active,
+    count,
+    select,
+    addFiles,
+    addFromUrl,
+    remove,
+    clear,
+    setItems,
+    adopt,
+    patchItem,
+  }
 })

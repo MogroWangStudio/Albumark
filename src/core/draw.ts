@@ -1,5 +1,11 @@
 import type { TextLayer, WatermarkLayer } from '@/types/watermark'
-import { fontString, measureLayer, type Ctx2D, type LayerBox } from './layout'
+import {
+  fontString,
+  measureLayer,
+  textMetrics,
+  type Ctx2D,
+  type LayerBox,
+} from './layout'
 
 export type AssetMap = Map<string, ImageBitmap>
 
@@ -22,6 +28,7 @@ export function drawLayers(
   layers: WatermarkLayer[],
   assets: AssetMap,
 ): void {
+  const long = Math.max(imgW, imgH)
   for (const layer of layers) {
     if (!layer.visible) continue
     const box = measureLayer(layer, imgW, imgH, ctx)
@@ -38,11 +45,11 @@ export function drawLayers(
       const startY = box.cy - Math.ceil((box.cy + box.h) / stepY) * stepY
       for (let x = startX; x < imgW + box.w; x += stepX) {
         for (let y = startY; y < imgH + box.h; y += stepY) {
-          drawOne(ctx, layer, box, assets, x - box.cx, y - box.cy)
+          drawOne(ctx, layer, box, assets, x - box.cx, y - box.cy, long)
         }
       }
     } else {
-      drawOne(ctx, layer, box, assets, 0, 0)
+      drawOne(ctx, layer, box, assets, 0, 0, long)
     }
     ctx.restore()
   }
@@ -55,6 +62,7 @@ function drawOne(
   assets: AssetMap,
   dx: number,
   dy: number,
+  long: number,
 ): void {
   ctx.save()
   ctx.translate(box.cx + dx, box.cy + dy)
@@ -63,24 +71,21 @@ function drawOne(
     const bmp = assets.get(layer.assetId)
     if (bmp) ctx.drawImage(bmp, -box.w / 2, -box.h / 2, box.w, box.h)
   } else {
-    drawText(ctx, layer, box)
+    drawText(ctx, layer, box, long)
   }
   ctx.restore()
 }
 
-function drawText(ctx: Ctx2D, layer: TextLayer, box: LayerBox): void {
-  const long = Math.max(ctx.canvas.width, ctx.canvas.height)
+function drawText(ctx: Ctx2D, layer: TextLayer, box: LayerBox, long: number): void {
   const fontSize = (layer.scale / 100) * long
-  const spacing = (layer.letterSpacing / 100) * fontSize
-  const lines = layer.content.split('\n')
+  const m = textMetrics(layer, fontSize, ctx)
 
   ctx.font = fontString(layer, fontSize)
-  ctx.textBaseline = 'middle'
+  ctx.textBaseline = 'alphabetic'
   ctx.textAlign = 'left'
   ctx.lineJoin = 'round'
   ctx.miterLimit = 2
 
-  const lh = fontSize * layer.lineHeight
   let pad = 0
   if (layer.background.enabled) {
     pad = (layer.background.padding / 100) * fontSize
@@ -91,20 +96,17 @@ function drawText(ctx: Ctx2D, layer: TextLayer, box: LayerBox): void {
     ctx.globalAlpha = prevAlpha
   }
 
-  const alignX = (lineW: number): number => {
-    if (layer.align === 'left') return -box.w / 2 + pad
-    if (layer.align === 'right') return box.w / 2 - pad - lineW
-    return -lineW / 2
-  }
+  // 首行基线从内容区顶部起排；行高只作用于行与行之间，包围盒与文字贴合
+  const contentLeft = -box.w / 2 + pad
+  const top = -box.h / 2 + pad
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (!line) continue
-    const chars = [...line]
-    const widths = chars.map((ch) => ctx.measureText(ch).width)
-    const lineW = widths.reduce((s, w) => s + w, 0) + spacing * Math.max(0, chars.length - 1)
-    let x = alignX(lineW)
-    const y = -box.h / 2 + pad + lh * i + lh / 2
+  for (let i = 0; i < m.lines.length; i++) {
+    const lineW = m.widths[i]
+    if (!m.lines[i] || lineW <= 0) continue
+    let x = contentLeft
+    if (layer.align === 'right') x = contentLeft + (m.contentW - lineW)
+    else if (layer.align === 'center') x = contentLeft + (m.contentW - lineW) / 2
+    const y = top + m.lh * i + m.ascent
 
     if (layer.shadow.enabled) {
       const sh = layer.shadow
@@ -119,6 +121,7 @@ function drawText(ctx: Ctx2D, layer: TextLayer, box: LayerBox): void {
       ctx.shadowOffsetY = 0
     }
 
+    const chars = [...m.lines[i]]
     for (let c = 0; c < chars.length; c++) {
       if (layer.stroke.enabled) {
         ctx.shadowColor = 'transparent'
@@ -135,7 +138,7 @@ function drawText(ctx: Ctx2D, layer: TextLayer, box: LayerBox): void {
       }
       ctx.fillStyle = layer.color
       ctx.fillText(chars[c], x, y)
-      x += widths[c] + spacing
+      x += ctx.measureText(chars[c]).width + (layer.letterSpacing / 100) * fontSize
     }
   }
   ctx.shadowColor = 'transparent'

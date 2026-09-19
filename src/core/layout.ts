@@ -14,6 +14,72 @@ export function fontString(l: TextLayer, fontSize: number): string {
   return `${l.italic ? 'italic ' : ''}${l.fontWeight} ${fontSize}px ${l.fontFamily}`
 }
 
+/** 九宫格锚点在图片中的坐标（0/0.5/1 比例 → 像素）。 */
+export function anchorPoint(anchor: string, imgW: number, imgH: number): { x: number; y: number } {
+  const row = anchor.startsWith('top') ? 0 : anchor.startsWith('middle') ? 1 : 2
+  const col = anchor.endsWith('left') ? 0 : anchor.endsWith('center') ? 1 : 2
+  return { x: (col / 2) * imgW, y: (row / 2) * imgH }
+}
+
+/** 图层中心：锚点 + 偏移（偏移为图片宽/高的百分比，跨分辨率保持构图一致）。 */
+export function layerCenter(l: WatermarkLayer, imgW: number, imgH: number): { cx: number; cy: number } {
+  const a = anchorPoint(l.anchor, imgW, imgH)
+  return { cx: a.x + (l.offsetX / 100) * imgW, cy: a.y + (l.offsetY / 100) * imgH }
+}
+
+export interface TextMetricsResult {
+  lines: string[]
+  /** 每行像素宽度（已含字距） */
+  widths: number[]
+  /** 全部行中的最大上升/下降高度（px） */
+  ascent: number
+  descent: number
+  /** 行距（px） */
+  lh: number
+  /** 纯文字内容高度（不含背景内边距） */
+  contentH: number
+  contentW: number
+}
+
+/**
+ * 文字排版度量：包围盒与实际绘制共用这一份结果，
+ * 保证碰撞箱与文字本身贴合（行高只影响行间，不包裹首尾）。
+ */
+export function textMetrics(l: TextLayer, fontSize: number, ctx: Ctx2D): TextMetricsResult {
+  ctx.save()
+  ctx.font = fontString(l, fontSize)
+  const spacing = (l.letterSpacing / 100) * fontSize
+  const lines = l.content.split('\n')
+  const widths: number[] = []
+  let ascent = 0
+  let descent = 0
+  for (const line of lines) {
+    if (!line) {
+      widths.push(0)
+      continue
+    }
+    let lw = 0
+    for (const ch of line) lw += ctx.measureText(ch).width + spacing
+    widths.push(Math.max(0, lw - spacing))
+    const m = ctx.measureText(line)
+    // 老引擎没有 actualBoundingBox*，退回到经验值
+    ascent = Math.max(ascent, m.actualBoundingBoxAscent || fontSize * 0.8)
+    descent = Math.max(descent, m.actualBoundingBoxDescent || fontSize * 0.24)
+  }
+  ctx.restore()
+  const lh = fontSize * l.lineHeight
+  const n = Math.max(1, lines.length)
+  return {
+    lines,
+    widths,
+    ascent,
+    descent,
+    lh,
+    contentH: (n - 1) * lh + ascent + descent,
+    contentW: Math.max(...widths, 0),
+  }
+}
+
 /** 计算图层在图片坐标系中的包围盒（含旋转前的宽高）。 */
 export function measureLayer(
   layer: WatermarkLayer,
@@ -22,8 +88,7 @@ export function measureLayer(
   mctx: Ctx2D,
 ): LayerBox {
   const long = Math.max(imgW, imgH)
-  const cx = (layer.x / 100) * imgW
-  const cy = (layer.y / 100) * imgH
+  const { cx, cy } = layerCenter(layer, imgW, imgH)
 
   if (layer.type === 'image') {
     const h = (layer.scale / 100) * long
@@ -31,19 +96,9 @@ export function measureLayer(
   }
 
   const fontSize = (layer.scale / 100) * long
-  mctx.save()
-  mctx.font = fontString(layer, fontSize)
-  const spacing = (layer.letterSpacing / 100) * fontSize
-  const lines = layer.content.split('\n')
-  let w = 0
-  for (const line of lines) {
-    if (!line) continue
-    let lw = 0
-    for (const ch of line) lw += mctx.measureText(ch).width + spacing
-    w = Math.max(w, lw - spacing)
-  }
-  mctx.restore()
-  let h = lines.length * fontSize * layer.lineHeight
+  const m = textMetrics(layer, fontSize, mctx)
+  let w = m.contentW
+  let h = m.contentH
   if (layer.background.enabled) {
     const pad = (layer.background.padding / 100) * fontSize
     w += pad * 2
