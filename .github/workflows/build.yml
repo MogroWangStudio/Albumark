@@ -104,11 +104,15 @@ jobs:
           node-version: 22
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21
-          cache: gradle
+
+      # 缓存 GRADLE_USER_HOME（含 Gradle 发行包与依赖），替代 setup-java 已弃用的 cache: gradle
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       - name: 接受 Android SDK 许可
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
@@ -124,10 +128,21 @@ jobs:
           npm run build
           npx cap sync android
 
-      - name: 构建 APK（debug 可直接安装，release 未签名）
+      # services.gradle.org 偶发 10 秒内连不上导致构建直接失败，这里只负责下载发行包并重试
+      - name: 预下载 Gradle 发行包（失败自动重试）
         run: |
           cd android
           chmod +x gradlew
+          for i in 1 2 3; do
+            ./gradlew --version && break
+            if [ "$i" = 3 ]; then echo "Gradle 发行包下载失败" >&2; exit 1; fi
+            echo "第 $i 次失败，10 秒后重试..."
+            sleep 10
+          done
+
+      - name: 构建 APK（debug 可直接安装，release 未签名）
+        run: |
+          cd android
           ./gradlew assembleDebug assembleRelease --no-daemon
 
       - uses: actions/upload-artifact@v4
