@@ -124,7 +124,7 @@ input[type='range']::-webkit-slider-thumb {
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  transition: transform var(--dur-fast) var(--ease);
+  transition: transform var(--dur-hover) var(--ease-soft);
 }
 input[type='range']:active::-webkit-slider-thumb {
   transform: scale(1.15);

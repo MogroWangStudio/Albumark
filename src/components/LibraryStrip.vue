@@ -15,7 +15,13 @@ const images = useImagesStore()
         :class="{ active: item.id === images.activeId, selected: images.selectedIds.has(item.id) }"
         @click="images.select(item.id, $event.metaKey || $event.ctrlKey)"
       >
-        <img :src="item.url" :alt="item.name" draggable="false" />
+        <img
+          v-if="item.thumbUrl"
+          :src="item.thumbUrl"
+          :alt="item.name"
+          draggable="false"
+          decoding="async"
+        />
         <span class="idx">{{ i + 1 }}</span>
         <button class="rm" aria-label="移除这张" @click.stop="images.remove([item.id])">
           <X :size="11" />
@@ -37,7 +43,7 @@ const images = useImagesStore()
 .strip {
   flex: none;
   border-top: 1px solid var(--line);
-  padding: 8px 12px 6px;
+  padding: 8px calc(12px + var(--safe-right)) calc(6px + var(--safe-bottom)) calc(12px + var(--safe-left));
 }
 .thumbs {
   display: flex;
@@ -54,7 +60,7 @@ const images = useImagesStore()
   overflow: hidden;
   background: var(--canvas);
   border: 2px solid transparent;
-  transition: border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+  transition: border-color var(--dur-hover) var(--ease-soft), transform var(--dur-fast) var(--ease);
 }
 .thumb img {
   width: 100%;
@@ -94,7 +100,7 @@ const images = useImagesStore()
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease);
+  transition: opacity var(--dur-hover) var(--ease-soft);
 }
 .thumb:hover .rm {
   opacity: 1;
@@ -115,7 +121,7 @@ const images = useImagesStore()
   font-size: 12px;
   padding: 2px 6px;
   border-radius: 5px;
-  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  transition: color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
 }
 .link:hover {
   color: var(--text);

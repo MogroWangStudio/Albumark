@@ -552,7 +552,7 @@ function insertToken(key: string): void {
   padding: 5px 8px;
   border-radius: 8px;
   cursor: pointer;
-  transition: background var(--dur-fast) var(--ease);
+  transition: background var(--dur-hover) var(--ease-soft);
 }
 .layer:hover {
   background: var(--hover);
@@ -579,7 +579,7 @@ function insertToken(key: string): void {
   border-radius: 6px;
   color: var(--text-3);
   flex: none;
-  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  transition: color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
 }
 .tool:hover:not(:disabled) {
   color: var(--text);
@@ -623,7 +623,7 @@ h3 {
   border: 1px solid var(--line);
   font-size: 11.5px;
   color: var(--text-2);
-  transition: all var(--dur-fast) var(--ease);
+  transition: all var(--dur-hover) var(--ease-soft);
 }
 .chip:hover {
   color: var(--accent);
@@ -699,14 +699,14 @@ h3 {
   border: 1px solid var(--line);
   display: grid;
   place-items: center;
-  transition: all var(--dur-fast) var(--ease);
+  transition: all var(--dur-hover) var(--ease-soft);
 }
 .anchor-grid button span {
   width: 4px;
   height: 4px;
   border-radius: 50%;
   background: var(--text-3);
-  transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+  transition: background var(--dur-hover) var(--ease-soft), transform var(--dur-hover) var(--ease-soft);
 }
 .anchor-grid button:hover {
   border-color: var(--accent);

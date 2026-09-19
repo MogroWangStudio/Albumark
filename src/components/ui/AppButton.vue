@@ -29,10 +29,10 @@ withDefaults(
   white-space: nowrap;
   transition:
     transform var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease),
-    opacity var(--dur-fast) var(--ease);
+    background var(--dur-hover) var(--ease-soft),
+    border-color var(--dur-hover) var(--ease-soft),
+    color var(--dur-hover) var(--ease-soft),
+    opacity var(--dur-hover) var(--ease-soft);
 }
 .btn:active:not(:disabled) {
   transform: scale(0.97);
@@ -49,7 +49,6 @@ withDefaults(
 .btn.primary {
   background: var(--accent);
   color: var(--accent-contrast);
-  box-shadow: var(--shadow-1);
 }
 .btn.primary:hover:not(:disabled) {
   background: var(--accent-strong);
@@ -59,6 +58,7 @@ withDefaults(
   border: 1px solid var(--line);
 }
 .btn.secondary:hover:not(:disabled) {
+  background: var(--active);
   border-color: var(--line-strong);
 }
 .btn.ghost {

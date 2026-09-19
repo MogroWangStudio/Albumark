@@ -15,7 +15,8 @@ export interface ImageItem {
   name: string
   baseName: string
   blob: Blob
-  url: string
+  /** 图库缩略图（240px 长边）的对象 URL；导入后异步生成 */
+  thumbUrl: string
   width: number
   height: number
   exif?: ExifSummary

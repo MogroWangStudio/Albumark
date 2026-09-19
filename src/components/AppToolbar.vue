@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Download, ImagePlus } from 'lucide-vue-next'
+import { ImagePlus, Settings, Upload } from 'lucide-vue-next'
 import LogoText from '@/components/brand/LogoText.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { useImagesStore } from '@/stores/images'
@@ -7,6 +7,7 @@ import { useImagesStore } from '@/stores/images'
 defineEmits<{
   import: []
   exportSheet: []
+  settings: []
 }>()
 
 const images = useImagesStore()
@@ -18,9 +19,12 @@ const images = useImagesStore()
       <LogoText class="logo" />
     </div>
     <div class="actions">
+      <AppButton variant="ghost" class="icon-btn" aria-label="设置" title="设置" @click="$emit('settings')">
+        <Settings :size="16" />
+      </AppButton>
       <AppButton @click="$emit('import')"><ImagePlus :size="15" />导入图片</AppButton>
       <AppButton variant="primary" :disabled="!images.count" @click="$emit('exportSheet')">
-        <Download :size="15" />导出{{ images.count ? ` · ${images.count}` : '' }}
+        <Upload :size="15" />导出{{ images.count ? ` · ${images.count}` : '' }}
       </AppButton>
     </div>
   </header>
@@ -32,8 +36,8 @@ const images = useImagesStore()
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  height: 52px;
-  padding: 0 14px;
+  height: calc(52px + var(--safe-top));
+  padding: var(--safe-top) calc(14px + var(--safe-right)) 0 calc(14px + var(--safe-left));
   flex: none;
 }
 .logo {
@@ -45,6 +49,10 @@ const images = useImagesStore()
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.icon-btn {
+  width: var(--control-h);
+  padding: 0;
 }
 @media (max-width: 640px) {
   .logo {

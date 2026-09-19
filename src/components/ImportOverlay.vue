@@ -7,13 +7,18 @@ defineEmits<{
   pick: []
   openUrl: []
 }>()
+
+/** 按系统时间向用户问好 */
+const hour = new Date().getHours()
+const greeting =
+  hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
 </script>
 
 <template>
   <div class="empty">
     <LogoMark class="mark" />
-    <h1>把照片拖进来</h1>
-    <p>批量导入 JPG 照片，或从图片链接导入。全部处理在本机完成，不会上传。</p>
+    <h1>{{ greeting }}</h1>
+    <p>选择或拖入 JPG 照片开始今天的辑录。全部处理在本机完成，不会上传。</p>
     <div class="actions">
       <AppButton variant="primary" @click="$emit('pick')"><ImagePlus :size="15" />选择照片</AppButton>
       <AppButton @click="$emit('openUrl')"><Link2 :size="15" />导入链接</AppButton>

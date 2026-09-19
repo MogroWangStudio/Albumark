@@ -26,7 +26,7 @@ const icons: Record<Toast['tone'], typeof Info> = {
 <style scoped>
 .toasts {
   position: fixed;
-  top: 14px;
+  top: calc(14px + var(--safe-top));
   left: 50%;
   transform: translateX(-50%);
   z-index: 100;

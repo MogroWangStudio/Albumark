@@ -40,7 +40,8 @@ const emit = defineEmits<{
   z-index: 60;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: calc(24px + var(--safe-top)) calc(24px + var(--safe-right)) calc(24px + var(--safe-bottom))
+    calc(24px + var(--safe-left));
   background: rgba(0, 0, 0, 0.45);
 }
 .panel {
@@ -70,7 +71,7 @@ h2 {
   height: 26px;
   border-radius: 7px;
   color: var(--text-3);
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+  transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
 }
 .x:hover {
   background: var(--hover);

@@ -1,8 +1,9 @@
 /* 辑印 Albumark · 设计令牌
-   唯一强调色取自品牌 Logo（#FFA72F）；层级由字号、字重与间距表达，不靠彩色堆砌。 */
+   唯一强调色取自品牌 Logo（#FFA72F）；层级由字号、字重与间距表达，不靠彩色堆砌。
+   主题：默认深色；手动主题由设置写入 <html data-theme="light|dark">，auto 模式由 JS 跟随系统。 */
 
 :root {
-  color-scheme: dark light;
+  color-scheme: dark;
 
   --accent: #ffa72f;
   --accent-strong: #e88f0e;
@@ -35,36 +36,44 @@
   --r-m: 10px;
   --r-l: 14px;
 
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.38);
   --shadow-3: 0 18px 56px rgba(0, 0, 0, 0.5);
 
+  /* 按压即时、悬停柔和：悬停用更长的非线性缓动（easeOutQuint），按压保持干脆 */
   --ease: cubic-bezier(0.2, 0, 0, 1);
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
   --dur-fast: 120ms;
+  --dur-hover: 180ms;
   --dur: 220ms;
   --dur-slow: 380ms;
 
   --blur-material: blur(20px) saturate(160%);
 
   --control-h: 30px;
+
+  /* 安全区：桌面端为 0；安卓由 Capacitor SystemBars 注入 --safe-area-inset-*，
+     浏览器/iOS 走 env()，两者取较大值 */
+  --safe-top: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --safe-left: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
+  --safe-right: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f4f1ec;
-    --canvas: #e7e3dd;
-    --surface: rgba(252, 250, 247, 0.82);
-    --surface-solid: #fcfaf7;
-    --raised: #ffffff;
-    --hover: rgba(0, 0, 0, 0.05);
-    --active: rgba(0, 0, 0, 0.09);
-    --text: #26221e;
-    --text-2: #6e675e;
-    --text-3: #9c948a;
-    --line: rgba(0, 0, 0, 0.08);
-    --line-strong: rgba(0, 0, 0, 0.16);
-    --accent-contrast: #2e1d00;
-  }
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f1ec;
+  --canvas: #e7e3dd;
+  --surface: rgba(252, 250, 247, 0.82);
+  --surface-solid: #fcfaf7;
+  --raised: #ffffff;
+  --hover: rgba(0, 0, 0, 0.05);
+  --active: rgba(0, 0, 0, 0.09);
+  --text: #26221e;
+  --text-2: #6e675e;
+  --text-3: #9c948a;
+  --line: rgba(0, 0, 0, 0.08);
+  --line-strong: rgba(0, 0, 0, 0.16);
+  --accent-contrast: #2e1d00;
 }
 
 @media (prefers-reduced-transparency: reduce) {

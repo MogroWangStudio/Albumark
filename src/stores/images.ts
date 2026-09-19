@@ -5,20 +5,48 @@ import { readExif } from '@/core/exif'
 import { fetchImageBlob } from '@/core/platform'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
+import { useSettingsStore } from './settings'
 
 function isJpegName(name: string): boolean {
   return /\.jpe?g$/i.test(name)
 }
 
-async function dimensions(blob: Blob): Promise<{ w: number; h: number }> {
+/** 图库缩略图长边（px）：60px 缩略图按 2x DPR 留足余量 */
+const THUMB_LONG = 240
+/** 导入处理并发数：解码与 EXIF 解析走浏览器线程池，过高反而争抢内存 */
+const PARALLEL = 4
+
+/**
+ * 解码一次得到尺寸 + 缩略图；EXIF 只读元数据段，代价很小。
+ * 全部属性一次性写回，避免逐字段触发响应式更新。
+ */
+async function processItem(item: ImageItem): Promise<boolean> {
+  const patch: Partial<ImageItem> = {}
   try {
-    const bmp = await createImageBitmap(blob)
-    const d = { w: bmp.width, h: bmp.height }
-    bmp.close()
-    return d
+    const bmp = await createImageBitmap(item.blob)
+    patch.width = bmp.width
+    patch.height = bmp.height
+    try {
+      const long = Math.max(bmp.width, bmp.height) || 1
+      const s = Math.min(1, THUMB_LONG / long)
+      const tw = Math.max(1, Math.round(bmp.width * s))
+      const th = Math.max(1, Math.round(bmp.height * s))
+      const oc = new OffscreenCanvas(tw, th)
+      const ctx = oc.getContext('2d')
+      if (ctx) {
+        ctx.drawImage(bmp, 0, 0, tw, th)
+        const thumb = await oc.convertToBlob({ type: 'image/jpeg', quality: 0.82 })
+        patch.thumbUrl = URL.createObjectURL(thumb)
+      }
+    } finally {
+      bmp.close()
+    }
   } catch {
-    return { w: 0, h: 0 }
+    /* 解码失败：保留 0 尺寸与占位底色 */
   }
+  patch.exif = await readExif(item.blob)
+  Object.assign(item, patch)
+  return !!patch.exif
 }
 
 export const useImagesStore = defineStore('images', () => {
@@ -48,17 +76,32 @@ export const useImagesStore = defineStore('images', () => {
       name,
       baseName: name.replace(/\.[^.]+$/, ''),
       blob,
-      url: URL.createObjectURL(blob),
+      thumbUrl: '',
       width: 0,
       height: 0,
     }))
     items.value.push(...added)
     if (!activeId.value) activeId.value = added[0].id
-    for (const item of added) {
-      const d = await dimensions(item.blob)
-      item.width = d.w
-      item.height = d.h
-      item.exif = await readExif(item.blob)
+
+    // 并发池处理：先上屏占位，再逐张补齐尺寸、缩略图与 EXIF
+    let cursor = 0
+    let missingExif = 0
+    async function worker(): Promise<void> {
+      for (;;) {
+        const i = cursor++
+        if (i >= added.length) return
+        const ok = await processItem(added[i])
+        if (!ok) missingExif++
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PARALLEL, added.length) }, worker))
+
+    if (missingExif > 0 && useSettingsStore().exifNotice) {
+      toast(
+        missingExif === added.length
+          ? '这批照片都没有 EXIF 拍摄信息，相关令牌会留空'
+          : `有 ${missingExif} 张照片缺少 EXIF 拍摄信息，相关令牌会留空`,
+      )
     }
   }
 
@@ -89,7 +132,7 @@ export const useImagesStore = defineStore('images', () => {
     const set = new Set(ids)
     const kept = items.value.filter((i) => !set.has(i.id))
     for (const gone of items.value) {
-      if (set.has(gone.id)) URL.revokeObjectURL(gone.url)
+      if (set.has(gone.id) && gone.thumbUrl) URL.revokeObjectURL(gone.thumbUrl)
     }
     items.value = kept
     const nextSel = new Set([...selectedIds.value].filter((id) => !set.has(id)))
@@ -100,7 +143,9 @@ export const useImagesStore = defineStore('images', () => {
   }
 
   function clear(): void {
-    for (const item of items.value) URL.revokeObjectURL(item.url)
+    for (const item of items.value) {
+      if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl)
+    }
     items.value = []
     selectedIds.value = new Set()
     activeId.value = null

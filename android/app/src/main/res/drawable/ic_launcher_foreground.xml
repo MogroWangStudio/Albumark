@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 品牌图形（由 scripts/flatten-logo.mjs 生成），居中于 66dp 安全区内 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+  <path android:fillColor="#FFA72F" android:pathData="M31.59,62.21C31.04,62.92 31.00,63.91 31.50,64.66C32.00,65.41 32.93,65.75 33.80,65.51C40.49,63.65 50.28,60.92 50.28,60.92L50.28,38.32C50.28,38.32 38.06,53.94 31.59,62.21Z"/>
+  <path android:fillColor="#FFA72F" android:pathData="M42.53,43.08C42.53,43.08 36.05,44.88 32.85,45.77C31.81,46.06 31.10,47.01 31.10,48.08C31.10,51.31 31.10,57.69 31.10,57.69L42.53,43.08Z"/>
+  <path android:fillColor="#FFA72F" android:pathData="M65.43,65.00C65.43,65.00 71.40,63.34 74.71,62.42C75.98,62.06 76.86,60.90 76.86,59.58C76.86,56.26 76.86,50.39 76.86,50.39L65.43,65.00Z"/>
+  <path android:fillColor="#FFC473" android:pathData="M50.28,38.32L50.28,60.87L57.90,69.68L57.90,47.13Z"/>
+  <path android:fillColor="#FFA72F" android:pathData="M76.38,46.06C76.96,45.31 77.00,44.27 76.47,43.48C75.94,42.69 74.97,42.33 74.05,42.58C67.37,44.44 57.90,47.08 57.90,47.08L57.90,69.68C57.90,69.68 69.86,54.39 76.38,46.06Z"/>
+</vector>

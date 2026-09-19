@@ -6,6 +6,7 @@ import ExportSheet from '@/components/ExportSheet.vue'
 import ImportOverlay from '@/components/ImportOverlay.vue'
 import LibraryStrip from '@/components/LibraryStrip.vue'
 import PreviewCanvas from '@/components/PreviewCanvas.vue'
+import SettingsDialog from '@/components/SettingsDialog.vue'
 import UrlImportDialog from '@/components/UrlImportDialog.vue'
 import WatermarkPanel from '@/components/WatermarkPanel.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
@@ -23,6 +24,7 @@ const exportStore = useExportStore()
 const panel = ref<'watermark' | 'adjust'>('watermark')
 const urlOpen = ref(false)
 const exportOpen = ref(false)
+const settingsOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragDepth = ref(0)
 
@@ -111,6 +113,7 @@ async function onDrop(e: DragEvent): Promise<void> {
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
     urlOpen.value = false
+    settingsOpen.value = false
     // 导出进行中不允许关闭，避免误触丢失进度展示
     if (exportStore.phase !== 'running') exportOpen.value = false
   }
@@ -128,7 +131,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
     @dragleave="onDragLeave"
     @drop.prevent="onDrop"
   >
-    <AppToolbar @import="openPicker" @export-sheet="exportOpen = true" />
+    <AppToolbar
+      @import="openPicker"
+      @export-sheet="exportOpen = true"
+      @settings="settingsOpen = true"
+    />
 
     <div class="workspace">
       <main class="stage">
@@ -155,6 +162,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
     <UrlImportDialog :open="urlOpen" @close="urlOpen = false" />
     <ExportSheet :open="exportOpen" @close="exportOpen = false" />
+    <SettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
     <ToastHost />
 
     <input

@@ -11,6 +11,10 @@ body,
   height: 100%;
 }
 
+html {
+  background: var(--bg);
+}
+
 body {
   font: 400 13px/1.5 var(--font);
   color: var(--text);

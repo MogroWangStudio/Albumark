@@ -139,7 +139,7 @@ function pick(item: DropdownItem): void {
   border-radius: 7px;
   text-align: left;
   font-size: 13px;
-  transition: background var(--dur-fast) var(--ease);
+  transition: background var(--dur-hover) var(--ease-soft);
 }
 .dd-item:hover:not(:disabled) {
   background: var(--hover);

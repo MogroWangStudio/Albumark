@@ -8,7 +8,10 @@ import { resolveTokens } from './tokens'
 
 export interface ExportPayload {
   layers: WatermarkLayer[]
+  /** 全局调节参数 */
   adjustments: Adjustments
+  /** 开启「单独调节」的照片 id → 独立参数，优先于全局 */
+  perImage: Record<string, Adjustments>
   assets: AssetPayload[]
   quality: number
   longEdge: number
@@ -73,7 +76,7 @@ export async function runExport(
           item.blob,
           payload.assets,
           layers,
-          payload.adjustments,
+          payload.perImage[item.id] ?? payload.adjustments,
           payload.longEdge,
           payload.quality / 100,
         )

@@ -6,17 +6,40 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-19
+
 ### 新增
 
-- GitHub Actions 自动构建（推送到 main 或打 `v*` 标签触发，支持手动触发）：
-  - Windows x64 便携版（单文件 exe，跳过安装器）
-  - macOS arm64（.dmg 与 .app）
-  - Android APK（debug 可直接安装；release 未签名）
+- **预览缩放与平移**：PC 端滚轮 / 触控板捏合缩放，移动端双指捏合，双击（双触）在适应窗口与
+  250% 间切换；放大后可拖拽平移，边界有橡皮筋回弹，放大时自动请求高分辨率精修
+- **单独调节**：调节面板可对当前照片开启独立参数（从全局值复制起步），开启后不再应用全局调节，
+  预览与导出均按每张照片的设置生效
+- **软件设置**：工具栏新增设置入口，可切换外观主题（跟随系统 / 深色 / 浅色）、
+  开关「EXIF 缺失提醒」，并展示版本信息
+- 导入照片缺少 EXIF 拍摄信息时给出提示，可关闭
+- 批量导入自动生成缩略图（240px 长边），图库改用缩略图渲染
 
 ### 变更
 
-- 应用标识统一为 `com.mws.albumark`（Tauri identifier / Capacitor appId / Android
-  applicationId 与 namespace），Android `versionName` 对齐为 0.1.0
+- 应用图标重绘：白色背景 + 居中品牌图形；桌面 icns / ico / png 与 Android 启动图标同步更新，
+  Android 自适应图标改用矢量前景（`drawable/ic_launcher_foreground.xml`）
+- 导出图标改为向外箭头（上传样式）
+- 主按钮去除投影；全部按钮的悬停反馈改用更流畅的非线性缓动（`--ease-soft`，180ms）
+- Android 适配状态栏与手势区：内容延伸至系统栏之下，安全区边距经 Capacitor 8 SystemBars
+  以 CSS 变量透传，状态栏图标样式随应用主题切换
+- 启动欢迎语按系统时间问好（早晨 / 下午 / 晚上等），替代固定文案
+- Android `versionCode` 升至 2
+
+### 修复
+
+- Windows 便携版启动不再弹出命令行终端窗口（`windows_subsystem` 归位为 crate 级内层属性）
+- 批量导入大量照片时不再卡顿：导入即上屏占位，尺寸 / 缩略图 / EXIF 由并发池处理，
+  不再在主线程逐张串行解码原图
+
+### 其他
+
+- GitHub Actions 多平台构建（Windows x64 便携版 / macOS arm64 / Android APK），
+  应用标识统一为 `com.mws.albumark`
 
 ## [0.1.0] - 2026-09-18
 

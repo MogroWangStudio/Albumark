@@ -32,7 +32,7 @@ const emit = defineEmits<{
   height: 20px;
   border-radius: 10px;
   background: var(--line-strong);
-  transition: background var(--dur-fast) var(--ease);
+  transition: background var(--dur-hover) var(--ease-soft);
   flex: none;
 }
 .switch.on {
@@ -50,7 +50,7 @@ const emit = defineEmits<{
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-  transition: transform var(--dur-fast) var(--ease);
+  transition: transform var(--dur-hover) var(--ease-soft);
 }
 .switch.on .knob {
   transform: translateX(14px);

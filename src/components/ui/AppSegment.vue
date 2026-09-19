@@ -44,8 +44,8 @@ button {
   font-size: 12.5px;
   color: var(--text-2);
   transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
+    background var(--dur-hover) var(--ease-soft),
+    color var(--dur-hover) var(--ease-soft);
 }
 button:hover:not(:disabled):not(.on) {
   color: var(--text);
@@ -53,7 +53,6 @@ button:hover:not(:disabled):not(.on) {
 button.on {
   background: var(--raised);
   color: var(--text);
-  box-shadow: var(--shadow-1);
 }
 button:disabled {
   opacity: 0.4;
