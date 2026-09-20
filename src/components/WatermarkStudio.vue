@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ArrowLeft, Check, Plus, Save, Trash2 } from 'lucide-vue-next'
 import LayerEditor from '@/components/LayerEditor.vue'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -87,28 +87,24 @@ function resolvedLayers(): WatermarkLayer[] {
 
 function redraw(): void {
   const canvas = canvasEl.value
-  const box = boxEl.value
-  if (!canvas || !box || !sampleBmp) return
-  // 画布 CSS 尺寸显式锁定为容器内按样张比例的适配值：
-  // 若依赖浏览器自动尺寸，改写 canvas.width 属性会反过来改变布局，形成反馈循环
-  const rect = box.getBoundingClientRect()
+  if (!canvas || !sampleBmp) return
+  // 画布 CSS 尺寸由样式锁定铺满容器（见 .sample），改写 canvas.width 不会反过来影响布局
+  const rect = canvas.getBoundingClientRect()
   if (!rect.width || !rect.height) return
-  const dispW = Math.max(1, Math.min(rect.width, rect.height * (SAMPLE_W / SAMPLE_H)))
-  const dispH = Math.max(1, dispW * (SAMPLE_H / SAMPLE_W))
-  canvas.style.width = `${Math.round(dispW)}px`
-  canvas.style.height = `${Math.round(dispH)}px`
   const dpr = Math.min(window.devicePixelRatio || 1, 2)
-  const cw = Math.round(dispW * dpr)
-  const ch = Math.round(dispH * dpr)
+  const cw = Math.max(1, Math.round(rect.width * dpr))
+  const ch = Math.max(1, Math.round(rect.height * dpr))
   if (canvas.width !== cw) canvas.width = cw
   if (canvas.height !== ch) canvas.height = ch
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, cw, ch)
-  const fit = Math.min(cw / SAMPLE_W, ch / SAMPLE_H)
-  const ox = (cw - SAMPLE_W * fit) / 2
-  const oy = (ch - SAMPLE_H * fit) / 2
+  // 样张先按容器适应并居中，再叠加视图缩放与平移（放大后可平移查看边缘）
+  const baseFit = Math.min(rect.width / SAMPLE_W, rect.height / SAMPLE_H)
+  const fit = baseFit * viewZoom.value
+  const ox = (rect.width * dpr - SAMPLE_W * fit) / 2 + viewPan.x * dpr
+  const oy = (rect.height * dpr - SAMPLE_H * fit) / 2 + viewPan.y * dpr
   ctx.translate(ox, oy)
   ctx.scale(fit, fit)
   ctx.drawImage(sampleBmp, 0, 0)
@@ -178,15 +174,116 @@ async function syncAssets(): Promise<void> {
   }
 }
 
-/* ---------- 样张画布上的拖拽 ---------- */
+/* ---------- 样张视图变换：滚轮缩放 / 拖拽平移 / 双指捏合 / 双击复位 ---------- */
 
-interface DragState {
-  id: string
-  startClient: { x: number; y: number }
-  startCx: number
-  startCy: number
+const MAX_ZOOM = 8
+const DBL_TAP_ZOOM = 2.5
+/** 视图缩放：1 = 适应容器 */
+const viewZoom = ref(1)
+/** 平移（CSS px，相对容器中心） */
+const viewPan = reactive({ x: 0, y: 0 })
+let viewAnim = 0
+
+/** 样张在当前容器下 zoom=1 的显示尺寸（CSS px） */
+function fitSize(rect: DOMRect): { w: number; h: number } {
+  const fit = Math.min(rect.width / SAMPLE_W, rect.height / SAMPLE_H)
+  return { w: SAMPLE_W * fit, h: SAMPLE_H * fit }
 }
-let drag: DragState | null = null
+
+/** Apple 式橡皮筋：越界越多阻力越大 */
+function rubberband(overshoot: number, dimension: number, constant = 0.55): number {
+  return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot))
+}
+
+function clampPanAxis(v: number, disp: number, viewport: number, soft: boolean): number {
+  const max = Math.max(0, (disp * viewZoom.value - viewport) / 2)
+  if (max === 0) return 0
+  if (Math.abs(v) <= max) return v
+  if (!soft) return Math.sign(v) * max
+  return Math.sign(v) * (max + rubberband(Math.abs(v) - max, viewport))
+}
+
+function hardClampPan(): void {
+  const rect = canvasEl.value?.getBoundingClientRect()
+  if (!rect) return
+  const d = fitSize(rect)
+  viewPan.x = clampPanAxis(viewPan.x, d.w, rect.width, false)
+  viewPan.y = clampPanAxis(viewPan.y, d.h, rect.height, false)
+}
+
+function stopViewAnim(): void {
+  if (viewAnim) {
+    cancelAnimationFrame(viewAnim)
+    viewAnim = 0
+  }
+}
+
+/** 视图状态动画（回弹/复位共用），始终从当前值出发，随时可被新手势打断 */
+function animateViewTo(tz: number, tpx: number, tpy: number): void {
+  stopViewAnim()
+  const sz = viewZoom.value
+  const spx = viewPan.x
+  const spy = viewPan.y
+  const t0 = performance.now()
+  const dur = 240
+  const step = (t: number): void => {
+    const k = Math.min(1, (t - t0) / dur)
+    const e = 1 - Math.pow(1 - k, 3)
+    viewZoom.value = sz + (tz - sz) * e
+    viewPan.x = spx + (tpx - spx) * e
+    viewPan.y = spy + (tpy - spy) * e
+    redraw()
+    if (k < 1) viewAnim = requestAnimationFrame(step)
+    else viewAnim = 0
+  }
+  viewAnim = requestAnimationFrame(step)
+}
+
+function onZoomWheel(e: WheelEvent): void {
+  if (!sampleBmp) return
+  e.preventDefault()
+  stopViewAnim()
+  const rect = canvasEl.value?.getBoundingClientRect()
+  if (!rect) return
+  const z0 = viewZoom.value
+  // 触控板捏合带 ctrlKey，增量小、更细腻
+  const k = e.ctrlKey ? 0.01 : 0.0016
+  const z1 = Math.min(MAX_ZOOM, Math.max(1, z0 * Math.exp(-e.deltaY * k)))
+  if (z1 === z0) return
+  // 锚点缩放：光标下的样张点保持不动
+  const rcx = e.clientX - rect.left - rect.width / 2
+  const rcy = e.clientY - rect.top - rect.height / 2
+  viewPan.x = rcx - ((rcx - viewPan.x) / z0) * z1
+  viewPan.y = rcy - ((rcy - viewPan.y) / z0) * z1
+  viewZoom.value = z1
+  hardClampPan()
+  redraw()
+}
+
+/* ---------- 样张画布上的指针手势 ---------- */
+
+interface PointerState {
+  x: number
+  y: number
+  downT: number
+  moved: boolean
+}
+const pointers = new Map<number, PointerState>()
+
+type Gesture =
+  | { type: 'idle' }
+  | { type: 'layer'; id: string; startClient: { x: number; y: number }; startCx: number; startCy: number }
+  | { type: 'pan'; startPan: { x: number; y: number }; startClient: { x: number; y: number } }
+  | {
+      type: 'pinch'
+      startDist: number
+      startZoom: number
+      startMid: { x: number; y: number }
+      startPan: { x: number; y: number }
+    }
+
+let gesture: Gesture = { type: 'idle' }
+let lastTap: { t: number; x: number; y: number } | null = null
 
 function toImagePx(clientX: number, clientY: number): { x: number; y: number } {
   const canvas = canvasEl.value!
@@ -196,8 +293,41 @@ function toImagePx(clientX: number, clientY: number): { x: number; y: number } {
   return { x: (dx - vmap.ox) / vmap.scale, y: (dy - vmap.oy) / vmap.scale }
 }
 
+function pinchInfo(): { dist: number; mid: { x: number; y: number } } {
+  const pts = [...pointers.values()]
+  const [a, b] = pts
+  const rect = canvasEl.value!.getBoundingClientRect()
+  return {
+    dist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+    mid: {
+      x: (a.x + b.x) / 2 - rect.left - rect.width / 2,
+      y: (a.y + b.y) / 2 - rect.top - rect.height / 2,
+    },
+  }
+}
+
 function onPointerDown(e: PointerEvent): void {
-  if (!sampleBmp || !vmap.scale) return
+  const canvas = canvasEl.value
+  if (!canvas || !sampleBmp || !vmap.scale) return
+  stopViewAnim()
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, downT: performance.now(), moved: false })
+  canvas.setPointerCapture(e.pointerId)
+
+  if (pointers.size === 2) {
+    // 第二根手指落下：进行中的手势一律转为捏合
+    const { dist, mid } = pinchInfo()
+    gesture = {
+      type: 'pinch',
+      startDist: dist,
+      startZoom: viewZoom.value,
+      startMid: mid,
+      startPan: { x: viewPan.x, y: viewPan.y },
+    }
+    grabbing.value = false
+    return
+  }
+  if (pointers.size > 2) return
+
   const p = toImagePx(e.clientX, e.clientY)
   const list = wm.layers
   for (let i = list.length - 1; i >= 0; i--) {
@@ -207,50 +337,189 @@ function onPointerDown(e: PointerEvent): void {
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
       const c = layerCenter(l, SAMPLE_W, SAMPLE_H)
-      drag = { id: l.id, startClient: { x: e.clientX, y: e.clientY }, startCx: c.cx, startCy: c.cy }
+      gesture = {
+        type: 'layer',
+        id: l.id,
+        startClient: { x: e.clientX, y: e.clientY },
+        startCx: c.cx,
+        startCy: c.cy,
+      }
       grabbing.value = true
-      canvasEl.value?.setPointerCapture(e.pointerId)
       return
     }
   }
   wm.selectedId = null
+  gesture = { type: 'pan', startPan: { x: viewPan.x, y: viewPan.y }, startClient: { x: e.clientX, y: e.clientY } }
 }
 
 function onPointerMove(e: PointerEvent): void {
-  if (!drag) {
+  const pt = pointers.get(e.pointerId)
+  if (!pt) {
     onCursorMove(e)
     return
   }
-  const layer = wm.layers.find((l) => l.id === drag!.id)
-  if (!layer) return
-  const dpx = ((e.clientX - drag.startClient.x) * vmap.dpr) / vmap.scale
-  const dpy = ((e.clientY - drag.startClient.y) * vmap.dpr) / vmap.scale
-  let cx = drag.startCx + dpx
-  let cy = drag.startCy + dpy
-  // 吸附样张中线与安全边距
-  if (settings.wmSnap) {
-    const t = 8 / (vmap.scale / vmap.dpr)
-    for (const x of [SAMPLE_W / 2, SAMPLE_W * 0.04, SAMPLE_W * 0.96]) {
-      if (Math.abs(cx - x) < t) cx = x
+  const dx = e.clientX - pt.x
+  const dy = e.clientY - pt.y
+  if (Math.abs(dx) + Math.abs(dy) > 3) pt.moved = true
+  pt.x = e.clientX
+  pt.y = e.clientY
+
+  if (gesture.type === 'pinch' && pointers.size >= 2) {
+    const { dist, mid } = pinchInfo()
+    const raw = gesture.startZoom * (dist / gesture.startDist)
+    // 捏合允许短暂越过边界，松手回弹
+    let z = raw
+    if (z < 1) z = 1 - rubberband(1 - z, MAX_ZOOM - 1)
+    else if (z > MAX_ZOOM) z = MAX_ZOOM + rubberband(z - MAX_ZOOM, MAX_ZOOM - 1)
+    viewZoom.value = z
+    // 捏合中点下的样张点保持不动（1:1 跟手）
+    const u = {
+      x: (gesture.startMid.x - gesture.startPan.x) / gesture.startZoom,
+      y: (gesture.startMid.y - gesture.startPan.y) / gesture.startZoom,
     }
-    for (const y of [SAMPLE_H / 2, SAMPLE_H * 0.04, SAMPLE_H * 0.96]) {
-      if (Math.abs(cy - y) < t) cy = y
-    }
+    viewPan.x = mid.x - u.x * z
+    viewPan.y = mid.y - u.y * z
+    redraw()
+    return
   }
-  const a = anchorPoint(layer.anchor, SAMPLE_W, SAMPLE_H)
-  wm.update(layer.id, {
-    offsetX: ((cx - a.x) / SAMPLE_LONG) * 100,
-    offsetY: ((cy - a.y) / SAMPLE_LONG) * 100,
-  })
+
+  if (gesture.type === 'layer') {
+    const gid = gesture.id
+    const layer = wm.layers.find((l) => l.id === gid)
+    if (!layer) return
+    const dpx = ((e.clientX - gesture.startClient.x) * vmap.dpr) / vmap.scale
+    const dpy = ((e.clientY - gesture.startClient.y) * vmap.dpr) / vmap.scale
+    let cx = gesture.startCx + dpx
+    let cy = gesture.startCy + dpy
+    // 吸附样张中线与安全边距
+    if (settings.wmSnap) {
+      const t = 8 / (vmap.scale / vmap.dpr)
+      for (const x of [SAMPLE_W / 2, SAMPLE_W * 0.04, SAMPLE_W * 0.96]) {
+        if (Math.abs(cx - x) < t) cx = x
+      }
+      for (const y of [SAMPLE_H / 2, SAMPLE_H * 0.04, SAMPLE_H * 0.96]) {
+        if (Math.abs(cy - y) < t) cy = y
+      }
+    }
+    const a = anchorPoint(layer.anchor, SAMPLE_W, SAMPLE_H)
+    wm.update(layer.id, {
+      offsetX: ((cx - a.x) / SAMPLE_LONG) * 100,
+      offsetY: ((cy - a.y) / SAMPLE_LONG) * 100,
+    })
+    return
+  }
+
+  if (gesture.type === 'pan') {
+    const rect = canvasEl.value?.getBoundingClientRect()
+    if (!rect) return
+    const d = fitSize(rect)
+    viewPan.x = clampPanAxis(
+      gesture.startPan.x + (e.clientX - gesture.startClient.x),
+      d.w,
+      rect.width,
+      true,
+    )
+    viewPan.y = clampPanAxis(
+      gesture.startPan.y + (e.clientY - gesture.startClient.y),
+      d.h,
+      rect.height,
+      true,
+    )
+    redraw()
+  }
 }
 
-function onPointerUp(): void {
-  drag = null
-  grabbing.value = false
+function onPointerUp(e: PointerEvent): void {
+  const pt = pointers.get(e.pointerId)
+  pointers.delete(e.pointerId)
+  const g = gesture
+
+  if (g.type === 'pinch') {
+    if (pointers.size < 2) {
+      gesture = { type: 'idle' }
+      // 松手回弹：缩放回到合法区间，平移回到边界内
+      const tz = Math.min(MAX_ZOOM, Math.max(1, viewZoom.value))
+      const rect = canvasEl.value?.getBoundingClientRect()
+      let tx = viewPan.x
+      let ty = viewPan.y
+      if (rect) {
+        const d = fitSize(rect)
+        tx = clampPanAxis(viewPan.x, d.w, rect.width, false)
+        ty = clampPanAxis(viewPan.y, d.h, rect.height, false)
+      }
+      if (
+        Math.abs(tz - viewZoom.value) > 0.001 ||
+        Math.abs(tx - viewPan.x) > 0.5 ||
+        Math.abs(ty - viewPan.y) > 0.5
+      ) {
+        animateViewTo(tz, tx, ty)
+      }
+    }
+    return
+  }
+
+  if (pointers.size > 0) {
+    if (g.type === 'layer') {
+      gesture = { type: 'idle' }
+      grabbing.value = false
+    }
+    return
+  }
+
+  if (g.type === 'layer') grabbing.value = false
+  gesture = { type: 'idle' }
+
+  // 双击空白处：放大 ⇄ 复位（落在水印上时双击属于图层操作，不触发）
+  const now = performance.now()
+  const isTap = !!pt && !pt.moved && now - pt.downT < 300
+  if (
+    isTap &&
+    g.type === 'pan' &&
+    lastTap &&
+    now - lastTap.t < 340 &&
+    Math.hypot(pt!.x - lastTap.x, pt!.y - lastTap.y) < 28
+  ) {
+    lastTap = null
+    if (viewZoom.value > 1.01) {
+      animateViewTo(1, 0, 0)
+    } else {
+      const rect = canvasEl.value?.getBoundingClientRect()
+      if (rect) {
+        const rcx = pt!.x - rect.left - rect.width / 2
+        const rcy = pt!.y - rect.top - rect.height / 2
+        const u = { x: (rcx - viewPan.x) / viewZoom.value, y: (rcy - viewPan.y) / viewZoom.value }
+        const z0 = viewZoom.value
+        const p0 = { x: viewPan.x, y: viewPan.y }
+        viewZoom.value = DBL_TAP_ZOOM
+        viewPan.x = rcx - u.x * DBL_TAP_ZOOM
+        viewPan.y = rcy - u.y * DBL_TAP_ZOOM
+        hardClampPan()
+        const target = { x: viewPan.x, y: viewPan.y }
+        viewZoom.value = z0
+        viewPan.x = p0.x
+        viewPan.y = p0.y
+        animateViewTo(DBL_TAP_ZOOM, target.x, target.y)
+      }
+    }
+    return
+  }
+  if (isTap && g.type === 'pan' && pt) lastTap = { t: now, x: pt.x, y: pt.y }
+
+  // 平移结束：越界回弹
+  if (g.type === 'pan') {
+    const rect = canvasEl.value?.getBoundingClientRect()
+    if (!rect) return
+    const d = fitSize(rect)
+    const tx = clampPanAxis(viewPan.x, d.w, rect.width, false)
+    const ty = clampPanAxis(viewPan.y, d.h, rect.height, false)
+    if (Math.abs(tx - viewPan.x) > 0.5 || Math.abs(ty - viewPan.y) > 0.5) {
+      animateViewTo(viewZoom.value, tx, ty)
+    }
+  }
 }
 
 function onLeave(): void {
-  if (!drag) grabbing.value = false
+  if (gesture.type !== 'layer') grabbing.value = false
 }
 
 function onCursorMove(e: PointerEvent): void {
@@ -309,6 +578,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   ro?.disconnect()
+  stopViewAnim()
   sampleBmp?.close()
   sampleBmp = null
   for (const b of assetBmps.values()) b.close()
@@ -356,8 +626,9 @@ watch([() => wm.layers, () => wm.selectedId], scheduleRedraw, { deep: true })
           @pointerup="onPointerUp"
           @pointercancel="onPointerUp"
           @pointerleave="onLeave"
+          @wheel="onZoomWheel"
         />
-        <p class="tip">样张仅用于预览，可直接拖动水印；保存的水印会应用到项目里的每一张照片。</p>
+        <p class="tip">滚轮缩放、拖动平移样张；直接拖动水印可调整位置，保存的水印会应用到项目里的每一张照片。</p>
       </div>
       <aside class="editor material">
         <LayerEditor :img-w="SAMPLE_W" :img-h="SAMPLE_H" :show-templates="false" />
@@ -418,14 +689,16 @@ h1 {
 }
 .preview {
   position: relative;
-  display: grid;
-  place-items: center;
-  padding: 20px;
   min-width: 0;
   min-height: 0;
   background: var(--canvas);
 }
+/* 画布铺满容器（四周留边），缩放与平移都发生在画布内部的绘制变换里 */
 .sample {
+  position: absolute;
+  inset: 20px;
+  width: calc(100% - 40px);
+  height: calc(100% - 40px);
   display: block;
   border-radius: var(--r-m);
   box-shadow: var(--shadow-2);

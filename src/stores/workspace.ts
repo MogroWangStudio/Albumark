@@ -429,9 +429,19 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!fsAvailable || !manifest.value || !current.value?.path) return
     if (saveTimer) window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(async () => {
+      saveTimer = null
       if (!manifest.value || !current.value) return
       await fs.writeJsonFile(await fs.joinPath(current.value.path, MANIFEST), manifest.value)
     }, 400)
+  }
+
+  /** 立即写出防抖中的清单：安卓返回退出、切后台前调用，防止窗口期内被杀丢数据 */
+  async function flushSave(): Promise<void> {
+    if (!saveTimer) return
+    window.clearTimeout(saveTimer)
+    saveTimer = null
+    if (!manifest.value || !current.value?.path) return
+    await fs.writeJsonFile(await fs.joinPath(current.value.path, MANIFEST), manifest.value)
   }
 
   function makeItem(ref: PrjImageRef, blob: Blob | null): ImageItem {
@@ -597,5 +607,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     addFromPaths,
     removeImage,
     relink,
+    flushSave,
   }
 })

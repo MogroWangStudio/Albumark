@@ -1,6 +1,6 @@
 [package]
 name = "albumark"
-version = "0.5.0"
+version = "0.6.0"
 description = "辑印 Albumark —— 轻量、本地优先的图像批量水印与快速辑录工具"
 authors = ["MogroWang Studio"]
 edition = "2021"

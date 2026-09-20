@@ -120,7 +120,13 @@ function startAvailAnim(target: Rect): void {
     drawBase()
     drawOverlay()
     if (k < 1) availAnim = requestAnimationFrame(step)
-    else availAnim = 0
+    else {
+      availAnim = 0
+      // 让位动画结束后按新基准收紧一次，避免图片停到面板底下
+      hardClampPan()
+      drawBase()
+      drawOverlay()
+    }
   }
   availAnim = requestAnimationFrame(step)
 }
@@ -826,11 +832,12 @@ function onPointerUp(e: PointerEvent): void {
   }
   if (isTap) lastTap = { t: now, x: pt!.x, y: pt!.y }
 
-  // 平移结束：越界回弹
+  // 平移结束：越界回弹（与拖动中、硬夹紧一样以让位后的可用区域为基准，
+  // 面板展开时全视口基准会把图片放行到面板底下，造成部分内容无法拖回）
   if (g.type === 'pan') {
     const d = displaySize()
-    const tx = clampPanAxis(pan.x, d.w, view.w, false)
-    const ty = clampPanAxis(pan.y, d.h, view.h, false)
+    const tx = clampPanAxis(pan.x, d.w, avail.w, false)
+    const ty = clampPanAxis(pan.y, d.h, avail.h, false)
     if (Math.abs(tx - pan.x) > 0.5 || Math.abs(ty - pan.y) > 0.5) {
       animateViewTo(zoom.value, tx, ty)
     }

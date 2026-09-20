@@ -7,6 +7,7 @@ import {
   SlidersHorizontal,
   Upload,
 } from 'lucide-vue-next'
+import type { PluginListenerHandle } from '@capacitor/core'
 import AppTitleBar from '@/components/AppTitleBar.vue'
 import AdjustPanel from '@/components/AdjustPanel.vue'
 import AppContextMenu, { type ContextMenuItem } from '@/components/AppContextMenu.vue'
@@ -14,6 +15,7 @@ import ExportPanel from '@/components/ExportPanel.vue'
 import ImportOverlay from '@/components/ImportOverlay.vue'
 import ImportPreviewDialog from '@/components/ImportPreviewDialog.vue'
 import LibraryStrip from '@/components/LibraryStrip.vue'
+import LogoMark from '@/components/brand/LogoMark.vue'
 import PreviewCanvas from '@/components/PreviewCanvas.vue'
 import SettingsPage from '@/components/SettingsPage.vue'
 import UrlImportDialog from '@/components/UrlImportDialog.vue'
@@ -22,7 +24,7 @@ import WatermarkStudio from '@/components/WatermarkStudio.vue'
 import WorkspacePage from '@/components/WorkspacePage.vue'
 import AppTabs from '@/components/ui/AppTabs.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
-import { isTauri, pickImagePaths } from '@/core/platform'
+import { isCapacitor, isTauri, pickImagePaths } from '@/core/platform'
 import { projectMomentum, springTo, type SpringHandle } from '@/core/spring'
 import { baseName } from '@/core/fs'
 import { useImagesStore } from '@/stores/images'
@@ -40,6 +42,8 @@ const panel = ref<'watermark' | 'adjust' | 'export'>('watermark')
 const urlOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragDepth = ref(0)
+/** 启动画面：品牌标记淡入后整层淡出，onMounted 后由定时器收起 */
+const booting = ref(true)
 /** 悬浮操作面板：进入项目自动展开，工作区页面自动收起 */
 const panelOpen = ref(true)
 /** 面板吸附边：可按住顶栏拖动，松手吸附左缘或右缘 */
@@ -199,6 +203,8 @@ let snapAnim: SpringHandle | null = null
 let dragGesture: {
   grabDx: number
   wsLeft: number
+  /** 按下时实测的工作区宽度：拖动夹紧以此为基准，不受切页后的缓存过期影响 */
+  wsW: number
   hist: { x: number; t: number }[]
 } | null = null
 
@@ -228,18 +234,35 @@ watch(isNarrow, (v) => {
   if (v) stopSnap()
 })
 
+let wsRo: ResizeObserver | null = null
+
+/** .workspace 会随页面切换卸载重建：每次都重新观察新元素，并立即同步实测宽度 */
+watch(wsEl, (el) => {
+  wsRo?.disconnect()
+  wsRo = null
+  if (el && typeof ResizeObserver !== 'undefined') {
+    wsRo = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect
+      wsWidth.value = r ? r.width : 0
+    })
+    wsRo.observe(el)
+  }
+  wsWidth.value = el?.getBoundingClientRect().width ?? 0
+})
+
 function onPanelDragDown(e: PointerEvent): void {
   if (isNarrow.value) return
   const t = e.target as HTMLElement
   if (t.closest('button, input, .tabs')) return
   const head = e.currentTarget as HTMLElement
   const wsRect = wsEl.value?.getBoundingClientRect()
-  if (!wsRect) return
+  if (!wsRect || !wsRect.width) return
   head.setPointerCapture(e.pointerId)
   stopSnap()
   dragGesture = {
     grabDx: e.clientX - (wsRect.left + PANEL_EDGE + panelX.value),
     wsLeft: wsRect.left,
+    wsW: wsRect.width,
     hist: [{ x: e.clientX, t: performance.now() }],
   }
   dragging.value = true
@@ -249,7 +272,7 @@ function onPanelDragMove(e: PointerEvent): void {
   const g = dragGesture
   if (!g) return
   const min = -PANEL_EDGE
-  const max = Math.max(min, wsWidth.value - PANEL_W - PANEL_EDGE * 2 + PANEL_EDGE)
+  const max = Math.max(min, g.wsW - PANEL_W - PANEL_EDGE * 2 + PANEL_EDGE)
   const x = Math.min(max, Math.max(min, e.clientX - g.grabDx - g.wsLeft - PANEL_EDGE))
   panelX.value = x
   const now = performance.now()
@@ -263,6 +286,9 @@ function onPanelDragUp(e: PointerEvent): void {
   dragging.value = false
   if (!g) return
   ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
+  // 松手时先同步一次实测宽度，避免吸附目标算在过期值上
+  const rectNow = wsEl.value?.getBoundingClientRect()
+  if (rectNow?.width) wsWidth.value = rectNow.width
   // 由最近 ~90ms 的位移估计释放速度，投影出自然停靠点再吸附
   const first = g.hist[0]!
   const last = g.hist[g.hist.length - 1]!
@@ -347,24 +373,62 @@ function openWorkspace(): void {
 }
 
 onMounted(async () => {
-  if (isTauri) {
-    void ws.init()
-    void watchNativeDrop()
+  if (isTauri || isCapacitor) void ws.init()
+  if (isTauri) void watchNativeDrop()
+  if (isCapacitor) {
+    try {
+      const { App } = await import('@capacitor/app')
+      capBack = await App.addListener('backButton', () => void onAndroidBack())
+    } catch {
+      /* 插件不可用时退回系统默认行为 */
+    }
   }
   if (!wm.hydrate()) await templates.apply('builtin-signature')
   window.addEventListener('keydown', onKeydown)
   document.addEventListener('contextmenu', onGlobalContextMenu)
+  window.addEventListener('pagehide', flushWorkspace)
+  document.addEventListener('visibilitychange', onVisChange)
   narrowQuery?.addEventListener('change', onNarrowChange)
-  if (wsEl.value && typeof ResizeObserver !== 'undefined') {
-    wsRo = new ResizeObserver((entries) => {
-      const r = entries[0]?.contentRect
-      if (r) wsWidth.value = r.width
-    })
-    wsRo.observe(wsEl.value)
-  }
+  window.setTimeout(() => (booting.value = false), 560)
 })
 
-let wsRo: ResizeObserver | null = null
+let capBack: PluginListenerHandle | null = null
+
+/** 安卓原生返回：逐级收起浮层与页面，最后 flush 数据再退出 */
+async function onAndroidBack(): Promise<void> {
+  if (ctxState.value) {
+    ctxState.value = null
+    return
+  }
+  if (importPreviewOpen.value) {
+    importPreviewOpen.value = false
+    return
+  }
+  if (urlOpen.value) {
+    urlOpen.value = false
+    return
+  }
+  if (view.value !== 'main') {
+    view.value = 'main'
+    return
+  }
+  if (inProject.value && panelOpen.value) {
+    panelOpen.value = false
+    return
+  }
+  await ws.flushSave()
+  const { App } = await import('@capacitor/app')
+  await App.exitApp()
+}
+
+/** 防抖保存的兜底：切后台/页面隐藏时立即写出，防止 400ms 窗口内被系统杀掉丢数据 */
+function flushWorkspace(): void {
+  void ws.flushSave().catch(() => undefined)
+}
+
+function onVisChange(): void {
+  if (document.visibilityState === 'hidden') flushWorkspace()
+}
 
 function onNarrowChange(e: MediaQueryListEvent): void {
   isNarrow.value = e.matches
@@ -396,7 +460,11 @@ function onKeydown(e: KeyboardEvent): void {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   document.removeEventListener('contextmenu', onGlobalContextMenu)
+  window.removeEventListener('pagehide', flushWorkspace)
+  document.removeEventListener('visibilitychange', onVisChange)
   narrowQuery?.removeEventListener('change', onNarrowChange)
+  void capBack?.remove()
+  capBack = null
   wsRo?.disconnect()
   unlistenDrop?.()
   stopSnap()
@@ -418,80 +486,81 @@ onBeforeUnmount(() => {
       @settings="view = 'settings'"
     />
 
-    <WatermarkStudio v-if="view === 'studio'" @back="view = 'main'" />
-    <SettingsPage v-else-if="view === 'settings'" @back="view = 'main'" />
-
-    <template v-else>
-      <div ref="wsEl" class="workspace">
-        <main class="stage">
-          <Transition name="page" mode="out-in">
-            <WorkspacePage v-if="!inProject" key="ws" />
-            <div v-else key="stage" class="stage-fill">
-              <Transition name="fade" mode="out-in">
-                <PreviewCanvas
-                  v-if="hasImages"
-                  key="preview"
-                  ref="previewRef"
-                  :panel-inset="panelInset"
-                  :panel-side="panelSide"
-                  @ctx="onPreviewCtx"
-                />
-                <ImportOverlay v-else key="import" @pick="openPicker" @open-url="urlOpen = true" />
-              </Transition>
-            </div>
-          </Transition>
-        </main>
-
-        <!-- 悬浮操作面板：吸附左/右缘，顶栏可按住拖动；工作区页面自动收起 -->
-        <aside v-if="inProject" class="inspector-wrap" :class="`side-${panelSide}`" :style="wrapStyle">
-          <Transition :name="panelSide === 'left' ? 'panel-left' : 'panel-right'" appear>
-            <section v-show="panelOpen" class="inspector" :class="{ dragging }">
-              <div
-                class="inspector-head"
-                @pointerdown="onPanelDragDown"
-                @pointermove="onPanelDragMove"
-                @pointerup="onPanelDragUp"
-                @pointercancel="onPanelDragUp"
-              >
-                <AppTabs
-                  v-model="panel"
-                  :options="[
-                    { value: 'watermark', label: '水印', icon: Droplets },
-                    { value: 'adjust', label: '调节', icon: SlidersHorizontal },
-                    { value: 'export', label: '导出', icon: Upload },
-                  ]"
-                />
-                <button class="collapse" title="收起面板" @click="panelOpen = false">
-                  <ChevronRight v-if="panelSide === 'right'" :size="14" />
-                  <ChevronLeft v-else :size="14" />
-                </button>
-              </div>
-              <div class="inspector-body">
-                <Transition name="pane" mode="out-in">
-                  <KeepAlive>
-                    <component :is="PANELS[panel]" :key="panel" />
-                  </KeepAlive>
+    <Transition name="view">
+      <WatermarkStudio v-if="view === 'studio'" key="studio" @back="view = 'main'" />
+      <SettingsPage v-else-if="view === 'settings'" key="settings" @back="view = 'main'" />
+      <div v-else key="main" class="view-main">
+        <div ref="wsEl" class="workspace">
+          <main class="stage">
+            <Transition name="page" mode="out-in">
+              <WorkspacePage v-if="!inProject" key="ws" />
+              <div v-else key="stage" class="stage-fill">
+                <Transition name="fade" mode="out-in">
+                  <PreviewCanvas
+                    v-if="hasImages"
+                    key="preview"
+                    ref="previewRef"
+                    :panel-inset="panelInset"
+                    :panel-side="panelSide"
+                    @ctx="onPreviewCtx"
+                  />
+                  <ImportOverlay v-else key="import" @pick="openPicker" @open-url="urlOpen = true" />
                 </Transition>
               </div>
-            </section>
-          </Transition>
-        </aside>
-        <Transition name="fade">
-          <button
-            v-if="inProject && !panelOpen"
-            class="panel-tab"
-            :class="`side-${panelSide}`"
-            title="展开面板"
-            @click="panelOpen = true"
-          >
-            <ChevronLeft v-if="panelSide === 'right'" :size="15" />
-            <ChevronRight v-else :size="15" />
-          </button>
-        </Transition>
-      </div>
+            </Transition>
+          </main>
 
-      <LibraryStrip v-if="inProject && hasImages" @photo-ctx="onPhotoCtx" />
-    </template>
+          <!-- 悬浮操作面板：吸附左/右缘，顶栏可按住拖动；工作区页面自动收起 -->
+          <aside v-if="inProject" class="inspector-wrap" :class="`side-${panelSide}`" :style="wrapStyle">
+            <Transition :name="panelSide === 'left' ? 'panel-left' : 'panel-right'" appear>
+              <section v-show="panelOpen" class="inspector" :class="{ dragging }">
+                <div
+                  class="inspector-head"
+                  @pointerdown="onPanelDragDown"
+                  @pointermove="onPanelDragMove"
+                  @pointerup="onPanelDragUp"
+                  @pointercancel="onPanelDragUp"
+                >
+                  <AppTabs
+                    v-model="panel"
+                    :options="[
+                      { value: 'watermark', label: '水印', icon: Droplets },
+                      { value: 'adjust', label: '调节', icon: SlidersHorizontal },
+                      { value: 'export', label: '导出', icon: Upload },
+                    ]"
+                  />
+                  <button class="collapse" title="收起面板" @click="panelOpen = false">
+                    <ChevronRight v-if="panelSide === 'right'" :size="14" />
+                    <ChevronLeft v-else :size="14" />
+                  </button>
+                </div>
+                <div class="inspector-body">
+                  <Transition name="pane" mode="out-in">
+                    <KeepAlive>
+                      <component :is="PANELS[panel]" :key="panel" />
+                    </KeepAlive>
+                  </Transition>
+                </div>
+              </section>
+            </Transition>
+          </aside>
+          <Transition name="fade">
+            <button
+              v-if="inProject && !panelOpen"
+              class="panel-tab"
+              :class="`side-${panelSide}`"
+              title="展开面板"
+              @click="panelOpen = true"
+            >
+              <ChevronLeft v-if="panelSide === 'right'" :size="15" />
+              <ChevronRight v-else :size="15" />
+            </button>
+          </Transition>
+        </div>
+
+        <LibraryStrip v-if="inProject && hasImages" @photo-ctx="onPhotoCtx" />
+      </div>
+    </Transition>
 
     <UrlImportDialog :open="urlOpen" @close="urlOpen = false" />
     <ImportPreviewDialog
@@ -517,6 +586,12 @@ onBeforeUnmount(() => {
     />
 
     <div v-if="dragDepth > 0" class="drop-ring" aria-hidden="true" />
+
+    <Transition name="boot">
+      <div v-if="booting" class="boot" aria-hidden="true">
+        <LogoMark class="boot-logo" />
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -533,6 +608,14 @@ onBeforeUnmount(() => {
   position: relative;
   min-height: 0;
 }
+/* 主视图容器：页面切换过渡期间承载 workspace 与照片条的整体淡入缩放 */
+.view-main {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .stage {
   position: absolute;
   inset: 0;
@@ -545,7 +628,8 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
 }
-/* 面板位置壳：只承担水平位移（拖动与吸附都落在它身上） */
+/* 面板位置壳：只承担水平位移（拖动与吸附都落在它身上）。
+   壳层不拦截指针——收起后它仍占据原区域，拦截会让展开把手点不到 */
 .inspector-wrap {
   position: absolute;
   top: 12px;
@@ -554,8 +638,10 @@ onBeforeUnmount(() => {
   width: 342px;
   z-index: 20;
   will-change: transform;
+  pointer-events: none;
 }
 .inspector {
+  pointer-events: auto;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -645,6 +731,37 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
+/* 启动画面：品牌标记淡入就位后整层快速淡出，露出主界面 */
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+}
+.boot-logo {
+  width: 72px;
+  height: auto;
+  animation: boot-in 420ms var(--ease-soft) both;
+}
+@keyframes boot-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.boot-leave-active {
+  transition: opacity 240ms ease;
+}
+.boot-leave-to {
+  opacity: 0;
+}
+
 /* 页面切换（工作区 ⇄ 项目）：柔和的非线性淡入缩放 */
 .page-enter-active {
   transition: opacity 320ms var(--ease-soft), transform 320ms var(--ease-soft);
@@ -659,6 +776,21 @@ onBeforeUnmount(() => {
 .page-leave-to {
   opacity: 0;
   transform: scale(1.008) translateY(-4px);
+}
+/* 顶层页面切换（主视图 ⇄ 水印工作室/设置）：同一套非线性曲线，进出路径互为镜像 */
+.view-enter-active {
+  transition: opacity 300ms var(--ease-soft), transform 300ms var(--ease-soft);
+}
+.view-leave-active {
+  transition: opacity 200ms var(--ease), transform 200ms var(--ease);
+}
+.view-enter-from {
+  opacity: 0;
+  transform: scale(0.99) translateY(10px);
+}
+.view-leave-to {
+  opacity: 0;
+  transform: scale(1.008) translateY(-6px);
 }
 .fade-enter-active,
 .fade-leave-active {
@@ -712,7 +844,7 @@ onBeforeUnmount(() => {
     top: auto;
     left: 8px;
     right: 8px;
-    bottom: 8px;
+    bottom: calc(8px + var(--safe-bottom));
     width: auto;
     height: min(46vh, 430px);
     transform: none !important;
@@ -725,7 +857,7 @@ onBeforeUnmount(() => {
   }
   .panel-tab {
     top: auto;
-    bottom: 14px;
+    bottom: calc(14px + var(--safe-bottom));
     transform: none;
     width: 56px;
     height: 22px;

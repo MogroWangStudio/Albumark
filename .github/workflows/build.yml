@@ -84,6 +84,19 @@ jobs:
       - name: 构建（.app 与 .dmg）
         run: npm run tauri build
 
+      # 应用未做开发者签名，下载后会被 Gatekeeper 标记为「已损坏」。
+      # 往 DMG 里放一个双击即可移除隔离标记（xattr -cr）的终端脚本，随包分发。
+      - name: 向 DMG 注入「修复已损坏提示」脚本
+        run: |
+          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
+          hdiutil convert "$DMG" -format UDRW -o /tmp/albumark_rw.dmg
+          MOUNT="$(mktemp -d)/dmg"
+          hdiutil attach /tmp/albumark_rw.dmg -mountpoint "$MOUNT" -nobrowse -quiet
+          install -m 0755 "scripts/修复已损坏提示.command" "$MOUNT/修复已损坏提示.command"
+          hdiutil detach "$MOUNT" -quiet
+          hdiutil convert /tmp/albumark_rw.dmg -format UDZO -o /tmp/albumark_final.dmg
+          mv /tmp/albumark_final.dmg "$DMG"
+
       - uses: actions/upload-artifact@v4
         with:
           name: Albumark-${{ env.VERSION }}-macos-arm64

@@ -257,6 +257,7 @@ async function relaunchOobe(): Promise<void> {
 .page {
   position: absolute;
   inset: 0;
+  z-index: 30;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -266,7 +267,8 @@ async function relaunchOobe(): Promise<void> {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px calc(12px + var(--safe-right)) 10px calc(12px + var(--safe-left));
+  /* 顶部避开状态栏（安卓全面屏下页面从屏幕最顶端开始） */
+  padding: calc(10px + var(--safe-top)) calc(12px + var(--safe-right)) 10px calc(12px + var(--safe-left));
   border-bottom: 1px solid var(--line);
   flex: none;
   user-select: none;
