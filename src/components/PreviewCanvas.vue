@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ChevronUp } from 'lucide-vue-next'
 import type { WatermarkLayer } from '@/types/watermark'
 import { anchorPoint, hitTest, layerCenter, measureLayer } from '@/core/layout'
 import { drawLayers, type AssetMap } from '@/core/draw'
@@ -9,6 +10,18 @@ import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useSettingsStore } from '@/stores/settings'
 import { useWatermarkStore } from '@/stores/watermark'
+
+const props = withDefaults(
+  defineProps<{
+    /** 悬浮面板占用的水平宽度（CSS px），0 = 面板未展开 */
+    panelInset?: number
+    /** 面板吸附在哪一侧：可用区域让到另一侧 */
+    panelSide?: 'left' | 'right'
+  }>(),
+  { panelInset: 0, panelSide: 'right' },
+)
+
+const emit = defineEmits<{ ctx: [e: MouseEvent] }>()
 
 const images = useImagesStore()
 const wm = useWatermarkStore()
@@ -30,9 +43,15 @@ const cvBase = ref<HTMLCanvasElement | null>(null)
 const cvOverlay = ref<HTMLCanvasElement | null>(null)
 
 const view = reactive({ w: 0, h: 0, dpr: 1 })
+/**
+ * 可用区域（CSS px，相对 frame）：悬浮面板展开时让出其一侧，
+ * 图片的适应与居中都以这块区域为基准，面板收起后平滑归位。
+ */
+const avail = reactive({ x: 0, y: 0, w: 0, h: 0 })
+let availAnim = 0
 /** 视图缩放：minZoom（安全区）= 适应窗口 */
 const zoom = ref(1)
-/** 平移（CSS px，相对视口中心） */
+/** 平移（CSS px，相对可用区域中心） */
 const pan = reactive({ x: 0, y: 0 })
 
 /** 最近一次绘制结果在画布（设备像素）中的映射，用于命中测试与选框换算。 */
@@ -66,6 +85,114 @@ const active = computed(() => images.active)
 const hasSelection = computed(() => !!wm.selectedId)
 const minZoom = computed(() => Math.min(1, Math.max(0.3, settings.minZoom)))
 const perf = computed(() => PERF[settings.previewQuality] ?? PERF.high!)
+
+/* ---------- 可用区域：悬浮面板让位，中心偏移到剩余空白 ---------- */
+
+interface Rect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+function targetAvail(): Rect {
+  const maxInset = Math.max(0, view.w - 80)
+  const inset = Math.min(Math.max(0, props.panelInset), maxInset)
+  if (inset <= 0) return { x: 0, y: 0, w: view.w, h: view.h }
+  return props.panelSide === 'left'
+    ? { x: inset, y: 0, w: view.w - inset, h: view.h }
+    : { x: 0, y: 0, w: view.w - inset, h: view.h }
+}
+
+/** 面板展开/收起/换边时可用区域平滑过渡（可被下一次变化接管） */
+function startAvailAnim(target: Rect): void {
+  if (availAnim) cancelAnimationFrame(availAnim)
+  const from = { x: avail.x, y: avail.y, w: avail.w, h: avail.h }
+  const t0 = performance.now()
+  const dur = 220
+  const step = (t: number): void => {
+    const k = Math.min(1, (t - t0) / dur)
+    const e = 1 - Math.pow(1 - k, 3)
+    avail.x = from.x + (target.x - from.x) * e
+    avail.y = from.y + (target.y - from.y) * e
+    avail.w = from.w + (target.w - from.w) * e
+    avail.h = from.h + (target.h - from.h) * e
+    drawBase()
+    drawOverlay()
+    if (k < 1) availAnim = requestAnimationFrame(step)
+    else availAnim = 0
+  }
+  availAnim = requestAnimationFrame(step)
+}
+
+const availCx = (): number => avail.x + avail.w / 2
+const availCy = (): number => avail.y + avail.h / 2
+
+watch(
+  [() => props.panelInset, () => props.panelSide, () => view.w, () => view.h],
+  () => {
+    const t = targetAvail()
+    // 首次（或从无到有）直接就位，之后的变化平滑过渡
+    if (!view.w || avail.w <= 0) {
+      Object.assign(avail, t)
+      return
+    }
+    startAvailAnim(t)
+  },
+  { immediate: true },
+)
+
+/* ---------- 缩放预设 ---------- */
+
+const zoomMenuOpen = ref(false)
+
+const ZOOM_PRESETS: { label: string; value: number | 'fit' }[] = [
+  { label: '50%', value: 0.5 },
+  { label: '100%', value: 1 },
+  { label: '125%', value: 1.25 },
+  { label: '150%', value: 1.5 },
+  { label: '适应窗口', value: 'fit' },
+]
+
+/** 提供给右键菜单等外部调用 */
+function setZoom(z: number): void {
+  zoomMenuOpen.value = false
+  stopViewAnim()
+  zoom.value = Math.min(MAX_ZOOM, Math.max(minZoom.value, z))
+  hardClampPan()
+  drawBase()
+  drawOverlay()
+  scheduleHiRes()
+}
+
+function fitView(): void {
+  zoomMenuOpen.value = false
+  stopViewAnim()
+  animateViewTo(1, 0, 0)
+}
+
+function applyPreset(v: number | 'fit'): void {
+  if (v === 'fit') fitView()
+  else setZoom(v)
+}
+
+defineExpose({ fitView, setZoom, resetView })
+
+function closeZoomMenu(): void {
+  zoomMenuOpen.value = false
+}
+function onZoomKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape') zoomMenuOpen.value = false
+}
+watch(zoomMenuOpen, (v) => {
+  if (v) {
+    window.setTimeout(() => document.addEventListener('click', closeZoomMenu), 0)
+    document.addEventListener('keydown', onZoomKey)
+  } else {
+    document.removeEventListener('click', closeZoomMenu)
+    document.removeEventListener('keydown', onZoomKey)
+  }
+})
 
 function measureContext(): CanvasRenderingContext2D {
   if (!mctx) {
@@ -213,16 +340,28 @@ function drawBase(): void {
   if (canvas.height !== ch) canvas.height = ch
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const fit = Math.min(cw / bmp.width, ch / bmp.height)
+  // 适应与居中都基于可用区域：面板占住一侧时，中心偏移到剩余空白
+  const fit = Math.min((avail.w * dpr) / bmp.width, (avail.h * dpr) / bmp.height)
   const scale = fit * zoom.value
-  const ox = (cw - bmp.width * scale) / 2 + pan.x * dpr
-  const oy = (ch - bmp.height * scale) / 2 + pan.y * dpr
+  const ox = avail.x * dpr + (avail.w * dpr - bmp.width * scale) / 2 + pan.x * dpr
+  const oy = avail.y * dpr + (avail.h * dpr - bmp.height * scale) / 2 + pan.y * dpr
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, cw, ch)
   ctx.imageSmoothingQuality = 'high'
   ctx.translate(ox, oy)
   ctx.scale(scale, scale)
+  // 投影让照片贴在纯白/纯黑底上仍有层次
+  const light = document.documentElement.dataset.theme === 'light'
+  ctx.save()
+  ctx.shadowColor = light ? 'rgba(0, 0, 0, 0.2)' : 'rgba(0, 0, 0, 0.55)'
+  ctx.shadowBlur = 22 / scale
+  ctx.shadowOffsetY = 5 / scale
   ctx.drawImage(bmp, 0, 0)
+  ctx.restore()
+  // 1px 细描边：极浅照片在纯白底上也能看清边界
+  ctx.strokeStyle = light ? 'rgba(0, 0, 0, 0.14)' : 'rgba(255, 255, 255, 0.1)'
+  ctx.lineWidth = 1 / scale
+  ctx.strokeRect(0, 0, bmp.width, bmp.height)
   resultMap.w = bmp.width
   resultMap.h = bmp.height
   resultMap.scale = scale
@@ -242,10 +381,10 @@ function drawOverlay(): void {
   if (canvas.height !== ch) canvas.height = ch
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const fit = Math.min(cw / bmp.width, ch / bmp.height)
+  const fit = Math.min((avail.w * dpr) / bmp.width, (avail.h * dpr) / bmp.height)
   const scale = fit * zoom.value
-  const ox = (cw - bmp.width * scale) / 2 + pan.x * dpr
-  const oy = (ch - bmp.height * scale) / 2 + pan.y * dpr
+  const ox = avail.x * dpr + (avail.w * dpr - bmp.width * scale) / 2 + pan.x * dpr
+  const oy = avail.y * dpr + (avail.h * dpr - bmp.height * scale) / 2 + pan.y * dpr
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, cw, ch)
   ctx.translate(ox, oy)
@@ -341,16 +480,16 @@ function clampPanAxis(v: number, disp: number, viewport: number, soft: boolean):
 
 /** 图像在当前 zoom 下的显示尺寸（CSS px） */
 function displaySize(): { w: number; h: number } {
-  if (!resultBmp) return { w: view.w, h: view.h }
+  if (!resultBmp) return { w: avail.w, h: avail.h }
   const dpr = view.dpr || 1
-  const fit = Math.min((view.w * dpr) / resultBmp.width, (view.h * dpr) / resultBmp.height) / dpr
+  const fit = Math.min((avail.w * dpr) / resultBmp.width, (avail.h * dpr) / resultBmp.height) / dpr
   return { w: resultBmp.width * fit, h: resultBmp.height * fit }
 }
 
 function hardClampPan(): void {
   const d = displaySize()
-  pan.x = clampPanAxis(pan.x, d.w, view.w, false)
-  pan.y = clampPanAxis(pan.y, d.h, view.h, false)
+  pan.x = clampPanAxis(pan.x, d.w, avail.w, false)
+  pan.y = clampPanAxis(pan.y, d.h, avail.h, false)
 }
 
 function stopViewAnim(): void {
@@ -389,8 +528,8 @@ function zoomAt(cx: number, cy: number, nextZoom: number): void {
   const z0 = zoom.value
   const z1 = Math.min(MAX_ZOOM, Math.max(minZoom.value, nextZoom))
   if (z1 === z0) return
-  const rcx = cx - view.w / 2
-  const rcy = cy - view.h / 2
+  const rcx = cx - availCx()
+  const rcy = cy - availCy()
   pan.x = rcx - ((rcx - pan.x) / z0) * z1
   pan.y = rcy - ((rcy - pan.y) / z0) * z1
   zoom.value = z1
@@ -442,7 +581,7 @@ let lastTap: { t: number; x: number; y: number } | null = null
 
 function relCenter(clientX: number, clientY: number): { x: number; y: number } {
   const rect = cvBase.value!.getBoundingClientRect()
-  return { x: clientX - rect.left - view.w / 2, y: clientY - rect.top - view.h / 2 }
+  return { x: clientX - rect.left - availCx(), y: clientY - rect.top - availCy() }
 }
 
 function pinchInfo(): { dist: number; mid: { x: number; y: number } } {
@@ -450,7 +589,7 @@ function pinchInfo(): { dist: number; mid: { x: number; y: number } } {
   const [a, b] = pts
   return {
     dist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
-    mid: { x: (a.x + b.x) / 2 - view.w / 2, y: (a.y + b.y) / 2 - view.h / 2 },
+    mid: { x: (a.x + b.x) / 2 - availCx(), y: (a.y + b.y) / 2 - availCy() },
   }
 }
 
@@ -607,13 +746,13 @@ function onPointerMove(e: PointerEvent): void {
     pan.x = clampPanAxis(
       gesture.startPan.x + (e.clientX - gesture.startClient.x),
       d.w,
-      view.w,
+      avail.w,
       true,
     )
     pan.y = clampPanAxis(
       gesture.startPan.y + (e.clientY - gesture.startClient.y),
       d.h,
-      view.h,
+      avail.h,
       true,
     )
     drawBase()
@@ -633,8 +772,8 @@ function onPointerUp(e: PointerEvent): void {
       const tz = Math.min(MAX_ZOOM, Math.max(minZoom.value, zoom.value))
       const d = displaySize()
       zoom.value = tz
-      const tx = clampPanAxis(pan.x, d.w, view.w, false)
-      const ty = clampPanAxis(pan.y, d.h, view.h, false)
+      const tx = clampPanAxis(pan.x, d.w, avail.w, false)
+      const ty = clampPanAxis(pan.y, d.h, avail.h, false)
       if (Math.abs(tx - pan.x) > 0.5 || Math.abs(ty - pan.y) > 0.5) {
         animateViewTo(tz, tx, ty)
       } else {
@@ -758,7 +897,10 @@ onBeforeUnmount(() => {
   ro?.disconnect()
   if (finalTimer) window.clearTimeout(finalTimer)
   if (settleTimer) window.clearTimeout(settleTimer)
+  if (availAnim) cancelAnimationFrame(availAnim)
   stopViewAnim()
+  document.removeEventListener('click', closeZoomMenu)
+  document.removeEventListener('keydown', onZoomKey)
   if (srcBitmap) {
     srcBitmap.close()
     srcBitmap = null
@@ -785,7 +927,7 @@ onBeforeUnmount(() => {
         @wheel="onWheel"
         @mousedown="onMouseDown"
         @auxclick.prevent
-        @contextmenu.prevent
+        @contextmenu="emit('ctx', $event)"
       />
       <canvas ref="cvOverlay" class="canvas overlay" aria-hidden="true" />
       <div
@@ -800,7 +942,28 @@ onBeforeUnmount(() => {
         }"
       />
     </div>
-    <div class="zoom-badge" aria-live="off">{{ Math.round(zoom * 100) }}%</div>
+    <button
+      class="zoom-badge"
+      :class="{ open: zoomMenuOpen }"
+      title="缩放预设"
+      @click.stop="zoomMenuOpen = !zoomMenuOpen"
+    >
+      {{ Math.round(zoom * 100) }}%
+      <ChevronUp class="zoom-caret" :size="11" />
+      <Transition name="zoom-pop">
+        <div v-if="zoomMenuOpen" class="zoom-pop" @click.stop>
+          <button
+            v-for="p in ZOOM_PRESETS"
+            :key="p.label"
+            class="zoom-item"
+            :class="{ on: p.value !== 'fit' && Math.abs(p.value - zoom) < 0.001 }"
+            @click.stop="zoomMenuOpen = false; applyPreset(p.value)"
+          >
+            {{ p.label }}
+          </button>
+        </div>
+      </Transition>
+    </button>
   </div>
 </template>
 
@@ -843,6 +1006,9 @@ onBeforeUnmount(() => {
   left: calc(10px + var(--safe-left));
   bottom: calc(10px + var(--safe-bottom));
   z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   padding: 3px 9px;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -852,6 +1018,65 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
-  pointer-events: none;
+  transition: color var(--dur-hover) var(--ease-soft), border-color var(--dur-hover) var(--ease-soft);
+}
+.zoom-badge:hover,
+.zoom-badge.open {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.zoom-caret {
+  opacity: 0;
+  transform: translateY(1px);
+  transition: opacity var(--dur-hover) var(--ease-soft), transform var(--dur-hover) var(--ease-soft);
+}
+.zoom-badge:hover .zoom-caret,
+.zoom-badge.open .zoom-caret {
+  opacity: 0.75;
+  transform: translateY(0);
+}
+.zoom-badge.open .zoom-caret {
+  transform: rotate(-180deg);
+}
+/* 缩放预设：在数值上方弹出 */
+.zoom-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  min-width: 118px;
+  padding: 5px;
+  border-radius: var(--r-m);
+  border: 1px solid var(--line);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-2);
+  transform-origin: bottom left;
+}
+.zoom-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 7px;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
+}
+.zoom-item:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.zoom-item.on {
+  color: var(--accent);
+  font-weight: 600;
+}
+.zoom-pop-enter-active,
+.zoom-pop-leave-active {
+  transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.zoom-pop-enter-from,
+.zoom-pop-leave-to {
+  opacity: 0;
+  transform: translateY(4px) scale(0.97);
 }
 </style>

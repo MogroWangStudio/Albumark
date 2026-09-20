@@ -1,12 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Brush } from 'lucide-vue-next'
-import AppButton from '@/components/ui/AppButton.vue'
 import LayerEditor from '@/components/LayerEditor.vue'
 import { useImagesStore } from '@/stores/images'
 
-const emit = defineEmits<{ studio: [] }>()
-
+/** 悬浮面板的水印页：直接铺开图层编辑器，工作室入口在主窗口顶栏 */
 const images = useImagesStore()
 
 /** 像素距离基于当前照片的原始尺寸 */
@@ -16,10 +13,6 @@ const imgH = computed(() => images.active?.height || 1067)
 
 <template>
   <div class="panel-scroll">
-    <div class="studio-row">
-      <span class="hint-text">在水印工作室里制作、保存常用水印</span>
-      <AppButton size="sm" @click="emit('studio')"><Brush :size="13" />工作室</AppButton>
-    </div>
     <LayerEditor
       :img-w="imgW"
       :img-h="imgH"
@@ -28,19 +21,3 @@ const imgH = computed(() => images.active?.height || 1067)
     />
   </div>
 </template>
-
-<style scoped>
-.studio-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-bottom: 10px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--line);
-}
-.hint-text {
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-</style>

@@ -2,6 +2,8 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { readExif } from '@/core/exif'
+import { fsAvailable, sandboxedFs } from '@/core/fs'
+import * as fs from '@/core/fs'
 import { appDataDir, executableDir, isTauri, pickDirectory } from '@/core/platform'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
@@ -11,10 +13,12 @@ import { useSettingsStore } from './settings'
 /** 单张照片的入库方式：复制原文件进项目，或只记录源文件路径 */
 export type ImportMode = 'copy' | 'link'
 
-/** 工作目录：用户选定的空文件夹，所有工作项目（子文件夹）都放在这里 */
+/** 工作目录：收纳工作项目的文件夹。桌面端可指向磁盘任意位置；安卓端在应用数据目录下 */
 export interface WorkDirMeta {
   path: string
   name: string
+  /** 上次扫描时的工作项目数（未扫描过的目录没有该字段） */
+  projects?: number
 }
 
 /** 工作项目：工作目录下的一个子文件夹 */
@@ -45,12 +49,21 @@ interface ProjectManifest {
   images: PrjImageRef[]
 }
 
-/** 软件数据根目录下的数据子文件夹名 */
+/** workdir.json 的 v2 结构：多工作目录列表 */
+interface DirStoreFile {
+  version: number
+  dirs: WorkDirMeta[]
+  current: string | null
+}
+
+/** 软件数据根目录下的数据子文件夹名（桌面为绝对位置；安卓相对应用数据目录） */
 const DATA_FOLDER = 'AlbumarkData'
 /** 工作目录记录文件（存软件数据） */
 const DIR_FILE = 'workdir.json'
 /** 项目清单文件名（存每个项目文件夹内） */
 const MANIFEST = 'albumark.json'
+
+export { fsAvailable, sandboxedFs }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const ab = new ArrayBuffer(bytes.byteLength)
@@ -59,33 +72,20 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32)
 }
 
-async function readJson(path: string): Promise<unknown | null> {
-  const fs = await import('@tauri-apps/plugin-fs')
-  try {
-    const bytes = await fs.readFile(path)
-    return JSON.parse(new TextDecoder().decode(bytes))
-  } catch {
-    return null
-  }
-}
-
-async function writeJson(path: string, data: unknown): Promise<boolean> {
-  const fs = await import('@tauri-apps/plugin-fs')
-  try {
-    await fs.writeFile(path, new TextEncoder().encode(JSON.stringify(data, null, 2)))
-    return true
-  } catch {
-    return false
-  }
+/** 目录名合法化：去掉路径分隔符等文件系统不允许的字符 */
+function sanitizeDirName(raw: string): string {
+  return raw.trim().replace(/[\\/:*?"<>|]/g, '').slice(0, 60)
 }
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const images = useImagesStore()
   const settings = useSettingsStore()
 
+  /** 已记录的全部工作目录 */
+  const dirs = ref<WorkDirMeta[]>([])
   /** 当前工作目录（大工作区） */
   const dir = ref<WorkDirMeta | null>(null)
-  /** 工作目录下的全部工作项目 */
+  /** 当前工作目录下的全部工作项目 */
   const projects = ref<ProjectMeta[]>([])
   /** 当前打开的工作项目（小工作区） */
   const current = ref<ProjectMeta | null>(null)
@@ -97,126 +97,205 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   const inProject = computed(() => current.value !== null)
 
-  /* ---------- 软件数据目录（桌面端） ---------- */
+  /* ---------- 软件数据目录 ---------- */
 
-  /** 数据根目录：OOBE 选择的目录，或便携版 exe 所在目录（再兜底系统数据目录）。 */
+  /** 桌面端数据根目录：OOBE 选择的目录，或便携版 exe 所在目录（再兜底系统数据目录）。 */
   async function dataRoot(): Promise<string> {
-    const { join } = await import('@tauri-apps/api/path')
     let base = settings.dataDir
     if (!base) base = await executableDir()
     if (!base) base = await appDataDir()
-    return await join(base, DATA_FOLDER)
+    return await fs.joinPath(base, DATA_FOLDER)
   }
 
-  /** OOBE 展示用的默认位置（exe 根目录）。 */
+  /** OOBE 展示用的默认位置（exe 根目录，仅桌面）。 */
   const defaultDataDir = ref('')
   async function probeDefaultDataDir(): Promise<void> {
     if (!isTauri) return
     defaultDataDir.value = await executableDir()
   }
 
-  async function ensureDataRoot(): Promise<string | null> {
-    if (!isTauri) return null
-    const root = await dataRoot()
-    const fs = await import('@tauri-apps/plugin-fs')
-    await fs.mkdir(root, { recursive: true }).catch(() => undefined)
+  /** 记录文件所在根：桌面在数据位置/AlbumarkData 下；安卓在应用数据目录/AlbumarkData 下 */
+  async function ensureMetaRoot(): Promise<string> {
+    const root = isTauri ? await dataRoot() : DATA_FOLDER
+    await fs.mkdir(root)
     return root
   }
 
-  /* ---------- 工作目录 ---------- */
+  /* ---------- 工作目录记录（workdir.json） ---------- */
 
   async function persistDir(): Promise<void> {
-    const root = await ensureDataRoot()
-    if (!root) return
-    const { join } = await import('@tauri-apps/api/path')
-    await writeJson(await join(root, DIR_FILE), dir.value)
-  }
-
-  /** 启动时恢复上次的工作目录并扫描项目；目录失联则回到选择页。 */
-  async function init(): Promise<void> {
-    if (!isTauri) return
-    const root = await ensureDataRoot()
-    if (!root) return
-    const { join } = await import('@tauri-apps/api/path')
-    const saved = (await readJson(await join(root, DIR_FILE))) as WorkDirMeta | null
-    if (saved && typeof saved.path === 'string' && saved.path) {
-      dir.value = saved
-      await scanProjects()
-      if (!dir.value) await persistDir()
+    if (!fsAvailable) return
+    const root = await ensureMetaRoot()
+    const payload: DirStoreFile = {
+      version: 2,
+      dirs: dirs.value,
+      current: dir.value?.path ?? null,
     }
+    await fs.writeJsonFile(await fs.joinPath(root, DIR_FILE), payload)
   }
 
-  /** 选择新的工作目录：必须是空文件夹。成功后写入软件数据并扫描项目。 */
-  async function chooseDir(): Promise<boolean> {
-    if (!isTauri) return false
-    const picked = await pickDirectory('选择工作目录（需要是空文件夹）')
-    if (!picked) return false
-    const fs = await import('@tauri-apps/plugin-fs')
-    try {
-      const entries = await fs.readDir(picked)
-      const visible = entries.filter((e) => e.name && !e.name.startsWith('.'))
-      if (visible.length) {
-        toast('所选文件夹不是空的，请选择一个空文件夹', 'error')
-        return false
+  /** 读取目录记录，兼容 v1 的单目录对象格式 */
+  async function loadDirStore(): Promise<DirStoreFile> {
+    const root = await ensureMetaRoot()
+    const raw = (await fs.readJsonFile(await fs.joinPath(root, DIR_FILE))) as Record<
+      string,
+      unknown
+    > | null
+    if (raw && typeof raw === 'object') {
+      if (Array.isArray(raw.dirs)) {
+        const list = (raw.dirs as WorkDirMeta[]).filter(
+          (d) => d && typeof d.path === 'string' && d.path,
+        )
+        return {
+          version: 2,
+          dirs: list,
+          current: typeof raw.current === 'string' ? raw.current : null,
+        }
       }
+      if (typeof raw.path === 'string' && raw.path) {
+        return {
+          version: 2,
+          dirs: [{ path: raw.path, name: typeof raw.name === 'string' ? raw.name : fs.baseName(raw.path) }],
+          current: raw.path,
+        }
+      }
+    }
+    return { version: 2, dirs: [], current: null }
+  }
+
+  /** 启动时恢复目录列表与上次使用的目录，并扫描其中的项目。 */
+  async function init(): Promise<void> {
+    if (!fsAvailable) return
+    const store = await loadDirStore()
+    dirs.value = store.dirs
+    const cur = store.current ? dirs.value.find((d) => d.path === store.current) : undefined
+    if (cur) {
+      dir.value = cur
+      await scanProjects()
+      return
+    }
+    dir.value = null
+    projects.value = []
+  }
+
+  /** 把一个目录加入列表并激活（已记录则只激活）；扫描其中的辑印项目。 */
+  async function adoptDir(path: string): Promise<boolean> {
+    try {
+      await fs.readDir(path)
     } catch {
       toast('无法读取所选文件夹', 'error')
       return false
     }
-    dir.value = { path: picked, name: picked.split(/[\\/]/).pop() || '工作目录' }
-    await persistDir()
+    let meta = dirs.value.find((d) => d.path === path)
+    if (!meta) {
+      meta = { path, name: fs.baseName(path) }
+      dirs.value.push(meta)
+    }
+    dir.value = meta
     await scanProjects()
     return true
   }
 
-  /** 扫描工作目录里的全部项目（含 albumark.json 的子文件夹）。 */
-  async function scanProjects(): Promise<void> {
-    if (!isTauri || !dir.value) {
-      projects.value = []
-      return
+  /** 桌面端：选择一个文件夹加入工作目录列表。允许非空——会自动扫描其中的辑印项目。 */
+  async function addDir(): Promise<boolean> {
+    if (!isTauri) return false
+    const picked = await pickDirectory('选择工作目录（可以是已有项目的文件夹）')
+    if (!picked) return false
+    return await adoptDir(picked)
+  }
+
+  /** 安卓沙箱：在应用数据目录下新建（或发现）一个命名工作目录。 */
+  async function createDir(rawName: string): Promise<boolean> {
+    if (!sandboxedFs) return false
+    const clean = sanitizeDirName(rawName)
+    if (!clean) {
+      toast('请输入有效的目录名称', 'error')
+      return false
     }
-    const fs = await import('@tauri-apps/plugin-fs')
-    const { join } = await import('@tauri-apps/api/path')
-    const out: ProjectMeta[] = []
-    try {
-      for (const e of await fs.readDir(dir.value.path)) {
-        if (!e.isDirectory || !e.name || e.name.startsWith('.')) continue
-        const p = await join(dir.value.path, e.name)
-        const m = (await readJson(await join(p, MANIFEST))) as ProjectManifest | null
-        if (!m || !Array.isArray(m.images)) continue
-        out.push({
-          id: m.id,
-          name: m.name || e.name,
-          path: p,
-          createdAt: m.createdAt || 0,
-          count: m.images.length,
-        })
-      }
-    } catch {
-      // 工作目录已失联（被移动/删除）：清掉记录，回到选择页
+    const path = await fs.joinPath(DATA_FOLDER, clean)
+    if (dirs.value.some((d) => d.path === path)) {
+      toast('已有同名工作目录', 'error')
+      return false
+    }
+    await fs.mkdir(await fs.joinPath(path, 'images'))
+    const meta: WorkDirMeta = { path, name: clean }
+    dirs.value.push(meta)
+    dir.value = meta
+    await scanProjects()
+    return true
+  }
+
+  /** 切换到某个已记录的工作目录并扫描其中的项目。 */
+  async function useDir(meta: WorkDirMeta): Promise<void> {
+    dir.value = meta
+    if (current.value) closeProject()
+    else await scanProjects()
+  }
+
+  /** 移除工作目录记录（不删除磁盘上的文件）。 */
+  async function removeDir(meta: WorkDirMeta): Promise<void> {
+    dirs.value = dirs.value.filter((d) => d.path !== meta.path)
+    if (dir.value?.path === meta.path) {
       dir.value = null
       projects.value = []
+      const next = dirs.value[0]
+      if (next) await useDir(next)
+    }
+    await persistDir()
+  }
+
+  /** 扫描当前工作目录里的全部项目（含 albumark.json 的子文件夹）。 */
+  async function scanProjects(): Promise<void> {
+    if (!fsAvailable || !dir.value) {
+      projects.value = []
       return
     }
+    try {
+      projects.value = await scanDirProjects(dir.value.path)
+    } catch {
+      // 当前目录失联（被移动/删除）：清掉记录，回空态
+      projects.value = []
+      dir.value = null
+      await persistDir()
+      return
+    }
+    dir.value.projects = projects.value.length
+    await persistDir()
+  }
+
+  /** 扫描一个目录下的有效项目（目录失联时抛错）。 */
+  async function scanDirProjects(dirPath: string): Promise<ProjectMeta[]> {
+    const out: ProjectMeta[] = []
+    for (const e of await fs.readDir(dirPath)) {
+      if (!e.isDir || !e.name || e.name.startsWith('.')) continue
+      const p = await fs.joinPath(dirPath, e.name)
+      const m = (await fs.readJsonFile(await fs.joinPath(p, MANIFEST))) as ProjectManifest | null
+      if (!m || !Array.isArray(m.images)) continue
+      out.push({
+        id: m.id,
+        name: m.name || e.name,
+        path: p,
+        createdAt: m.createdAt || 0,
+        count: m.images.length,
+      })
+    }
     out.sort((a, b) => b.createdAt - a.createdAt)
-    projects.value = out
+    return out
   }
 
   /* ---------- 工作项目 ---------- */
 
   async function createProject(name: string): Promise<boolean> {
-    if (!isTauri || !dir.value) return false
-    const clean = name.trim() || '未命名项目'
-    const { join } = await import('@tauri-apps/api/path')
-    const fs = await import('@tauri-apps/plugin-fs')
-    const p = await join(dir.value.path, clean)
+    if (!fsAvailable || !dir.value) return false
+    const clean = sanitizeDirName(name) || '未命名项目'
+    const p = await fs.joinPath(dir.value.path, clean)
     if (await fs.exists(p)) {
       toast('同名文件夹已存在，换一个名字', 'error')
       return false
     }
-    await fs.mkdir(await join(p, 'images'), { recursive: true })
+    await fs.mkdir(await fs.joinPath(p, 'images'))
     const m: ProjectManifest = { id: uid(), name: clean, createdAt: Date.now(), images: [] }
-    await writeJson(await join(p, MANIFEST), m)
+    await fs.writeJsonFile(await fs.joinPath(p, MANIFEST), m)
     await scanProjects()
     return true
   }
@@ -238,11 +317,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         kind: r.kind,
       }
       let bytes: Uint8Array | null = null
-      const fs = await import('@tauri-apps/plugin-fs')
-      const { join } = await import('@tauri-apps/api/path')
       if (r.storedAs) {
         try {
-          bytes = await fs.readFile(await join(prjPath, 'images', r.storedAs))
+          bytes = await fs.readFile(await fs.joinPath(prjPath, 'images', r.storedAs))
         } catch {
           bytes = null
         }
@@ -293,11 +370,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function openProject(meta: ProjectMeta): Promise<void> {
-    if (!isTauri || loading.value) return
+    if (!fsAvailable || loading.value) return
     loading.value = true
     try {
-      const { join } = await import('@tauri-apps/api/path')
-      const data = (await readJson(await join(meta.path, MANIFEST))) as ProjectManifest | null
+      const data = (await fs.readJsonFile(await fs.joinPath(meta.path, MANIFEST))) as ProjectManifest | null
       if (!data || !Array.isArray(data.images)) {
         toast('这个文件夹不是有效的辑印项目', 'error')
         return
@@ -311,7 +387,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  /** 非桌面端：本次会话的临时项目（图片仅在内存中）。 */
+  /** 无文件能力时（浏览器）：本次会话的临时项目（图片仅在内存中）。 */
   function openEphemeralProject(): void {
     const meta: ProjectMeta = {
       id: uid(),
@@ -332,37 +408,29 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     void scanProjects()
   }
 
-  /** 删除项目文件夹（UI 层负责二次确认）。 */
+  /** 删除项目：移入回收站（桌面系统回收站 / 安卓应用内 trash 文件夹）。UI 层负责确认。 */
   async function removeProject(meta: ProjectMeta): Promise<void> {
-    if (!isTauri) return
+    if (!fsAvailable) return
     if (current.value?.path === meta.path) closeProject()
-    const fs = await import('@tauri-apps/plugin-fs')
     try {
-      await fs.remove(meta.path, { recursive: true })
+      await fs.trashPath(meta.path)
     } catch {
-      toast('无法删除项目文件夹', 'error')
+      toast('无法移入回收站，项目保持原样', 'error')
+      await scanProjects()
+      return
     }
     await scanProjects()
-  }
-
-  /** 放弃当前工作目录记录，回到选择页（不删除任何文件）。 */
-  async function switchDir(): Promise<void> {
-    if (current.value) closeProject()
-    dir.value = null
-    projects.value = []
-    await persistDir()
   }
 
   /* ---------- 图片进出项目 ---------- */
 
   let saveTimer: number | null = null
   function scheduleSave(): void {
-    if (!isTauri || !manifest.value || !current.value?.path) return
+    if (!fsAvailable || !manifest.value || !current.value?.path) return
     if (saveTimer) window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(async () => {
       if (!manifest.value || !current.value) return
-      const { join } = await import('@tauri-apps/api/path')
-      await writeJson(await join(current.value.path, MANIFEST), manifest.value)
+      await fs.writeJsonFile(await fs.joinPath(current.value.path, MANIFEST), manifest.value)
     }, 400)
   }
 
@@ -382,7 +450,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  /** 项目内新增图片（浏览器 File；桌面端优先走带绝对路径的 addFromPaths）。 */
+  /** 项目内新增图片（File 对象；桌面端优先走带绝对路径的 addFromPaths）。 */
   async function addFiles(
     files: { file: File; path?: string }[],
     mode: ImportMode = importMode.value,
@@ -394,22 +462,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const bytes = new Uint8Array(await file.arrayBuffer())
       const code = await sha256Hex(bytes)
       const ref: PrjImageRef = { id: uid(), name: file.name, code, kind: mode }
-      if (isTauri && prjPath) {
+      if (fsAvailable && prjPath) {
         if (mode === 'link' && path) {
           ref.sourcePath = path
         } else {
           if (mode === 'link' && !path && !toldFallback) {
             toldFallback = true
-            toast('浏览器选入的文件拿不到路径，已改为复制', 'info')
+            toast('拿不到文件的源路径，已改为复制', 'info')
           }
           ref.kind = 'copy'
           ref.storedAs = `${ref.id}.jpg`
-          const fs = await import('@tauri-apps/plugin-fs')
-          const { join } = await import('@tauri-apps/api/path')
-          await fs.writeFile(await join(prjPath, 'images', ref.storedAs), bytes)
+          await fs.writeFile(await fs.joinPath(prjPath, 'images', ref.storedAs), bytes)
         }
-      } else if (mode === 'link' && path) {
-        ref.sourcePath = path
       } else {
         ref.kind = 'copy'
       }
@@ -427,19 +491,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const jpgs = paths.filter((p) => /\.jpe?g$/i.test(p))
     const skipped = paths.length - jpgs.length
     if (skipped > 0) toast(`已跳过 ${skipped} 个非 JPG 文件`)
-    const fs = await import('@tauri-apps/plugin-fs')
     for (const path of jpgs) {
       try {
         const bytes = await fs.readFile(path)
-        const name = path.split(/[\\/]/).pop() ?? 'photo.jpg'
+        const name = fs.baseName(path)
         const code = await sha256Hex(bytes)
         const ref: PrjImageRef = { id: uid(), name, code, kind: mode }
         if (mode === 'link') {
           ref.sourcePath = path
         } else if (current.value.path) {
           ref.storedAs = `${ref.id}.jpg`
-          const { join } = await import('@tauri-apps/api/path')
-          await fs.writeFile(await join(current.value.path, 'images', ref.storedAs), bytes)
+          await fs.writeFile(await fs.joinPath(current.value.path, 'images', ref.storedAs), bytes)
         }
         const item = makeItem(
           ref,
@@ -455,7 +517,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  /** 从项目移除图片：同时删除复制的文件与清单记录。 */
+  /** 从项目移除图片：复制的源文件移入回收站，清单记录删除。 */
   async function removeImage(id: string): Promise<void> {
     images.remove([id])
     if (!manifest.value) return
@@ -463,20 +525,19 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (i < 0) return
     const ref = manifest.value.images[i]
     manifest.value.images.splice(i, 1)
-    if (ref.storedAs && current.value?.path && isTauri) {
-      const fs = await import('@tauri-apps/plugin-fs')
-      const { join } = await import('@tauri-apps/api/path')
-      await fs.remove(await join(current.value.path, 'images', ref.storedAs)).catch(() => undefined)
+    if (ref.storedAs && current.value?.path && fsAvailable) {
+      await fs
+        .trashPath(await fs.joinPath(current.value.path, 'images', ref.storedAs))
+        .catch(() => undefined)
     }
     scheduleSave()
   }
 
-  /** 重新定位失联的源文件：用识别码校对后再建立链接。 */
+  /** 重新定位失联的源文件：用识别码校对后再建立链接（仅桌面端）。 */
   async function relink(id: string, newPath: string): Promise<void> {
-    if (!manifest.value) return
+    if (!manifest.value || !isTauri) return
     const ref = manifest.value.images.find((r) => r.id === id)
     if (!ref) return
-    const fs = await import('@tauri-apps/plugin-fs')
     try {
       const bytes = await fs.readFile(newPath)
       const code = await sha256Hex(bytes)
@@ -509,6 +570,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   return {
+    dirs,
     dir,
     projects,
     current,
@@ -519,16 +581,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     defaultDataDir,
     probeDefaultDataDir,
     dataRoot,
-    ensureDataRoot,
     init,
-    chooseDir,
+    addDir,
+    createDir,
+    useDir,
+    removeDir,
+    adoptDir,
     scanProjects,
     createProject,
     openProject,
     openEphemeralProject,
     closeProject,
     removeProject,
-    switchDir,
     addFiles,
     addFromPaths,
     removeImage,

@@ -1,5 +1,6 @@
 /* 辑印 Albumark · 设计令牌
    唯一强调色取自品牌 Logo（#FFA72F）；层级由字号、字重与间距表达，不靠彩色堆砌。
+   界面底色：浅色纯白、深色纯黑，让照片成为唯一的视觉焦点。
    主题：默认深色；手动主题由设置写入 <html data-theme="light|dark">，auto 模式由 JS 跟随系统。 */
 
 :root {
@@ -10,11 +11,12 @@
   --accent-contrast: #3a2400;
   --accent-soft: rgba(255, 167, 47, 0.15);
 
-  /* 深色（默认）：暖近黑，配合照片内容 */
-  --bg: #131110;
-  --canvas: #0b0a09;
-  --surface: rgba(30, 27, 24, 0.78);
+  /* 深色（默认）：纯黑底，配合照片内容 */
+  --bg: #000000;
+  --canvas: #000000;
+  --surface: rgba(32, 29, 25, 0.78);
   --surface-solid: #201d1a;
+  --panel: #161310;
   --raised: #2a2622;
   --hover: rgba(255, 255, 255, 0.06);
   --active: rgba(255, 255, 255, 0.1);
@@ -26,18 +28,21 @@
   --danger: #e5604a;
   --ok: #8fbf6f;
 
-  --font:
+  --font-fallback:
     -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', system-ui,
     sans-serif;
+  --font: var(--font-fallback);
   --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 
   --r-s: 6px;
   --r-m: 10px;
   --r-l: 14px;
 
-  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.38);
-  --shadow-3: 0 18px 56px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 18px 56px rgba(0, 0, 0, 0.6);
+  /* 悬浮面板专用：比通用阴影明显更淡，只提示悬浮不抢戏 */
+  --shadow-panel: 0 6px 22px rgba(0, 0, 0, 0.42);
 
   /* 按压即时、悬停柔和：悬停用更长的非线性缓动（easeOutQuint），按压保持干脆 */
   --ease: cubic-bezier(0.2, 0, 0, 1);
@@ -61,10 +66,11 @@
 
 :root[data-theme='light'] {
   color-scheme: light;
-  --bg: #f4f1ec;
-  --canvas: #e7e3dd;
-  --surface: rgba(252, 250, 247, 0.82);
-  --surface-solid: #fcfaf7;
+  --bg: #ffffff;
+  --canvas: #ffffff;
+  --surface: rgba(255, 255, 255, 0.75);
+  --surface-solid: #ffffff;
+  --panel: #ffffff;
   --raised: #ffffff;
   --hover: rgba(0, 0, 0, 0.05);
   --active: rgba(0, 0, 0, 0.09);
@@ -74,6 +80,9 @@
   --line: rgba(0, 0, 0, 0.08);
   --line-strong: rgba(0, 0, 0, 0.16);
   --accent-contrast: #2e1d00;
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.12);
+  --shadow-3: 0 18px 56px rgba(0, 0, 0, 0.16);
+  --shadow-panel: 0 6px 22px rgba(0, 0, 0, 0.1);
 }
 
 @media (prefers-reduced-transparency: reduce) {

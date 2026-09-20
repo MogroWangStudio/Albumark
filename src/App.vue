@@ -9,11 +9,13 @@ import {
 } from 'lucide-vue-next'
 import AppTitleBar from '@/components/AppTitleBar.vue'
 import AdjustPanel from '@/components/AdjustPanel.vue'
+import AppContextMenu, { type ContextMenuItem } from '@/components/AppContextMenu.vue'
 import ExportPanel from '@/components/ExportPanel.vue'
 import ImportOverlay from '@/components/ImportOverlay.vue'
+import ImportPreviewDialog from '@/components/ImportPreviewDialog.vue'
 import LibraryStrip from '@/components/LibraryStrip.vue'
 import PreviewCanvas from '@/components/PreviewCanvas.vue'
-import SettingsDialog from '@/components/SettingsDialog.vue'
+import SettingsPage from '@/components/SettingsPage.vue'
 import UrlImportDialog from '@/components/UrlImportDialog.vue'
 import WatermarkPanel from '@/components/WatermarkPanel.vue'
 import WatermarkStudio from '@/components/WatermarkStudio.vue'
@@ -21,6 +23,8 @@ import WorkspacePage from '@/components/WorkspacePage.vue'
 import AppTabs from '@/components/ui/AppTabs.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import { isTauri, pickImagePaths } from '@/core/platform'
+import { projectMomentum, springTo, type SpringHandle } from '@/core/spring'
+import { baseName } from '@/core/fs'
 import { useImagesStore } from '@/stores/images'
 import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
@@ -31,14 +35,15 @@ const wm = useWatermarkStore()
 const templates = useTemplatesStore()
 const ws = useWorkspaceStore()
 
-const view = ref<'main' | 'studio'>('main')
+const view = ref<'main' | 'studio' | 'settings'>('main')
 const panel = ref<'watermark' | 'adjust' | 'export'>('watermark')
 const urlOpen = ref(false)
-const settingsOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragDepth = ref(0)
-/** 悬浮操作面板的展开状态：进入项目自动展开，工作区页面自动收起 */
+/** 悬浮操作面板：进入项目自动展开，工作区页面自动收起 */
 const panelOpen = ref(true)
+/** 面板吸附边：可按住顶栏拖动，松手吸附左缘或右缘 */
+const panelSide = ref<'left' | 'right'>('right')
 
 const hasImages = computed(() => images.count > 0)
 /** 工作区门控：未进入项目时显示工作区页面 */
@@ -57,25 +62,29 @@ const PANELS = {
   export: ExportPanel,
 } as const
 
-onMounted(async () => {
-  if (isTauri) {
-    void ws.init()
-    void watchNativeDrop()
-  }
-  if (!wm.hydrate()) await templates.apply('builtin-signature')
-})
+/* ---------- 导入：先收集待导入清单，经导入预览窗确认后入库 ---------- */
 
-watch(
-  () => wm.layers,
-  () => wm.schedulePersist(),
-  { deep: true },
-)
+interface PendingImport {
+  name: string
+  path?: string
+  file?: File
+}
+const importPreviewOpen = ref(false)
+const pendingImport = ref<PendingImport[]>([])
+/** 桌面端拿得到源路径才提供链接模式 */
+const canLinkImport = computed(() => isTauri && pendingImport.value.every((i) => !!i.path))
+
+function queueImport(items: PendingImport[]): void {
+  if (!items.length || !inProject.value) return
+  pendingImport.value = items
+  importPreviewOpen.value = true
+}
 
 function openPicker(): void {
   if (!inProject.value) return
   if (isTauri) {
     void pickImagePaths('选择照片').then((paths) => {
-      if (paths.length) void ws.addFromPaths(paths, ws.importMode)
+      queueImport(paths.map((p) => ({ path: p, name: baseName(p) })))
     })
   } else {
     fileInput.value?.click()
@@ -86,8 +95,18 @@ async function onPick(e: Event): Promise<void> {
   const input = e.target as HTMLInputElement
   const files = Array.from(input.files ?? [])
   input.value = ''
-  if (!inProject.value) return
-  await ws.addFiles(files.map((file) => ({ file })), ws.importMode)
+  queueImport(files.map((file) => ({ file, name: file.name })))
+}
+
+async function confirmImport(mode: 'copy' | 'link'): Promise<void> {
+  ws.importMode = mode
+  const items = pendingImport.value
+  pendingImport.value = []
+  importPreviewOpen.value = false
+  const paths = items.map((i) => i.path).filter((p): p is string => !!p)
+  const files = items.filter((i) => i.file).map((i) => ({ file: i.file! }))
+  if (paths.length) void ws.addFromPaths(paths, mode)
+  if (files.length) void ws.addFiles(files, mode)
 }
 
 // 拖拽导入（浏览器：递归遍历文件夹；桌面端另走原生拖入事件）
@@ -149,7 +168,7 @@ async function onDrop(e: DragEvent): Promise<void> {
     for (const en of entries) await walkEntry(en, files)
   }
   if (!files.length) files.push(...Array.from(dt.files ?? []))
-  if (files.length) await ws.addFiles(files.map((file) => ({ file })), ws.importMode)
+  queueImport(files.map((file) => ({ file, name: file.name })))
 }
 
 /** Tauri 桌面端：Webview 拦截文件拖入，改用原生事件拿绝对路径 */
@@ -160,11 +179,195 @@ async function watchNativeDrop(): Promise<void> {
     unlistenDrop = await getCurrentWebview().onDragDropEvent((ev) => {
       if (ev.payload.type !== 'drop') return
       if (!ws.inProject) return
-      void ws.addFromPaths(ev.payload.paths, ws.importMode)
+      queueImport(ev.payload.paths.map((p) => ({ path: p, name: baseName(p) })))
     })
   } catch {
     /* 非 Tauri 环境忽略 */
   }
+}
+
+/* ---------- 悬浮面板：顶栏拖动 + 左右吸附 ---------- */
+
+const PANEL_W = 342
+const PANEL_EDGE = 12
+const wsEl = ref<HTMLElement | null>(null)
+const wsWidth = ref(0)
+/** 面板 wrapper 的水平位移（相对停靠左缘的位置） */
+const panelX = ref(0)
+const dragging = ref(false)
+let snapAnim: SpringHandle | null = null
+let dragGesture: {
+  grabDx: number
+  wsLeft: number
+  hist: { x: number; t: number }[]
+} | null = null
+
+const narrowQuery =
+  typeof window !== 'undefined' && window.matchMedia
+    ? window.matchMedia('(max-width: 900px)')
+    : null
+const isNarrow = ref(!!narrowQuery?.matches)
+
+function snapXFor(side: 'left' | 'right'): number {
+  if (side === 'left') return 0
+  return Math.max(0, wsWidth.value - PANEL_W - PANEL_EDGE * 2)
+}
+
+function stopSnap(): void {
+  snapAnim?.stop()
+  snapAnim = null
+}
+
+watch([wsWidth, panelSide], () => {
+  if (dragging.value || isNarrow.value) return
+  stopSnap()
+  panelX.value = snapXFor(panelSide.value)
+})
+
+watch(isNarrow, (v) => {
+  if (v) stopSnap()
+})
+
+function onPanelDragDown(e: PointerEvent): void {
+  if (isNarrow.value) return
+  const t = e.target as HTMLElement
+  if (t.closest('button, input, .tabs')) return
+  const head = e.currentTarget as HTMLElement
+  const wsRect = wsEl.value?.getBoundingClientRect()
+  if (!wsRect) return
+  head.setPointerCapture(e.pointerId)
+  stopSnap()
+  dragGesture = {
+    grabDx: e.clientX - (wsRect.left + PANEL_EDGE + panelX.value),
+    wsLeft: wsRect.left,
+    hist: [{ x: e.clientX, t: performance.now() }],
+  }
+  dragging.value = true
+}
+
+function onPanelDragMove(e: PointerEvent): void {
+  const g = dragGesture
+  if (!g) return
+  const min = -PANEL_EDGE
+  const max = Math.max(min, wsWidth.value - PANEL_W - PANEL_EDGE * 2 + PANEL_EDGE)
+  const x = Math.min(max, Math.max(min, e.clientX - g.grabDx - g.wsLeft - PANEL_EDGE))
+  panelX.value = x
+  const now = performance.now()
+  g.hist.push({ x: e.clientX, t: now })
+  while (g.hist.length > 2 && now - g.hist[0]!.t > 90) g.hist.shift()
+}
+
+function onPanelDragUp(e: PointerEvent): void {
+  const g = dragGesture
+  dragGesture = null
+  dragging.value = false
+  if (!g) return
+  ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
+  // 由最近 ~90ms 的位移估计释放速度，投影出自然停靠点再吸附
+  const first = g.hist[0]!
+  const last = g.hist[g.hist.length - 1]!
+  const dt = Math.max(1, last.t - first.t) / 1000
+  const vx = (last.x - first.x) / dt
+  const projected = panelX.value + projectMomentum(vx)
+  const leftCenter = 0 + PANEL_W / 2
+  const rightCenter = snapXFor('right') + PANEL_W / 2
+  panelSide.value = Math.abs(projected - leftCenter) < Math.abs(projected - rightCenter) ? 'left' : 'right'
+  const target = snapXFor(panelSide.value)
+  snapAnim = springTo(panelX.value, target, {
+    velocity: vx,
+    bounce: Math.abs(vx) > 250 ? 0.2 : 0,
+    response: 0.4,
+    onUpdate: (v) => (panelX.value = v),
+    onSettle: () => (snapAnim = null),
+  })
+}
+
+const wrapStyle = computed(() =>
+  isNarrow.value ? undefined : { transform: `translateX(${panelX.value}px)` },
+)
+
+/** 预览可用区域被面板占用的宽度（0 = 面板收起 / 未进项目 / 移动端底部形态） */
+const panelInset = computed(() =>
+  inProject.value && panelOpen.value && hasImages.value && !isNarrow.value ? PANEL_W + PANEL_EDGE * 2 : 0,
+)
+
+/* ---------- 自定义右键菜单 ---------- */
+
+const ctxState = ref<{ x: number; y: number; items: ContextMenuItem[] } | null>(null)
+
+function openContextMenu(e: MouseEvent, items: ContextMenuItem[]): void {
+  e.preventDefault()
+  e.stopPropagation()
+  ctxState.value = { x: e.clientX, y: e.clientY, items }
+}
+
+/** 全局兜底：除文本编辑场景外一律禁用原生右键菜单 */
+function onGlobalContextMenu(e: MouseEvent): void {
+  const t = e.target as HTMLElement | null
+  if (t?.closest('input, textarea, [contenteditable="true"]')) return
+  e.preventDefault()
+}
+
+function onPreviewCtx(e: MouseEvent): void {
+  openContextMenu(e, [
+    { label: '适应窗口', action: () => previewRef.value?.fitView() },
+    { label: '实际大小 100%', action: () => previewRef.value?.setZoom(1) },
+    { label: panelOpen.value ? '收起操作面板' : '展开操作面板', action: () => (panelOpen.value = !panelOpen.value) },
+    { label: '导入照片…', action: () => openPicker() },
+  ])
+}
+
+function onPhotoCtx(e: MouseEvent, id: string): void {
+  const item = images.items.find((i) => i.id === id)
+  openContextMenu(e, [
+    {
+      label: '设为当前照片',
+      disabled: id === images.activeId,
+      action: () => images.select(id),
+    },
+    item?.missing
+      ? {
+          label: '重新定位源文件…',
+          action: () => {
+            void pickImagePaths('定位原文件').then(([p]) => {
+              if (p) void ws.relink(id, p)
+            })
+          },
+        }
+      : { label: '从项目中移除', danger: true, action: () => void ws.removeImage(id) },
+  ])
+}
+
+const previewRef = ref<InstanceType<typeof PreviewCanvas> | null>(null)
+
+/** 顶栏「工作区」：回到工作区页面并关闭当前项目 */
+function openWorkspace(): void {
+  view.value = 'main'
+  if (ws.inProject) ws.closeProject()
+}
+
+onMounted(async () => {
+  if (isTauri) {
+    void ws.init()
+    void watchNativeDrop()
+  }
+  if (!wm.hydrate()) await templates.apply('builtin-signature')
+  window.addEventListener('keydown', onKeydown)
+  document.addEventListener('contextmenu', onGlobalContextMenu)
+  narrowQuery?.addEventListener('change', onNarrowChange)
+  if (wsEl.value && typeof ResizeObserver !== 'undefined') {
+    wsRo = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect
+      if (r) wsWidth.value = r.width
+    })
+    wsRo.observe(wsEl.value)
+  }
+})
+
+let wsRo: ResizeObserver | null = null
+
+function onNarrowChange(e: MediaQueryListEvent): void {
+  isNarrow.value = e.matches
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -172,12 +375,16 @@ function onKeydown(e: KeyboardEvent): void {
   const typing =
     !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
   if (e.key === 'Escape') {
-    if (view.value === 'studio') {
+    if (ctxState.value) {
+      ctxState.value = null
+      return
+    }
+    if (view.value === 'studio' || view.value === 'settings') {
       view.value = 'main'
       return
     }
     urlOpen.value = false
-    settingsOpen.value = false
+    importPreviewOpen.value = false
     return
   }
   // 左右方向键：顺序切换当前照片
@@ -186,10 +393,13 @@ function onKeydown(e: KeyboardEvent): void {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
+  document.removeEventListener('contextmenu', onGlobalContextMenu)
+  narrowQuery?.removeEventListener('change', onNarrowChange)
+  wsRo?.disconnect()
   unlistenDrop?.()
+  stopSnap()
 })
 </script>
 
@@ -202,68 +412,99 @@ onBeforeUnmount(() => {
     @drop.prevent="onDrop"
   >
     <AppTitleBar
-      @open-workspace="ws.inProject ? ws.closeProject() : undefined"
+      @open-workspace="openWorkspace"
       @import="openPicker"
-      @settings="settingsOpen = true"
+      @studio="view = 'studio'"
+      @settings="view = 'settings'"
     />
 
     <WatermarkStudio v-if="view === 'studio'" @back="view = 'main'" />
+    <SettingsPage v-else-if="view === 'settings'" @back="view = 'main'" />
 
     <template v-else>
-      <div class="workspace">
+      <div ref="wsEl" class="workspace">
         <main class="stage">
           <Transition name="page" mode="out-in">
             <WorkspacePage v-if="!inProject" key="ws" />
             <div v-else key="stage" class="stage-fill">
               <Transition name="fade" mode="out-in">
-                <PreviewCanvas v-if="hasImages" key="preview" />
+                <PreviewCanvas
+                  v-if="hasImages"
+                  key="preview"
+                  ref="previewRef"
+                  :panel-inset="panelInset"
+                  :panel-side="panelSide"
+                  @ctx="onPreviewCtx"
+                />
                 <ImportOverlay v-else key="import" @pick="openPicker" @open-url="urlOpen = true" />
               </Transition>
             </div>
           </Transition>
         </main>
 
-        <!-- 悬浮操作面板：项目内可展开/收起，工作区页面自动收起 -->
-        <Transition name="panel">
-          <aside v-if="inProject && panelOpen" class="inspector material">
-            <div class="inspector-head">
-              <AppTabs
-                v-model="panel"
-                :options="[
-                  { value: 'watermark', label: '水印', icon: Droplets },
-                  { value: 'adjust', label: '调节', icon: SlidersHorizontal },
-                  { value: 'export', label: '导出', icon: Upload },
-                ]"
-              />
-              <button
-                class="collapse"
-                title="收起面板"
-                @click="panelOpen = false"
+        <!-- 悬浮操作面板：吸附左/右缘，顶栏可按住拖动；工作区页面自动收起 -->
+        <aside v-if="inProject" class="inspector-wrap" :class="`side-${panelSide}`" :style="wrapStyle">
+          <Transition :name="panelSide === 'left' ? 'panel-left' : 'panel-right'" appear>
+            <section v-show="panelOpen" class="inspector" :class="{ dragging }">
+              <div
+                class="inspector-head"
+                @pointerdown="onPanelDragDown"
+                @pointermove="onPanelDragMove"
+                @pointerup="onPanelDragUp"
+                @pointercancel="onPanelDragUp"
               >
-                <ChevronRight :size="14" />
-              </button>
-            </div>
-            <div class="inspector-body">
-              <Transition name="pane" mode="out-in">
-                <KeepAlive>
-                  <component :is="PANELS[panel]" :key="panel" @studio="view = 'studio'" />
-                </KeepAlive>
-              </Transition>
-            </div>
-          </aside>
-        </Transition>
+                <AppTabs
+                  v-model="panel"
+                  :options="[
+                    { value: 'watermark', label: '水印', icon: Droplets },
+                    { value: 'adjust', label: '调节', icon: SlidersHorizontal },
+                    { value: 'export', label: '导出', icon: Upload },
+                  ]"
+                />
+                <button class="collapse" title="收起面板" @click="panelOpen = false">
+                  <ChevronRight v-if="panelSide === 'right'" :size="14" />
+                  <ChevronLeft v-else :size="14" />
+                </button>
+              </div>
+              <div class="inspector-body">
+                <Transition name="pane" mode="out-in">
+                  <KeepAlive>
+                    <component :is="PANELS[panel]" :key="panel" />
+                  </KeepAlive>
+                </Transition>
+              </div>
+            </section>
+          </Transition>
+        </aside>
         <Transition name="fade">
-          <button v-if="inProject && !panelOpen" class="panel-tab" title="展开面板" @click="panelOpen = true">
-            <ChevronLeft :size="15" />
+          <button
+            v-if="inProject && !panelOpen"
+            class="panel-tab"
+            :class="`side-${panelSide}`"
+            title="展开面板"
+            @click="panelOpen = true"
+          >
+            <ChevronLeft v-if="panelSide === 'right'" :size="15" />
+            <ChevronRight v-else :size="15" />
           </button>
         </Transition>
       </div>
 
-      <LibraryStrip v-if="inProject && hasImages" />
+      <LibraryStrip v-if="inProject && hasImages" @photo-ctx="onPhotoCtx" />
     </template>
 
     <UrlImportDialog :open="urlOpen" @close="urlOpen = false" />
-    <SettingsDialog :open="settingsOpen" @close="settingsOpen = false" />
+    <ImportPreviewDialog
+      :open="importPreviewOpen"
+      :items="pendingImport"
+      :can-link="canLinkImport"
+      @close="importPreviewOpen = false"
+      @confirm="confirmImport"
+    />
+    <AppContextMenu
+      :state="ctxState"
+      @close="ctxState = null"
+    />
     <ToastHost />
 
     <input
@@ -304,28 +545,41 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
 }
-.inspector {
+/* 面板位置壳：只承担水平位移（拖动与吸附都落在它身上） */
+.inspector-wrap {
   position: absolute;
   top: 12px;
-  right: 12px;
   bottom: 12px;
+  left: 12px;
   width: 342px;
   z-index: 20;
+  will-change: transform;
+}
+.inspector {
+  height: 100%;
   display: flex;
   flex-direction: column;
   min-height: 0;
   border: 1px solid var(--line);
   border-radius: var(--r-l);
-  box-shadow: var(--shadow-2);
+  /* 完全不透明的实底 + 明显更淡的阴影 */
+  background: var(--panel);
+  box-shadow: var(--shadow-panel);
   overflow: hidden;
 }
 .inspector-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 10px 10px 14px;
+  padding: 10px 10px 10px 10px;
   border-bottom: 1px solid var(--line);
   flex: none;
+  cursor: grab;
+  touch-action: none;
+}
+.inspector-head:active,
+.inspector.dragging .inspector-head {
+  cursor: grabbing;
 }
 .collapse {
   width: 24px;
@@ -345,15 +599,15 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 .inspector-body :deep(.panel-scroll) {
   padding: 14px;
 }
-/* 收起后的把手：贴右缘竖条 */
+/* 收起后的把手：贴吸附边竖条 */
 .panel-tab {
   position: absolute;
   top: 50%;
-  right: 0;
   transform: translateY(-50%);
   z-index: 19;
   width: 22px;
@@ -361,13 +615,21 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   border: 1px solid var(--line);
-  border-right: none;
-  border-radius: 10px 0 0 10px;
   background: var(--surface);
   backdrop-filter: var(--blur-material);
   -webkit-backdrop-filter: var(--blur-material);
   color: var(--text-3);
   transition: color var(--dur-hover) var(--ease-soft), width var(--dur-hover) var(--ease-soft);
+}
+.panel-tab.side-right {
+  right: 0;
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+}
+.panel-tab.side-left {
+  left: 0;
+  border-left: none;
+  border-radius: 0 10px 10px 0;
 }
 .panel-tab:hover {
   color: var(--text);
@@ -406,16 +668,27 @@ onBeforeUnmount(() => {
 .fade-leave-to {
   opacity: 0;
 }
-/* 悬浮面板：从右缘滑入滑出，同一路径可逆 */
-.panel-enter-active {
+/* 悬浮面板：从吸附缘滑入滑出，同一路径可逆 */
+.panel-right-enter-active {
   transition: transform 360ms var(--ease-soft), opacity 360ms var(--ease-soft);
 }
-.panel-leave-active {
+.panel-right-leave-active {
   transition: transform 260ms var(--ease), opacity 260ms var(--ease);
 }
-.panel-enter-from,
-.panel-leave-to {
+.panel-right-enter-from,
+.panel-right-leave-to {
   transform: translateX(calc(100% + 16px));
+  opacity: 0.35;
+}
+.panel-left-enter-active {
+  transition: transform 360ms var(--ease-soft), opacity 360ms var(--ease-soft);
+}
+.panel-left-leave-active {
+  transition: transform 260ms var(--ease), opacity 260ms var(--ease);
+}
+.panel-left-enter-from,
+.panel-left-leave-to {
+  transform: translateX(calc(-100% - 16px));
   opacity: 0.35;
 }
 /* 面板内功能切换：轻微纵向推移的交叉淡入 */
@@ -435,16 +708,19 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 900px) {
-  .inspector {
+  .inspector-wrap {
     top: auto;
     left: 8px;
     right: 8px;
     bottom: 8px;
     width: auto;
     height: min(46vh, 430px);
+    transform: none !important;
   }
-  .panel-enter-from,
-  .panel-leave-to {
+  .panel-right-enter-from,
+  .panel-right-leave-to,
+  .panel-left-enter-from,
+  .panel-left-leave-to {
     transform: translateY(calc(100% + 12px));
   }
   .panel-tab {
@@ -456,6 +732,12 @@ onBeforeUnmount(() => {
     border-radius: 10px 10px 0 0;
     border: 1px solid var(--line);
     border-bottom: none;
+  }
+  .panel-tab.side-right {
+    right: 0;
+  }
+  .panel-tab.side-left {
+    left: 0;
   }
   .panel-tab:hover {
     width: 56px;

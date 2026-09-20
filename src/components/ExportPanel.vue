@@ -31,7 +31,7 @@ async function start(): Promise<void> {
 </script>
 
 <template>
-  <div class="export">
+  <div class="export panel-scroll">
     <template v-if="!running && !finished">
       <p class="lead">
         将导出全部 {{ images.count }} 张照片，当前水印与调节会一并应用。导出为重新编码的

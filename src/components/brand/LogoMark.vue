@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 品牌图形。animated=true 时（OOBE 首屏）两个小三角形与中间色块
- * 交替向前「甩出」再回位， Expo-out 缓动带出速度感的循环动画。
+ * 品牌图形。animated=true 时（OOBE 首屏）两个小三角形交替向前「甩出」
+ * 再回位，Expo-out 缓动带出速度感；中间的橙色色块保持静止。
  */
 withDefaults(defineProps<{ animated?: boolean }>(), { animated: false })
 </script>
@@ -47,9 +47,6 @@ withDefaults(defineProps<{ animated?: boolean }>(), { animated: false })
 .live .tri-b {
   animation: dash-b 2.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
 }
-.live .bar {
-  animation: slide-bar 2.8s cubic-bezier(0.22, 1, 0.36, 1) infinite;
-}
 @keyframes dash-a {
   0%,
   58% {
@@ -76,22 +73,6 @@ withDefaults(defineProps<{ animated?: boolean }>(), { animated: false })
     transform: translate(13px, 7px);
   }
   52% {
-    transform: translate(0, 0);
-  }
-  100% {
-    transform: translate(0, 0);
-  }
-}
-@keyframes slide-bar {
-  0%,
-  64% {
-    transform: translate(0, 0);
-    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
-  }
-  74% {
-    transform: translate(-9px, 0);
-  }
-  86% {
     transform: translate(0, 0);
   }
   100% {

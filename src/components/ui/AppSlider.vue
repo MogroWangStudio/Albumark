@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
+import { RotateCcw } from 'lucide-vue-next'
 import type { Component } from 'vue'
 
 const props = withDefaults(
@@ -13,6 +14,8 @@ const props = withDefaults(
     format?: (v: number) => string
     disabled?: boolean
     title?: string
+    /** 归位值：提供后，数值偏离它时显示行内重置按钮 */
+    default?: number
   }>(),
   {
     min: 0,
@@ -23,6 +26,7 @@ const props = withDefaults(
     format: undefined,
     disabled: false,
     title: '双击复位',
+    default: undefined,
   },
 )
 
@@ -30,6 +34,11 @@ const emit = defineEmits<{
   'update:modelValue': [value: number]
   reset: []
 }>()
+
+/** 值偏离归位值时显示重置按钮；未提供 default 则不显示 */
+const showReset = computed(
+  () => props.default !== undefined && !props.disabled && Math.abs(props.modelValue - props.default) > 1e-9,
+)
 
 const display = computed(() =>
   props.format ? props.format(props.modelValue) : String(props.modelValue),
@@ -92,6 +101,15 @@ function onEditKey(e: KeyboardEvent): void {
     <div class="head" :title="title" @dblclick="emit('reset')">
       <span v-if="icon" class="icon"><component :is="icon" :size="14" /></span>
       <label>{{ label }}</label>
+      <button
+        v-if="showReset"
+        class="mini-reset"
+        title="复位此值"
+        @click.stop="emit('reset')"
+        @dblclick.stop
+      >
+        <RotateCcw :size="11" />
+      </button>
       <input
         v-if="editing"
         ref="editEl"
@@ -167,6 +185,23 @@ label {
   border: 1px solid var(--accent);
   border-radius: 5px;
   outline: none;
+}
+.mini-reset {
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--text-3);
+  transition: color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
+}
+.mini-reset + .val {
+  margin-left: 0;
+}
+.mini-reset:hover {
+  color: var(--text);
+  background: var(--active);
 }
 input[type='range'] {
   -webkit-appearance: none;

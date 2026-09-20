@@ -11,7 +11,8 @@ const props = defineProps<{ modelValue?: number[] }>()
 const emit = defineEmits<{ 'update:modelValue': [value: number[] | undefined] }>()
 
 const cv = ref<HTMLCanvasElement | null>(null)
-const SIZE = 168 // CSS 边长
+/** 曲线区四周的内边距（CSS px），绘制与指针映射共用同一坐标系 */
+const PAD = 10
 
 interface Pt {
   x: number
@@ -36,7 +37,9 @@ function draw(): void {
   const canvas = cv.value
   if (!canvas) return
   const dpr = window.devicePixelRatio || 1
-  const s = SIZE * dpr
+  // 位图按实际显示尺寸设置（正方形由 CSS aspect-ratio 保证），避免拉伸变形
+  const rect = canvas.getBoundingClientRect()
+  const s = Math.max(1, Math.round(rect.width * dpr))
   if (canvas.width !== s) {
     canvas.width = s
     canvas.height = s
@@ -46,7 +49,7 @@ function draw(): void {
   const c = ctx
   c.setTransform(1, 0, 0, 1, 0, 0)
   c.clearRect(0, 0, s, s)
-  const pad = 10 * dpr
+  const pad = PAD * dpr
   const inner = s - pad * 2
   const css = (v: number): number => pad + v * inner
 
@@ -134,18 +137,24 @@ function sampleSpline(pts: Pt[], n: number): number[] {
 
 function toLocal(e: PointerEvent): Pt {
   const rect = cv.value!.getBoundingClientRect()
+  // 与绘制共用同一内边距坐标：只有内缩区域映射到 [0,1]，指针落在哪圆点就在哪
+  const inner = Math.max(1, rect.width - PAD * 2)
   return {
-    x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
-    y: Math.min(1, Math.max(0, 1 - (e.clientY - rect.top) / rect.height)),
+    x: Math.min(1, Math.max(0, (e.clientX - rect.left - PAD) / inner)),
+    y: Math.min(1, Math.max(0, 1 - (e.clientY - rect.top - PAD) / inner)),
   }
 }
 
 function hit(p: Pt): number {
   const pts = ptsFromProp()
+  const rect = cv.value?.getBoundingClientRect()
+  // 命中半径用像素距离，横纵手感一致
+  const inner = Math.max(1, (rect?.width ?? 300) - PAD * 2)
+  const toPx = (v: number): number => v * inner + PAD
   let best = -1
-  let bestD = 0.06
+  let bestD = 12
   for (let i = 0; i < pts.length; i++) {
-    const d = Math.hypot(pts[i].x - p.x, pts[i].y - p.y)
+    const d = Math.hypot(toPx(pts[i]!.x) - toPx(p.x), toPx(pts[i]!.y) - toPx(p.y))
     if (d < bestD) {
       bestD = d
       best = i
@@ -205,9 +214,10 @@ function onUp(): void {
 
 function onDbl(e: MouseEvent): void {
   const rect = cv.value!.getBoundingClientRect()
+  const inner = Math.max(1, rect.width - PAD * 2)
   const p = {
-    x: (e.clientX - rect.left) / rect.width,
-    y: 1 - (e.clientY - rect.top) / rect.height,
+    x: Math.min(1, Math.max(0, (e.clientX - rect.left - PAD) / inner)),
+    y: Math.min(1, Math.max(0, 1 - (e.clientY - rect.top - PAD) / inner)),
   }
   const pts = ptsFromProp()
   const i = hit(p)
@@ -244,7 +254,6 @@ onBeforeUnmount(() => ro?.disconnect())
     <canvas
       ref="cv"
       class="board"
-      :style="{ height: `${SIZE}px` }"
       @pointerdown="onDown"
       @pointermove="onMove"
       @pointerup="onUp"
@@ -288,6 +297,8 @@ onBeforeUnmount(() => ro?.disconnect())
 .board {
   display: block;
   width: 100%;
+  aspect-ratio: 1;
+  height: auto;
   border-radius: var(--r-m);
   background: var(--bg);
   border: 1px solid var(--line);

@@ -68,6 +68,7 @@ function onReset(): void {
       :max="100"
       :label="def.label"
       :icon="icons[def.key]"
+      :default="0"
       @reset="individual ? adjust.resetToGlobal(activeId) : adjust.set(def.key, 0)"
     />
     <CurveEditor v-model="target.curve" />

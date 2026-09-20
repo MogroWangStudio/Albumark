@@ -31,8 +31,8 @@ const emit = defineEmits<{
 .tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 3px;
-  padding: 3px;
+  gap: 8px;
+  padding: 4px;
   border-radius: 999px;
   background: var(--hover);
   border: 1px solid var(--line);

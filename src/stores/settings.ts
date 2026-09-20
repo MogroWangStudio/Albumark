@@ -9,6 +9,8 @@ export type PreviewQuality = 'high' | 'balanced' | 'eco'
 export interface AppSettings {
   /** 外观主题：auto 跟随系统 */
   theme: ThemeMode
+  /** 界面显示字体：字体族名；空 = 系统默认栈 */
+  fontFamily: string
   /** 导入时提醒缺少 EXIF 元数据 */
   exifNotice: boolean
   /** 预览安全区：图片最小缩放值（1 = 适应窗口，可小于 1 缩得更小） */
@@ -26,6 +28,7 @@ export interface AppSettings {
 const PERSIST_KEY = 'albumark.settings.v1'
 const DEFAULTS: AppSettings = {
   theme: 'auto',
+  fontFamily: '',
   exifNotice: true,
   minZoom: 1,
   previewQuality: 'high',
@@ -54,6 +57,7 @@ const SystemBars = registerPlugin<SystemBarsPlugin>('SystemBars')
 export const useSettingsStore = defineStore('settings', () => {
   const initial = load()
   const theme = ref<ThemeMode>(initial.theme)
+  const fontFamily = ref(initial.fontFamily)
   const exifNotice = ref(initial.exifNotice)
   const minZoom = ref(initial.minZoom)
   const previewQuality = ref<PreviewQuality>(initial.previewQuality)
@@ -69,6 +73,7 @@ export const useSettingsStore = defineStore('settings', () => {
         PERSIST_KEY,
         JSON.stringify({
           theme: theme.value,
+          fontFamily: fontFamily.value,
           exifNotice: exifNotice.value,
           minZoom: minZoom.value,
           previewQuality: previewQuality.value,
@@ -87,6 +92,14 @@ export const useSettingsStore = defineStore('settings', () => {
     document.documentElement.dataset.theme = eff
   }
 
+  /** 自定义显示字体：写覆盖 --font，引用默认栈作后备；空值恢复默认 */
+  function applyFont(): void {
+    const family = fontFamily.value.trim()
+    const rootStyle = document.documentElement.style
+    if (family) rootStyle.setProperty('--font', `"${family}", var(--font-fallback)`)
+    else rootStyle.removeProperty('--font')
+  }
+
   async function syncSystemBars(): Promise<void> {
     if (!isCapacitor) return
     const style = theme.value === 'auto' ? 'DEFAULT' : theme.value === 'dark' ? 'DARK' : 'LIGHT'
@@ -99,6 +112,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   watchEffect(() => {
     applyTheme()
+    applyFont()
     persist()
     void syncSystemBars()
   })
@@ -109,6 +123,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   return {
     theme,
+    fontFamily,
     exifNotice,
     minZoom,
     previewQuality,

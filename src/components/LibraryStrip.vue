@@ -9,6 +9,8 @@ import { useWorkspaceStore } from '@/stores/workspace'
 const images = useImagesStore()
 const ws = useWorkspaceStore()
 
+const emit = defineEmits<{ photoCtx: [e: MouseEvent, id: string] }>()
+
 const active = computed(() => images.active)
 const infoLine = computed(() => {
   const a = active.value
@@ -56,6 +58,7 @@ async function removeSelected(): Promise<void> {
         class="thumb"
         :class="{ active: item.id === images.activeId, selected: images.selectedIds.has(item.id), missing: item.missing }"
         @click="images.select(item.id, $event.metaKey || $event.ctrlKey)"
+        @contextmenu.stop="emit('photoCtx', $event, item.id)"
       >
         <img
           v-if="item.thumbUrl"

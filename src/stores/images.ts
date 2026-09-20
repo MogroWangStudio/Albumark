@@ -18,9 +18,9 @@ const PARALLEL = 4
 
 /**
  * 解码一次得到尺寸 + 缩略图；EXIF 只读元数据段，代价很小。
- * 全部属性一次性写回，避免逐字段触发响应式更新。
+ * 返回 patch，由调用方经 patchItem 写回，保证走响应式代理触发更新。
  */
-export async function processItem(item: ImageItem): Promise<boolean> {
+export async function processItem(item: ImageItem): Promise<Partial<ImageItem>> {
   const patch: Partial<ImageItem> = {}
   if (item.blob) {
     try {
@@ -47,8 +47,7 @@ export async function processItem(item: ImageItem): Promise<boolean> {
     }
     patch.exif = await readExif(item.blob)
   }
-  Object.assign(item, patch)
-  return !!patch.exif
+  return patch
 }
 
 export const useImagesStore = defineStore('images', () => {
@@ -104,8 +103,9 @@ export const useImagesStore = defineStore('images', () => {
       for (;;) {
         const i = cursor++
         if (i >= added.length) return
-        const ok = await processItem(added[i])
-        if (!ok) missingExif++
+        const patch = await processItem(added[i])
+        patchItem(added[i].id, patch)
+        if (!patch.exif) missingExif++
       }
     }
     await Promise.all(Array.from({ length: Math.min(PARALLEL, added.length) }, worker))

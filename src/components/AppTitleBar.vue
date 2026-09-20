@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { FolderOpen, ImagePlus, Minus, Settings, Square, X } from 'lucide-vue-next'
+import { Brush, FolderOpen, ImagePlus, Minus, Settings, Square, X } from 'lucide-vue-next'
 import LogoText from '@/components/brand/LogoText.vue'
 import { isTauri } from '@/core/platform'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -8,13 +8,14 @@ import { useWorkspaceStore } from '@/stores/workspace'
 const emit = defineEmits<{
   openWorkspace: []
   import: []
+  studio: []
   settings: []
 }>()
 
 const ws = useWorkspaceStore()
 const pressed = ref(false)
 
-// 药丸集合组里的三个控件：工作区 / 导入 / 设置
+// 药丸集合组里的控件：工作区 / 导入 / 水印工作室 / 设置
 const canImport = computed(() => ws.inProject)
 let win: { minimize(): void; toggleMaximize(): void; close(): void } | null = null
 
@@ -69,6 +70,10 @@ function onClose(): void {
           <ImagePlus :size="15" /><span>导入图片</span>
         </button>
         <span class="pill-sep" />
+        <button class="pill-item" title="水印工作室" @click="emit('studio')">
+          <Brush :size="15" /><span>水印工作室</span>
+        </button>
+        <span class="pill-sep" />
         <button class="pill-item" @click="emit('settings')">
           <Settings :size="15" /><span>设置</span>
         </button>
@@ -113,9 +118,9 @@ function onClose(): void {
   display: inline-flex;
   align-items: center;
   border-radius: 6px;
-  /* 非线性反馈：悬停轻微放大（回弹曲线），按下即时缩到 0.95 */
+  /* 悬停轻微放大（无过冲），按下即时缩到 0.95 */
   transition:
-    transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    transform 320ms var(--ease-soft),
     filter var(--dur-hover) var(--ease-soft);
   transform-origin: left center;
   padding: 3px 4px;

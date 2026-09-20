@@ -345,6 +345,7 @@ function applyCustomFont(): void {
               :min="100"
               :max="900"
               :step="1"
+              :default="600"
               @update:model-value="wm.update(selectedText!.id, { fontWeight: $event })"
               @reset="wm.update(selectedText!.id, { fontWeight: 600 })"
             />
