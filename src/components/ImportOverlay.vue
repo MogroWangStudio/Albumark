@@ -1,7 +1,17 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ImagePlus, Link2 } from 'lucide-vue-next'
 import LogoMark from '@/components/brand/LogoMark.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+
+const props = withDefaults(
+  defineProps<{
+    /** 悬浮面板让出的宽度：0 = 面板收起或移动端底部形态 */
+    panelInset?: number
+    panelSide?: 'left' | 'right'
+  }>(),
+  { panelInset: 0, panelSide: 'right' },
+)
 
 defineEmits<{
   pick: []
@@ -12,10 +22,15 @@ defineEmits<{
 const hour = new Date().getHours()
 const greeting =
   hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
+
+/** 与预览画布同规则：内容中心让位到面板之外的剩余空白 */
+const shift = computed(() =>
+  props.panelInset > 0 ? (props.panelInset / 2) * (props.panelSide === 'left' ? 1 : -1) : 0,
+)
 </script>
 
 <template>
-  <div class="empty">
+  <div class="empty" :style="shift ? { transform: `translateX(${shift}px)` } : undefined">
     <LogoMark class="mark" />
     <h1>{{ greeting }}</h1>
     <p>选择或拖入照片，开始今天的辑录。</p>
@@ -38,6 +53,8 @@ const greeting =
   gap: 6px;
   text-align: center;
   padding: 24px;
+  /* 面板展开/收起/换边时整体让位，与预览画布同款曲线 */
+  transition: transform var(--dur) var(--ease-soft);
 }
 .mark {
   width: 148px;

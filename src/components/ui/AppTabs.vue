@@ -12,7 +12,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="tabs" role="tablist">
+  <div class="tabs" role="tablist" :style="{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }">
     <button
       v-for="o in options"
       :key="o.value"
@@ -21,7 +21,7 @@ const emit = defineEmits<{
       :class="{ on: o.value === modelValue }"
       @click="emit('update:modelValue', o.value)"
     >
-      <component :is="o.icon" v-if="o.icon" :size="14" />
+      <component :is="o.icon" v-if="o.icon" :size="15" />
       <span>{{ o.label }}</span>
     </button>
   </div>
@@ -30,7 +30,6 @@ const emit = defineEmits<{
 <style scoped>
 .tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   padding: 4px;
   border-radius: 999px;
@@ -41,10 +40,11 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  height: 28px;
+  gap: 6px;
+  height: 30px;
+  padding-inline: 14px;
   border-radius: 999px;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--text-3);
   transition:
     background var(--dur-hover) var(--ease-soft),

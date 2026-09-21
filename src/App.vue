@@ -312,9 +312,9 @@ const wrapStyle = computed(() =>
   isNarrow.value ? undefined : { transform: `translateX(${panelX.value}px)` },
 )
 
-/** 预览可用区域被面板占用的宽度（0 = 面板收起 / 未进项目 / 移动端底部形态） */
+/** 预览与空状态问候页共用：面板展开时让出的宽度（0 = 面板收起 / 未进项目 / 移动端底部形态） */
 const panelInset = computed(() =>
-  inProject.value && panelOpen.value && hasImages.value && !isNarrow.value ? PANEL_W + PANEL_EDGE * 2 : 0,
+  inProject.value && panelOpen.value && !isNarrow.value ? PANEL_W + PANEL_EDGE * 2 : 0,
 )
 
 /* ---------- 自定义右键菜单 ---------- */
@@ -504,7 +504,14 @@ onBeforeUnmount(() => {
                     :panel-side="panelSide"
                     @ctx="onPreviewCtx"
                   />
-                  <ImportOverlay v-else key="import" @pick="openPicker" @open-url="urlOpen = true" />
+                  <ImportOverlay
+                    v-else
+                    key="import"
+                    :panel-inset="panelInset"
+                    :panel-side="panelSide"
+                    @pick="openPicker"
+                    @open-url="urlOpen = true"
+                  />
                 </Transition>
               </div>
             </Transition>

@@ -303,7 +303,6 @@ async function relaunchOobe(): Promise<void> {
 .group h2 {
   font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-3);
   margin-bottom: 4px;
