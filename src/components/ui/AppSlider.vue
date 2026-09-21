@@ -94,6 +94,51 @@ function onEditKey(e: KeyboardEvent): void {
   if (e.key === 'Enter') commitEdit()
   else if (e.key === 'Escape') editing.value = false
 }
+
+/* ---------- 按住数值横向拖动：细微调整 ---------- */
+
+const SCRUB_RANGE = 300
+
+const scrubbing = ref(false)
+let scrub: { startX: number; startVal: number; active: boolean } | null = null
+
+/** 拖满 SCRUB_RANGE px 走完整个范围，比轨道宽度更缓，便于细调；按 step 取整 */
+function applyScrub(dx: number): void {
+  if (!scrub) return
+  let v = scrub.startVal + (dx / SCRUB_RANGE) * (props.max - props.min)
+  v = Math.min(props.max, Math.max(props.min, v))
+  if (props.step > 0) {
+    v = Math.round((v - props.min) / props.step) * props.step + props.min
+    v = Number(v.toFixed(4))
+  }
+  if (v !== props.modelValue) emit('update:modelValue', v)
+}
+
+function onValDown(e: PointerEvent): void {
+  if (props.disabled || e.button !== 0) return
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  scrub = { startX: e.clientX, startVal: props.modelValue, active: false }
+}
+
+function onValMove(e: PointerEvent): void {
+  const s = scrub
+  if (!s) return
+  const dx = e.clientX - s.startX
+  // 约 2px 的滞回：确认拖动意图后才起效，单击/双击键入不受影响
+  if (!s.active) {
+    if (Math.abs(dx) < 2) return
+    s.active = true
+    scrubbing.value = true
+  }
+  applyScrub(dx)
+}
+
+function onValUp(e: PointerEvent): void {
+  if (!scrub) return
+  scrub = null
+  scrubbing.value = false
+  ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
+}
 </script>
 
 <template>
@@ -125,7 +170,12 @@ function onEditKey(e: KeyboardEvent): void {
       <span
         v-else
         class="val"
-        title="双击键入数值"
+        :class="{ scrubbing }"
+        title="按住拖动微调 · 双击键入"
+        @pointerdown="onValDown"
+        @pointermove="onValMove"
+        @pointerup="onValUp"
+        @pointercancel="onValUp"
         @dblclick.stop="startEdit"
       >{{ display }}</span>
     </div>
@@ -165,12 +215,19 @@ label {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--text);
-  cursor: text;
+  cursor: ew-resize;
   padding: 0 2px;
   border-radius: 4px;
+  /* 横向拖拽微调；触屏保留纵向滚动手势 */
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .val:hover {
   background: var(--hover);
+}
+.val.scrubbing {
+  background: var(--active);
 }
 .val-edit {
   margin-left: auto;

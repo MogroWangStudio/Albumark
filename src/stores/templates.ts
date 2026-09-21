@@ -6,11 +6,16 @@ import { toast } from './toast'
 import type { WatermarkTemplate } from '@/types/watermark'
 
 const PERSIST_KEY = 'albumark.templates.v1'
+/** 旧版「水印预设」存储键：并入模板库后移除 */
+const LEGACY_PRESETS_KEY = 'albumark.presets.v1'
+/** 单个模板的体积上限（assets 以 dataUrl 内嵌） */
+const SIZE_LIMIT = 4_500_000
 
 interface SavedTemplate {
   id: string
   name: string
   createdAt: number
+  updatedAt?: number
   layers: WatermarkTemplate['layers']
   assets: WatermarkTemplate['assets']
 }
@@ -59,14 +64,29 @@ function builtinTemplates(): WatermarkTemplate[] {
   ]
 }
 
+/** 旧版「保存为水印」（工作室预设）一次性并入模板库 */
+function migrateLegacyPresets(): SavedTemplate[] {
+  try {
+    const raw = window.localStorage.getItem(LEGACY_PRESETS_KEY)
+    if (!raw) return []
+    const list = JSON.parse(raw) as SavedTemplate[]
+    window.localStorage.removeItem(LEGACY_PRESETS_KEY)
+    return Array.isArray(list) ? list : []
+  } catch {
+    return []
+  }
+}
+
 function loadSaved(): SavedTemplate[] {
+  let saved: SavedTemplate[] = []
   try {
     const raw = window.localStorage.getItem(PERSIST_KEY)
-    if (raw) return JSON.parse(raw) as SavedTemplate[]
+    if (raw) saved = JSON.parse(raw) as SavedTemplate[]
   } catch {
     /* 忽略损坏数据 */
   }
-  return []
+  const legacy = migrateLegacyPresets()
+  return legacy.length ? [...legacy, ...saved] : saved
 }
 
 export const useTemplatesStore = defineStore('templates', () => {
@@ -91,7 +111,12 @@ export const useTemplatesStore = defineStore('templates', () => {
     }
   }
 
-  function save(name: string): boolean {
+  function get(id: string): WatermarkTemplate | undefined {
+    return all.value.find((t) => t.id === id)
+  }
+
+  /** 当前编辑内容存为新模板，返回新模板 id（失败返回 null） */
+  function save(name: string): string | null {
     const data = wm.serialize()
     const t: SavedTemplate = {
       id: uid(),
@@ -101,14 +126,59 @@ export const useTemplatesStore = defineStore('templates', () => {
       assets: data.assets,
     }
     try {
-      const probe = JSON.stringify(t)
-      if (probe.length > 4_500_000) return false
+      if (JSON.stringify(t).length > SIZE_LIMIT) return null
     } catch {
-      return false
+      return null
     }
     saved.value.unshift(t)
     persist()
+    return t.id
+  }
+
+  /** 把编辑器当前内容写回自建模板；内置模板不可覆盖 */
+  function update(id: string): boolean {
+    const t = saved.value.find((x) => x.id === id)
+    if (!t) return false
+    const data = wm.serialize()
+    try {
+      if (JSON.stringify(data).length > SIZE_LIMIT) return false
+    } catch {
+      return false
+    }
+    t.layers = data.layers
+    t.assets = data.assets
+    t.updatedAt = Date.now()
+    persist()
     return true
+  }
+
+  function rename(id: string, name: string): void {
+    const t = saved.value.find((x) => x.id === id)
+    if (!t) return
+    t.name = name.trim() || t.name
+    t.updatedAt = Date.now()
+    persist()
+  }
+
+  /** 复制任意模板（含内置）为新的自建模板，返回新 id */
+  function duplicate(id: string): string | null {
+    const src = all.value.find((x) => x.id === id)
+    if (!src) return null
+    const t: SavedTemplate = {
+      id: uid(),
+      name: `${src.name} 副本`,
+      createdAt: Date.now(),
+      layers: structuredClone(src.layers),
+      assets: structuredClone(src.assets),
+    }
+    try {
+      if (JSON.stringify(t).length > SIZE_LIMIT) return null
+    } catch {
+      return null
+    }
+    saved.value.unshift(t)
+    persist()
+    return t.id
   }
 
   function remove(id: string): void {
@@ -122,5 +192,5 @@ export const useTemplatesStore = defineStore('templates', () => {
     wm.applySerialized(t.layers, t.assets)
   }
 
-  return { saved, all, save, remove, apply }
+  return { saved, all, get, save, update, rename, duplicate, remove, apply }
 })

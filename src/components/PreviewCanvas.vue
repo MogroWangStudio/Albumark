@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ChevronUp } from 'lucide-vue-next'
 import type { WatermarkLayer } from '@/types/watermark'
-import { anchorPoint, hitTest, layerCenter, measureLayer } from '@/core/layout'
+import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { drawLayers, type AssetMap } from '@/core/draw'
 import { renderClient } from '@/core/renderer'
 import { resolveTokens } from '@/core/tokens'
@@ -612,9 +612,9 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
   const ys: number[] = [imgH / 2, imgH * 0.04, imgH * 0.96]
   for (const l of wm.layers) {
     if (l.id === excludeId || !l.visible) continue
-    const c = layerCenter(l, imgW, imgH)
-    xs.push(c.cx)
-    ys.push(c.cy)
+    const c = layerPivot(l, imgW, imgH)
+    xs.push(c.x)
+    ys.push(c.y)
   }
   let best = threshold
   for (const x of xs) {
@@ -677,13 +677,13 @@ function onPointerDown(e: PointerEvent): void {
     const box = measureLayer(resolvedLayer(l), resultMap.w, resultMap.h, measureContext())
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
-      const c = layerCenter(l, resultMap.w, resultMap.h)
+      const c = layerPivot(l, resultMap.w, resultMap.h)
       gesture = {
         type: 'layer',
         id: l.id,
         startClient: { x: e.clientX, y: e.clientY },
-        startCx: c.cx,
-        startCy: c.cy,
+        startCx: c.x,
+        startCy: c.y,
       }
       return
     }

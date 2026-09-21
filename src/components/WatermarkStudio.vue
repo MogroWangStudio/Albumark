@@ -1,33 +1,91 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ArrowLeft, Check, Plus, Save, Trash2 } from 'lucide-vue-next'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { ArrowLeft, Check, Plus, Save } from 'lucide-vue-next'
 import LayerEditor from '@/components/LayerEditor.vue'
+import TemplateManager from '@/components/TemplateManager.vue'
 import AppButton from '@/components/ui/AppButton.vue'
-import AppDropdown from '@/components/ui/AppDropdown.vue'
-import type { DropdownItem } from '@/components/ui/AppDropdown.vue'
 import { drawLayers, type AssetMap } from '@/core/draw'
-import { anchorPoint, hitTest, layerCenter, measureLayer } from '@/core/layout'
+import { makeSampleBitmap, SAMPLE_H, SAMPLE_LONG, SAMPLE_W } from '@/core/sample'
+import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { resolveTokens } from '@/core/tokens'
 import { toast } from '@/stores/toast'
-import { usePresetsStore } from '@/stores/presets'
 import { useSettingsStore } from '@/stores/settings'
+import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
 import type { WatermarkLayer } from '@/types/watermark'
 
 const emit = defineEmits<{ back: [] }>()
 
 const wm = useWatermarkStore()
-const presets = usePresetsStore()
 const settings = useSettingsStore()
+const templates = useTemplatesStore()
 
-const SAMPLE_W = 1600
-const SAMPLE_H = 1067
-const SAMPLE_LONG = Math.max(SAMPLE_W, SAMPLE_H)
+/* ---------- 两级视图：模板管理（默认）⇄ 模板编辑 ---------- */
+
+const mode = ref<'manage' | 'edit'>('manage')
+/** 正在编辑的模板 id；null 表示尚未保存的新模板 */
+const editingId = ref<string | null>(null)
+const showSave = ref(false)
+const saveName = ref('')
+
+const editingBuiltin = computed(
+  () => !!editingId.value && !!templates.get(editingId.value)?.builtin,
+)
+const editingName = computed(() =>
+  editingId.value ? (templates.get(editingId.value)?.name ?? '未命名模板') : '新建模板',
+)
+
+/** 打开一个模板进入编辑（加载其图层与素材） */
+function openEdit(id: string): void {
+  void templates.apply(id)
+  editingId.value = id
+  mode.value = 'edit'
+}
+
+/** 新建空白模板：清空编辑器后进入编辑，保存时命名 */
+function openCreate(): void {
+  wm.applySerialized([], [])
+  editingId.value = null
+  mode.value = 'edit'
+}
+
+function backToManage(): void {
+  mode.value = 'manage'
+}
+
+/** 保存：自建模板写回；内置模板与新建模板走「另存为」 */
+function saveEdit(): void {
+  if (editingId.value && !editingBuiltin.value) {
+    if (templates.update(editingId.value)) toast(`已保存「${editingName.value}」`, 'success')
+    else toast('模板过大，保存失败', 'error')
+    return
+  }
+  startSaveAs()
+}
+
+/** 另存为：弹出名称栏，把当前编辑内容存为新模板 */
+function startSaveAs(): void {
+  saveName.value = editingBuiltin.value ? `${editingName.value} 副本` : ''
+  showSave.value = true
+}
+
+async function saveAsNew(): Promise<void> {
+  const name = saveName.value.trim()
+  if (!name) return
+  const id = templates.save(name)
+  if (!id) {
+    toast('模板过大，保存失败', 'error')
+    return
+  }
+  showSave.value = false
+  saveName.value = ''
+  editingId.value = id
+  toast(`已保存模板「${name}」`, 'success')
+}
+
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 const boxEl = ref<HTMLDivElement | null>(null)
-const showSave = ref(false)
-const saveName = ref('')
 /** 画布上悬停/拖动到图层时的抓取光标 */
 const grabbing = ref(false)
 
@@ -43,40 +101,6 @@ function measureContext(): CanvasRenderingContext2D {
     mctx = document.createElement('canvas').getContext('2d') as CanvasRenderingContext2D
   }
   return mctx
-}
-
-/** 生成一张干净的样张（渐变天空 + 地平线），工作室里预览水印效果 */
-async function makeSample(): Promise<ImageBitmap> {
-  const oc = new OffscreenCanvas(SAMPLE_W, SAMPLE_H)
-  const ctx = oc.getContext('2d') as OffscreenCanvasRenderingContext2D
-  const sky = ctx.createLinearGradient(0, 0, 0, SAMPLE_H * 0.72)
-  sky.addColorStop(0, '#2b3a4a')
-  sky.addColorStop(0.65, '#6e7f8c')
-  sky.addColorStop(1, '#c9b8a3')
-  ctx.fillStyle = sky
-  ctx.fillRect(0, 0, SAMPLE_W, SAMPLE_H * 0.72)
-  // 太阳
-  ctx.fillStyle = 'rgba(255, 214, 156, 0.9)'
-  ctx.beginPath()
-  ctx.arc(SAMPLE_W * 0.68, SAMPLE_H * 0.4, SAMPLE_H * 0.11, 0, Math.PI * 2)
-  ctx.fill()
-  // 地面
-  const ground = ctx.createLinearGradient(0, SAMPLE_H * 0.72, 0, SAMPLE_H)
-  ground.addColorStop(0, '#4a4238')
-  ground.addColorStop(1, '#2a2620')
-  ctx.fillStyle = ground
-  ctx.fillRect(0, SAMPLE_H * 0.72, SAMPLE_W, SAMPLE_H * 0.28)
-  // 远山剪影
-  ctx.fillStyle = 'rgba(38, 34, 30, 0.85)'
-  ctx.beginPath()
-  ctx.moveTo(0, SAMPLE_H * 0.72)
-  ctx.lineTo(SAMPLE_W * 0.22, SAMPLE_H * 0.55)
-  ctx.lineTo(SAMPLE_W * 0.4, SAMPLE_H * 0.72)
-  ctx.lineTo(SAMPLE_W * 0.56, SAMPLE_H * 0.6)
-  ctx.lineTo(SAMPLE_W * 0.78, SAMPLE_H * 0.72)
-  ctx.closePath()
-  ctx.fill()
-  return await createImageBitmap(oc)
 }
 
 function resolvedLayers(): WatermarkLayer[] {
@@ -336,13 +360,13 @@ function onPointerDown(e: PointerEvent): void {
     const box = measureLayer(l, SAMPLE_W, SAMPLE_H, measureContext())
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
-      const c = layerCenter(l, SAMPLE_W, SAMPLE_H)
+      const c = layerPivot(l, SAMPLE_W, SAMPLE_H)
       gesture = {
         type: 'layer',
         id: l.id,
         startClient: { x: e.clientX, y: e.clientY },
-        startCx: c.cx,
-        startCy: c.cy,
+        startCx: c.x,
+        startCy: c.y,
       }
       grabbing.value = true
       return
@@ -536,41 +560,10 @@ function onCursorMove(e: PointerEvent): void {
   grabbing.value = false
 }
 
-function presetItems(): DropdownItem[] {
-  if (!presets.all.length) return [{ label: '还没有保存的水印', disabled: true, action: () => undefined }]
-  return presets.all.map((p) => ({
-    label: p.name,
-    danger: false,
-    action: () => {
-      presets.apply(p.id)
-    },
-  }))
-}
-
-function deleteItems(): DropdownItem[] {
-  return presets.all.map((p) => ({
-    label: `删除「${p.name}」`,
-    danger: true,
-    action: () => presets.remove(p.id),
-  }))
-}
-
-async function savePreset(): Promise<void> {
-  const name = saveName.value.trim()
-  if (!name) return
-  if (!presets.save(name)) {
-    toast('水印过大，保存失败', 'error')
-    return
-  }
-  showSave.value = false
-  saveName.value = ''
-  toast(`已保存水印「${name}」`, 'success')
-}
-
 let ro: ResizeObserver | null = null
 
 onMounted(async () => {
-  sampleBmp = await makeSample()
+  sampleBmp = await makeSampleBitmap()
   ro = new ResizeObserver(() => redraw())
   if (boxEl.value) ro.observe(boxEl.value)
   redraw()
@@ -587,35 +580,54 @@ onBeforeUnmount(() => {
 
 // 图层任何变化（含应用预设替换数组、拖动偏移）都即时重绘
 watch([() => wm.layers, () => wm.selectedId], scheduleRedraw, { deep: true })
+
+// 编辑器从隐藏转为可见时画布尺寸从 0 就绪，重绘一帧
+watch(mode, async (m) => {
+  if (m !== 'edit') return
+  await nextTick()
+  redraw()
+})
 </script>
 
 <template>
   <div class="studio">
     <header class="head material" data-tauri-drag-region>
-      <AppButton variant="ghost" size="sm" @click="emit('back')"><ArrowLeft :size="14" />返回</AppButton>
-      <h1>水印工作室</h1>
-      <span class="flex" />
-      <AppButton size="sm" @click="wm.addText()"><Plus :size="13" />新建空白</AppButton>
-      <AppDropdown :items="presetItems()" align="right">
-        <template #trigger>
-          <AppButton size="sm"><Check :size="13" />应用水印</AppButton>
-        </template>
-      </AppDropdown>
-      <AppDropdown v-if="presets.all.length" :items="deleteItems()" align="right">
-        <template #trigger>
-          <AppButton size="sm" variant="ghost"><Trash2 :size="13" /></AppButton>
-        </template>
-      </AppDropdown>
-      <AppButton size="sm" variant="primary" @click="showSave = true"><Save :size="13" />保存为水印</AppButton>
+      <template v-if="mode === 'manage'">
+        <AppButton variant="ghost" size="sm" @click="emit('back')"><ArrowLeft :size="14" />返回</AppButton>
+        <h1>水印工作室</h1>
+        <span class="flex" />
+        <AppButton size="sm" variant="primary" @click="openCreate"><Plus :size="13" />新建模板</AppButton>
+      </template>
+      <template v-else>
+        <AppButton variant="ghost" size="sm" @click="backToManage"><ArrowLeft :size="14" />模板库</AppButton>
+        <h1 class="edit-title" :title="editingName">{{ editingName }}</h1>
+        <span v-if="editingBuiltin" class="badge">内置 · 保存将另存为副本</span>
+        <span class="flex" />
+        <AppButton size="sm" @click="saveEdit"><Save :size="13" />{{ editingBuiltin ? '另存为副本' : '保存' }}</AppButton>
+        <AppButton v-if="!editingBuiltin && editingId" size="sm" variant="ghost" @click="startSaveAs">
+          <Check :size="13" />另存为新模板
+        </AppButton>
+      </template>
     </header>
 
     <div v-if="showSave" class="save-bar">
-      <input v-model="saveName" class="text-input" placeholder="水印名称" @keyup.enter="savePreset" />
-      <AppButton size="sm" variant="primary" @click="savePreset">保存</AppButton>
+      <input
+        v-model="saveName"
+        class="text-input"
+        placeholder="模板名称"
+        @keyup.enter="saveAsNew"
+      />
+      <AppButton size="sm" variant="primary" @click="saveAsNew">保存</AppButton>
       <AppButton size="sm" variant="ghost" @click="showSave = false">取消</AppButton>
     </div>
 
-    <div class="body">
+    <!-- 模板管理：卡片列出全部模板（默认视图） -->
+    <Transition name="pane" mode="out-in">
+      <TemplateManager v-if="mode === 'manage'" @edit="openEdit" @create="openCreate" />
+    </Transition>
+
+    <!-- 模板编辑器：v-show 常驻，画布状态与视图变换在切换间保留 -->
+    <div v-show="mode === 'edit'" class="body">
       <div ref="boxEl" class="preview">
         <canvas
           ref="canvasEl"
@@ -658,6 +670,38 @@ watch([() => wm.layers, () => wm.selectedId], scheduleRedraw, { deep: true })
 h1 {
   font-size: 14px;
   font-weight: 600;
+}
+.edit-title {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge {
+  height: 20px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+/* 管理页 ⇄ 编辑页的内部切换：轻微纵向推移的交叉淡入 */
+.pane-enter-active {
+  transition: opacity 200ms var(--ease-soft), transform 200ms var(--ease-soft);
+}
+.pane-leave-active {
+  transition: opacity 130ms var(--ease), transform 130ms var(--ease);
+}
+.pane-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.pane-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
 }
 .flex {
   flex: 1;

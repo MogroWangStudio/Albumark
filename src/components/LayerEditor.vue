@@ -21,7 +21,6 @@ import { TOKENS, missingTokens } from '@/core/tokens'
 import { toast } from '@/stores/toast'
 import { useFontsStore, FONT_CATEGORY_LABELS } from '@/stores/fonts'
 import { useTemplatesStore } from '@/stores/templates'
-import { usePresetsStore } from '@/stores/presets'
 import { useWatermarkStore } from '@/stores/watermark'
 import type { AnchorPreset, ImageLayer, TextLayer, WatermarkLayer } from '@/types/watermark'
 import type { ExifSummary } from '@/types/image'
@@ -42,7 +41,6 @@ const props = withDefaults(
 
 const wm = useWatermarkStore()
 const templates = useTemplatesStore()
-const presets = usePresetsStore()
 const fonts = useFontsStore()
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -154,8 +152,25 @@ async function onImageFile(e: Event): Promise<void> {
 }
 
 function layerName(l: WatermarkLayer): string {
+  // 自定义名称优先（默认名「文本水印」视为未命名，继续显示内容前缀）
+  if (l.name.trim() && l.name !== '文本水印') return l.name
   if (l.type === 'text') return l.content.split('\n')[0]?.slice(0, 16) || '文本水印'
   return l.name
+}
+
+/* 双击图层名称：行内重命名（Enter/失焦确认，Escape 取消） */
+const renamingId = ref<string | null>(null)
+const renameValue = ref('')
+
+function startRename(l: WatermarkLayer): void {
+  renamingId.value = l.id
+  renameValue.value = layerName(l)
+}
+
+function commitRename(): void {
+  const l = wm.layers.find((x) => x.id === renamingId.value)
+  if (l) wm.update(l.id, { name: renameValue.value.trim() })
+  renamingId.value = null
 }
 
 function templateItems(): DropdownItem[] {
@@ -166,13 +181,6 @@ function templateItems(): DropdownItem[] {
       action: () => {
         void templates.apply(t.id)
         toast(`已应用模板「${t.name}」`)
-      },
-    })),
-    ...presets.all.map((p) => ({
-      label: `应用水印「${p.name}」`,
-      action: () => {
-        presets.apply(p.id)
-        toast(`已应用水印「${p.name}」`)
       },
     })),
   ]
@@ -259,7 +267,17 @@ function applyCustomFont(): void {
       >
         <Type v-if="l.type === 'text'" :size="13" class="icon" />
         <ImageIcon v-else :size="13" class="icon" />
-        <span class="name">{{ layerName(l) }}</span>
+        <input
+          v-if="renamingId === l.id"
+          v-model="renameValue"
+          class="name-edit"
+          spellcheck="false"
+          @click.stop
+          @keyup.enter="commitRename"
+          @keyup.escape="renamingId = null"
+          @blur="commitRename"
+        />
+        <span v-else class="name" title="双击重命名" @dblclick.stop="startRename(l)">{{ layerName(l) }}</span>
         <button
           class="tool"
           :aria-label="l.visible ? '隐藏图层' : '显示图层'"
@@ -339,7 +357,7 @@ function applyCustomFont(): void {
             </select>
           </label>
           <div class="field">
-            <span>字重（可变字体无极调节）</span>
+            <span>字重</span>
             <AppSlider
               :model-value="selectedText!.fontWeight"
               :min="100"
@@ -540,6 +558,7 @@ function applyCustomFont(): void {
     <template v-if="wm.selected">
       <section>
         <h3>位置与变换</h3>
+        <p class="anchor-label">定位锚点</p>
         <div class="anchor-grid" role="group" aria-label="定位锚点">
           <button
             v-for="a in anchors"
@@ -551,6 +570,21 @@ function applyCustomFont(): void {
             <span />
           </button>
         </div>
+        <template v-if="wm.selected!.type === 'text'">
+          <p class="anchor-label">文字框锚点</p>
+          <div class="anchor-grid" role="group" aria-label="文字框锚点">
+            <button
+              v-for="a in anchors"
+              :key="a.key"
+              :title="a.label"
+              :class="{ on: (selectedText!.boxAnchor ?? 'middle-center') === a.key }"
+              @click="wm.update(selectedText!.id, { boxAnchor: a.key })"
+            >
+              <span />
+            </button>
+          </div>
+          <p class="hint">决定文字框的哪个位置对准定位锚点：居中即框中心对准，选角时文字向另一侧展开。</p>
+        </template>
         <AppSlider
           :model-value="offX"
           :min="-Math.round(long * 0.6)"
@@ -693,6 +727,7 @@ function applyCustomFont(): void {
   border-color: var(--accent);
 }
 .text-input.area {
+  width: 100%;
   height: auto;
   padding: 8px 10px;
   line-height: 1.6;
@@ -754,6 +789,17 @@ function applyCustomFont(): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.name-edit {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--bg);
+  font-size: 12px;
+  outline: none;
 }
 .tool {
   width: 22px;
@@ -870,12 +916,18 @@ h3 {
 .group summary:hover {
   color: var(--text);
 }
+.anchor-label {
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-align: center;
+  margin-bottom: 5px;
+}
 .anchor-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 4px;
-  max-width: 132px;
-  margin-bottom: 10px;
+  width: 132px;
+  margin: 0 auto 10px;
 }
 .anchor-grid button {
   aspect-ratio: 1;

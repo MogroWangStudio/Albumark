@@ -71,6 +71,11 @@ export interface TextLayer extends BaseLayer {
   letterSpacing: number
   lineHeight: number
   align: 'left' | 'center' | 'right'
+  /**
+   * 文字框锚点（九宫格）：文字框（含背景条）的哪个位置对准定位点。
+   * 缺省按「居中」处理（定位点落在框中心），兼容旧数据。
+   */
+  boxAnchor?: AnchorPreset
   shadow: TextShadow
   stroke: TextStroke
   background: TextBackground
@@ -96,6 +101,8 @@ export interface WatermarkTemplate {
   id: string
   name: string
   builtin?: boolean
+  createdAt?: number
+  updatedAt?: number
   layers: WatermarkLayer[]
   assets: SerializedAsset[]
 }

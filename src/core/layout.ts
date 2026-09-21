@@ -21,13 +21,19 @@ export function anchorPoint(anchor: string, imgW: number, imgH: number): { x: nu
   return { x: (col / 2) * imgW, y: (row / 2) * imgH }
 }
 
-/** 图层中心：锚点 + 偏移。
- * 偏移以图片「长边」的百分比存储——横竖屏切换时长边不变，
- * 两个方向的像素距离数值保持一致，不会互相换位。 */
-export function layerCenter(l: WatermarkLayer, imgW: number, imgH: number): { cx: number; cy: number } {
+/** 图层定位点：锚点 + 偏移。文字框锚点决定文字框的哪个位置对准这个点。 */
+export function layerPivot(l: WatermarkLayer, imgW: number, imgH: number): { x: number; y: number } {
   const a = anchorPoint(l.anchor, imgW, imgH)
   const long = Math.max(imgW, imgH)
-  return { cx: a.x + (l.offsetX / 100) * long, cy: a.y + (l.offsetY / 100) * long }
+  return { x: a.x + (l.offsetX / 100) * long, y: a.y + (l.offsetY / 100) * long }
+}
+
+/** 文字框锚点在框内的位置（top-left = 左上角原点）。缺省按「居中」处理。 */
+function boxAnchorPoint(l: TextLayer, w: number, h: number): { x: number; y: number } {
+  const ba = l.boxAnchor ?? 'middle-center'
+  const col = ba.endsWith('left') ? 0 : ba.endsWith('center') ? 1 : 2
+  const row = ba.startsWith('top') ? 0 : ba.startsWith('middle') ? 1 : 2
+  return { x: (col / 2) * w, y: (row / 2) * h }
 }
 
 export interface TextMetricsResult {
@@ -91,11 +97,11 @@ export function measureLayer(
   mctx: Ctx2D,
 ): LayerBox {
   const long = Math.max(imgW, imgH)
-  const { cx, cy } = layerCenter(layer, imgW, imgH)
+  const pivot = layerPivot(layer, imgW, imgH)
 
   if (layer.type === 'image') {
     const h = (layer.scale / 100) * long
-    return { cx, cy, w: h * layer.aspect, h, rotation: layer.rotation }
+    return { cx: pivot.x, cy: pivot.y, w: h * layer.aspect, h, rotation: layer.rotation }
   }
 
   const fontSize = (layer.scale / 100) * long
@@ -107,7 +113,9 @@ export function measureLayer(
     w += pad * 2
     h += pad * 2
   }
-  return { cx, cy, w, h, rotation: layer.rotation }
+  // 文字框锚点：框上 boxAnchorPoint 处对准定位点（居中时框中心 = 定位点）
+  const ap = boxAnchorPoint(layer, w, h)
+  return { cx: pivot.x + w / 2 - ap.x, cy: pivot.y + h / 2 - ap.y, w, h, rotation: layer.rotation }
 }
 
 /** 点（图片坐标系）是否落在图层包围盒内（按旋转求逆）。 */
