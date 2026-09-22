@@ -7,6 +7,7 @@ import type {
   ImageLayer,
   LayerPatch,
   TextLayer,
+  TextLayerPatch,
   WatermarkLayer,
 } from '@/types/watermark'
 import { migrateLayer, migrateOffsetsToPx } from '@/types/watermark'
@@ -32,13 +33,16 @@ function defaultOffset(anchor: AnchorPreset): { offsetX: number; offsetY: number
 }
 
 export function makeTextLayer(patch: Partial<TextLayer> = {}): TextLayer {
+  const anchor = patch.anchor ?? 'bottom-right'
   return {
     id: uid(),
     type: 'text',
     name: '文本水印',
     visible: true,
-    anchor: 'bottom-right',
-    ...defaultOffset('bottom-right'),
+    anchor,
+    ...defaultOffset(anchor),
+    // 文字框锚点跟随定位锚点：贴边文字向图内展开，框中心对准角落会越界
+    boxAnchor: anchor,
     scale: 3.6,
     rotation: 0,
     opacity: 100,
@@ -202,10 +206,13 @@ export const useWatermarkStore = defineStore('watermark', () => {
     list.splice(j, 0, l)
   }
 
-  /** 点击九宫格：设为定位锚点，并把偏移重置为该角落的默认边距。 */
+  /** 点击九宫格：设为定位锚点，偏移重置为该角落的默认边距；文字框锚点跟随（向图内展开）。 */
   function positionPreset(anchor: AnchorPreset): void {
     if (!selectedId.value) return
-    update(selectedId.value, { anchor, ...defaultOffset(anchor) })
+    const layer = editTarget().find((l) => l.id === selectedId.value)
+    const patch: LayerPatch = { anchor, ...defaultOffset(anchor) }
+    if (layer?.type === 'text') (patch as TextLayerPatch).boxAnchor = anchor
+    update(selectedId.value, patch)
   }
 
   /** 深拷贝为纯数据：响应式 Proxy 无法传给 Worker（结构化克隆限制）。 */

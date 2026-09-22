@@ -117,21 +117,28 @@ export type AnchorPreset =
   | 'bottom-center'
   | 'bottom-right'
 
-/** 旧版百分比坐标 → 锚点 + 偏移 的迁移。 */
+/** 旧版百分比坐标 → 锚点 + 偏移 的迁移；文字框锚点缺省跟随定位锚点。 */
 export function migrateLayer<T extends WatermarkLayer>(l: T): T {
-  if ('anchor' in l && typeof l.anchor === 'string') return l
-  const legacy = l as unknown as { x?: number; y?: number }
-  const x = typeof legacy.x === 'number' ? legacy.x : 50
-  const y = typeof legacy.y === 'number' ? legacy.y : 50
-  const col = x < 25 ? 0 : x < 75 ? 1 : 2
-  const row = y < 25 ? 0 : y < 75 ? 1 : 2
-  const anchor = (['top', 'middle', 'bottom'][row] +
-    '-' +
-    (['left', 'center', 'right'][col] as string)) as AnchorPreset
-  const rest = { ...l } as Record<string, unknown>
-  delete rest.x
-  delete rest.y
-  return { ...rest, anchor, offsetX: x - col * 50, offsetY: y - row * 50 } as T
+  let out = l
+  if (!('anchor' in l) || typeof l.anchor !== 'string') {
+    const legacy = l as unknown as { x?: number; y?: number }
+    const x = typeof legacy.x === 'number' ? legacy.x : 50
+    const y = typeof legacy.y === 'number' ? legacy.y : 50
+    const col = x < 25 ? 0 : x < 75 ? 1 : 2
+    const row = y < 25 ? 0 : y < 75 ? 1 : 2
+    const anchor = (['top', 'middle', 'bottom'][row] +
+      '-' +
+      (['left', 'center', 'right'][col] as string)) as AnchorPreset
+    const rest = { ...l } as Record<string, unknown>
+    delete rest.x
+    delete rest.y
+    out = { ...rest, anchor, offsetX: x - col * 50, offsetY: y - row * 50 } as T
+  }
+  // 文字框缺省对齐定位锚点：贴边文字向图内展开，默认框中心会压在角落定位点上越界
+  if (out.type === 'text' && !out.boxAnchor) {
+    return { ...out, boxAnchor: out.anchor }
+  }
+  return out
 }
 
 /**
