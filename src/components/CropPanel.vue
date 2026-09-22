@@ -73,13 +73,8 @@ function finishCrop(): void {
   const id = activeId.value
   const d = adjust.cropDraft
   if (id && d) {
-    if (isPlainFullCrop(d)) {
-      adjust.clearCrop(id)
-      void images.refreshThumb(id)
-    } else {
-      adjust.setCrop(id, d)
-      void images.refreshThumb(id, d)
-    }
+    if (isPlainFullCrop(d)) adjust.clearCrop(id)
+    else adjust.setCrop(id, d)
   }
   adjust.exitCrop()
 }

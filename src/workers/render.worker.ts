@@ -99,24 +99,30 @@ async function handle(job: RenderJob): Promise<void> {
     ctx.putImageData(image, 0, 0)
   }
 
-  // 边框水印在调节之后、普通图层之前逐层向外扩展画布；图层列表靠前者更贴近照片
+  // 边框水印在调节之后、普通图层之前逐层向外扩展画布；图层列表靠前者更贴近照片。
+  // 边框宽度按取样缩放系数等比折算，保证预览（缩放渲染）与导出的边框比例一致
   const borders = job.layers.filter((l): l is BorderLayer => l.type === 'border' && l.visible)
   const pictureLayers = job.layers.filter((l) => l.type !== 'border')
+  const scaled = (v: number): number => (v > 0 ? Math.max(1, Math.round(v * scale)) : 0)
   let framed: OffscreenCanvas = canvas
   let fw = w
   let fh = h
   for (const b of borders) {
-    const next = new OffscreenCanvas(fw + b.left + b.right, fh + b.top + b.bottom)
+    const bt = scaled(b.top)
+    const br = scaled(b.right)
+    const bb = scaled(b.bottom)
+    const bl = scaled(b.left)
+    const next = new OffscreenCanvas(fw + bl + br, fh + bt + bb)
     const nctx = next.getContext('2d') as OffscreenCanvasRenderingContext2D
     nctx.fillStyle = b.colorTop
-    nctx.fillRect(0, 0, next.width, b.top)
+    nctx.fillRect(0, 0, next.width, bt)
     nctx.fillStyle = b.colorBottom
-    nctx.fillRect(0, fh + b.top, next.width, b.bottom)
+    nctx.fillRect(0, fh + bt, next.width, bb)
     nctx.fillStyle = b.colorLeft
-    nctx.fillRect(0, b.top, b.left, fh)
+    nctx.fillRect(0, bt, bl, fh)
     nctx.fillStyle = b.colorRight
-    nctx.fillRect(fw + b.left, b.top, b.right, fh)
-    nctx.drawImage(framed, b.left, b.top)
+    nctx.fillRect(fw + bl, bt, br, fh)
+    nctx.drawImage(framed, bl, bt)
     framed = next
     fw = next.width
     fh = next.height

@@ -3,7 +3,6 @@ import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { readExif } from '@/core/exif'
 import { fetchImageBlob } from '@/core/platform'
-import { clamp01, type Crop } from '@/types/adjust'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
 import { useSettingsStore } from './settings'
@@ -184,39 +183,13 @@ export const useImagesStore = defineStore('images', () => {
     if (item) Object.assign(item, patch)
   }
 
-  /** 裁剪应用后重建缩略图（按裁剪区域重采样），让图库与预览构图一致；失败保留原图 */
-  async function refreshThumb(id: string, crop?: Crop): Promise<void> {
+  /** 替换缩略图（几何合成结果由调用方生成），并释放旧的对象 URL */
+  function setThumb(id: string, blob: Blob): void {
     const item = items.value.find((i) => i.id === id)
-    if (!item?.blob) return
-    try {
-      const bmp = await createImageBitmap(item.blob)
-      let sx = 0
-      let sy = 0
-      let sw = bmp.width
-      let sh = bmp.height
-      if (crop) {
-        sx = Math.round(clamp01(crop.x) * bmp.width)
-        sy = Math.round(clamp01(crop.y) * bmp.height)
-        sw = Math.max(1, Math.round(clamp01(crop.w) * bmp.width))
-        sh = Math.max(1, Math.round(clamp01(crop.h) * bmp.height))
-      }
-      const long = Math.max(sw, sh) || 1
-      const s = Math.min(1, THUMB_LONG / long)
-      const tw = Math.max(1, Math.round(sw * s))
-      const th = Math.max(1, Math.round(sh * s))
-      const oc = new OffscreenCanvas(tw, th)
-      const ctx = oc.getContext('2d')
-      if (ctx) {
-        ctx.drawImage(bmp, sx, sy, sw, sh, 0, 0, tw, th)
-        const thumb = await oc.convertToBlob({ type: 'image/jpeg', quality: 0.82 })
-        const url = URL.createObjectURL(thumb)
-        if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl)
-        patchItem(id, { thumbUrl: url })
-      }
-      bmp.close()
-    } catch {
-      /* 解码失败保留原缩略图 */
-    }
+    if (!item) return
+    const url = URL.createObjectURL(blob)
+    if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl)
+    patchItem(id, { thumbUrl: url })
   }
 
   return {
@@ -234,6 +207,6 @@ export const useImagesStore = defineStore('images', () => {
     setItems,
     adopt,
     patchItem,
-    refreshThumb,
+    setThumb,
   }
 })

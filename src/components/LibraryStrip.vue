@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, toRaw, watch } from 'vue'
 import { Copy, Crop, Droplets, Link2, Link2Off, MapPin, SlidersHorizontal, X } from 'lucide-vue-next'
 import { exifSummaryLine } from '@/core/exif'
+import { composeThumb } from '@/core/compose'
 import { isTauri, pickImagePaths } from '@/core/platform'
 import { croppedSize, isPlainFullCrop } from '@/types/adjust'
+import type { BorderLayer } from '@/types/watermark'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useWatermarkStore } from '@/stores/watermark'
@@ -15,6 +17,36 @@ const adjust = useAdjustStore()
 const wm = useWatermarkStore()
 
 const emit = defineEmits<{ photoCtx: [e: MouseEvent, id: string] }>()
+
+/* 几何签名：裁剪 / 翻转 / 拉直 / 边框变化后防抖重建缩略图，让图库与输出构图一致 */
+const geoSig = computed(() =>
+  JSON.stringify(
+    images.items.map((i) => ({
+      c: adjust.cropOf(i.id) ?? null,
+      b: wm
+        .effectiveLayers(i.id)
+        .filter((l) => l.type === 'border' && l.visible)
+        .map((l) => toRaw(l)),
+    })),
+  ),
+)
+let thumbTimer: number | null = null
+watch(geoSig, () => {
+  if (thumbTimer) window.clearTimeout(thumbTimer)
+  thumbTimer = window.setTimeout(async () => {
+    for (const item of images.items) {
+      if (!item.blob) continue
+      const crop = adjust.cropOf(item.id)
+      const borders = wm
+        .effectiveLayers(item.id)
+        .filter((l): l is BorderLayer => l.type === 'border' && l.visible)
+        .map((l) => toRaw(l))
+      if (!crop && !borders.length) continue
+      const blob = await composeThumb(item.blob, crop, borders)
+      if (blob) images.setThumb(item.id, blob)
+    }
+  }, 500)
+})
 
 /** 照片启用的按张独立处理（单独调节 / 单独水印 / 裁剪），用于缩略图角标 */
 function flags(id: string): ('adj' | 'wm' | 'crop')[] {
