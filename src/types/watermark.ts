@@ -90,12 +90,15 @@ export interface ImageLayer extends BaseLayer {
 /**
  * 边框水印：在图片四周向外扩展画布，逐边独立控制宽度与颜色。
  * 宽度为固定像素（原图尺度），可叠加多层（图层列表靠前者更贴近照片）。
+ * linked 为「四边同步」模式（缺省开启）：调整任一边同步四边；
+ * 一旦各边数值不一致则自动断开，重新调至一致后可再次开启。
  */
 export interface BorderLayer {
   id: string
   type: 'border'
   name: string
   visible: boolean
+  linked?: boolean
   top: number
   right: number
   bottom: number

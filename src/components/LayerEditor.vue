@@ -60,6 +60,77 @@ const selectedBorder = computed(() =>
   wm.selected?.type === 'border' ? (wm.selected as BorderLayer) : null,
 )
 
+/* ---------- 边框四边同步：链接时统一调整，各边不同则自动断开 ---------- */
+
+const SIDES = ['top', 'right', 'bottom', 'left'] as const
+type Side = (typeof SIDES)[number]
+const SIDE_LABELS: Record<Side, string> = { top: '上', right: '右', bottom: '下', left: '左' }
+const COLOR_KEYS: Record<Side, 'colorTop' | 'colorRight' | 'colorBottom' | 'colorLeft'> = {
+  top: 'colorTop',
+  right: 'colorRight',
+  bottom: 'colorBottom',
+  left: 'colorLeft',
+}
+const lastSide = ref<Side>('top')
+
+const borderLinked = computed(() => selectedBorder.value?.linked !== false)
+
+// 自动断开在 store.update 里统一处理：四边不一致即置 linked=false
+
+const borderLinkedModel = computed({
+  get: () => borderLinked.value,
+  set: (v: boolean) => {
+    const b = selectedBorder.value
+    if (!b) return
+    if (!v) {
+      wm.update(b.id, { linked: false })
+      return
+    }
+    // 重新链接：以最近编辑的一边为准统一四边（宽度与颜色）
+    const side = lastSide.value
+    const w = b[side]
+    const c = b[COLOR_KEYS[side]]
+    wm.update(b.id, {
+      top: w,
+      right: w,
+      bottom: w,
+      left: w,
+      colorTop: c,
+      colorRight: c,
+      colorBottom: c,
+      colorLeft: c,
+      linked: true,
+    })
+  },
+})
+
+function setBorderWidth(side: Side, v: number): void {
+  const b = selectedBorder.value
+  if (!b) return
+  lastSide.value = side
+  if (borderLinked.value) {
+    wm.update(b.id, { top: v, right: v, bottom: v, left: v })
+  } else {
+    wm.update(b.id, { [side]: Math.round(v) })
+  }
+}
+
+function setBorderColor(side: Side, c: string): void {
+  const b = selectedBorder.value
+  if (!b) return
+  lastSide.value = side
+  if (borderLinked.value) {
+    wm.update(b.id, { colorTop: c, colorRight: c, colorBottom: c, colorLeft: c })
+  } else {
+    wm.update(b.id, { [COLOR_KEYS[side]]: c })
+  }
+}
+
+function borderColor(side: Side): string {
+  const b = selectedBorder.value
+  return b ? b[COLOR_KEYS[side]] : '#FFFFFF'
+}
+
 /** 当前编辑目标图层列表（全局或单独水印副本），供图层列表渲染 */
 const editLayers = computed(() => wm.editTarget())
 
@@ -563,31 +634,66 @@ function applyCustomFont(): void {
       </section>
     </template>
 
-    <!-- 边框层：四边独立的宽度与颜色 -->
+    <!-- 边框层：同步模式下统一调整，断开后四边独立 -->
     <template v-if="selectedBorder">
       <section>
         <h3>边框</h3>
-        <p class="hint-inline">四边宽度为固定像素，边框向外扩展图片；列表中越靠前的边框越贴近照片。</p>
-        <div v-for="side in (['top', 'right', 'bottom', 'left'] as const)" :key="side" class="border-row">
-          <span class="border-label">{{ { top: '上', right: '右', bottom: '下', left: '左' }[side] }}</span>
+        <div class="linked-row">
+          <span class="fl">四边同步</span>
+          <AppSwitch
+            :model-value="borderLinkedModel"
+            @update:model-value="borderLinkedModel = $event"
+          />
+        </div>
+        <p class="hint-inline">
+          边框向外扩展图片；列表中越靠前的边框越贴近照片。{{
+            borderLinked
+              ? '同步模式：调整任一边，四边宽度与颜色一起变化。'
+              : '独立模式：各边单独调整；四边调至一致后可重新开启同步。'
+          }}
+        </p>
+        <div v-if="borderLinked" class="border-row">
+          <span class="border-label">四边</span>
           <AppSlider
             class="border-width"
-            :model-value="selectedBorder[side]"
+            :model-value="selectedBorder.top"
             :min="0"
             :max="400"
             label=""
             :format="(v) => `${Math.round(v)} px`"
-            @update:model-value="wm.update(selectedBorder!.id, { [side]: Math.round($event) })"
-            @reset="wm.update(selectedBorder!.id, { [side]: 0 })"
+            @update:model-value="setBorderWidth('top', $event)"
+            @reset="setBorderWidth('top', 0)"
           />
           <input
             class="color-input"
             type="color"
-            :value="selectedBorder[`color${side[0].toUpperCase()}${side.slice(1)}` as keyof BorderLayer] as string"
-            :title="`${{ top: '上', right: '右', bottom: '下', left: '左' }[side]}边颜色`"
-            @input="wm.update(selectedBorder!.id, { [`color${side[0].toUpperCase()}${side.slice(1)}`]: ($event.target as HTMLInputElement).value })"
+            :value="selectedBorder.colorTop"
+            title="四边颜色"
+            @input="setBorderColor('top', ($event.target as HTMLInputElement).value)"
           />
         </div>
+        <template v-else>
+          <div v-for="side in SIDES" :key="side" class="border-row">
+            <span class="border-label">{{ SIDE_LABELS[side] }}</span>
+            <AppSlider
+              class="border-width"
+              :model-value="selectedBorder[side]"
+              :min="0"
+              :max="400"
+              label=""
+              :format="(v) => `${Math.round(v)} px`"
+              @update:model-value="setBorderWidth(side, $event)"
+              @reset="setBorderWidth(side, 0)"
+            />
+            <input
+              class="color-input"
+              type="color"
+              :value="borderColor(side)"
+              :title="`${SIDE_LABELS[side]}边颜色`"
+              @input="setBorderColor(side, ($event.target as HTMLInputElement).value)"
+            />
+          </div>
+        </template>
       </section>
     </template>
 
@@ -760,6 +866,17 @@ function applyCustomFont(): void {
 
 <style scoped>
 /* 边框层的四边控制 */
+.linked-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.linked-row .fl {
+  font-size: 12px;
+  color: var(--text-2);
+}
 .border-row {
   display: flex;
   align-items: center;

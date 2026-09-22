@@ -135,7 +135,14 @@ export const useWatermarkStore = defineStore('watermark', () => {
 
   function update(id: string, patch: LayerPatch): void {
     const layer = editTarget().find((l) => l.id === id)
-    if (layer) Object.assign(layer, patch)
+    if (!layer) return
+    Object.assign(layer, patch)
+    // 边框同步保护：链接状态下四边宽度出现不一致（模板数据、批量修改等）→ 自动断开
+    if (layer.type === 'border' && layer.linked !== false) {
+      if (layer.top !== layer.right || layer.right !== layer.bottom || layer.bottom !== layer.left) {
+        layer.linked = false
+      }
+    }
   }
 
   function addText(patch: Partial<TextLayer> = {}): void {
