@@ -30,7 +30,8 @@ export function drawLayers(
 ): void {
   const long = Math.max(imgW, imgH)
   for (const layer of layers) {
-    if (!layer.visible) continue
+    // 边框层在 Worker 里扩展画布，不在此绘制
+    if (layer.type === 'border' || !layer.visible) continue
     const box = measureLayer(layer, imgW, imgH, ctx)
     ctx.save()
     ctx.globalAlpha = layer.opacity / 100
@@ -70,7 +71,7 @@ function drawOne(
   if (layer.type === 'image') {
     const bmp = assets.get(layer.assetId)
     if (bmp) ctx.drawImage(bmp, -box.w / 2, -box.h / 2, box.w, box.h)
-  } else {
+  } else if (layer.type === 'text') {
     drawText(ctx, layer, box, long)
   }
   ctx.restore()

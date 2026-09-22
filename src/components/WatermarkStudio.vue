@@ -134,9 +134,9 @@ function redraw(): void {
   ctx.drawImage(sampleBmp, 0, 0)
   drawLayers(ctx, SAMPLE_W, SAMPLE_H, resolvedLayers(), assetBmps)
 
-  // 选中图层：描边框 + 锚点十字，与主界面预览一致
+  // 选中图层：描边框 + 锚点十字，与主界面预览一致（边框层全画布，不画锚点）
   const sel = wm.selected
-  if (sel) {
+  if (sel && sel.type !== 'border') {
     const box = measureLayer(sel, SAMPLE_W, SAMPLE_H, measureContext())
     ctx.save()
     ctx.strokeStyle = 'rgba(255, 167, 47, 0.95)'
@@ -356,7 +356,7 @@ function onPointerDown(e: PointerEvent): void {
   const list = wm.layers
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
-    if (!l.visible) continue
+    if (l.type === 'border' || !l.visible) continue
     const box = measureLayer(l, SAMPLE_W, SAMPLE_H, measureContext())
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
@@ -410,7 +410,7 @@ function onPointerMove(e: PointerEvent): void {
   if (gesture.type === 'layer') {
     const gid = gesture.id
     const layer = wm.layers.find((l) => l.id === gid)
-    if (!layer) return
+    if (!layer || layer.type === 'border') return
     const dpx = ((e.clientX - gesture.startClient.x) * vmap.dpr) / vmap.scale
     const dpy = ((e.clientY - gesture.startClient.y) * vmap.dpr) / vmap.scale
     let cx = gesture.startCx + dpx
@@ -551,7 +551,7 @@ function onCursorMove(e: PointerEvent): void {
   const p = toImagePx(e.clientX, e.clientY)
   for (let i = wm.layers.length - 1; i >= 0; i--) {
     const l = wm.layers[i]
-    if (!l.visible) continue
+    if (l.type === 'border' || !l.visible) continue
     if (hitTest(measureLayer(l, SAMPLE_W, SAMPLE_H, measureContext()), p.x, p.y)) {
       grabbing.value = true
       return

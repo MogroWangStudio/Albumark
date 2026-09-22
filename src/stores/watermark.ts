@@ -4,6 +4,7 @@ import { uid } from '@/core/id'
 import { blobToDataUrl, dataUrlToBlob, rasterizeSvg } from '@/core/svg'
 import type {
   AnchorPreset,
+  BorderLayer,
   ImageLayer,
   LayerPatch,
   TextLayer,
@@ -59,6 +60,24 @@ export function makeTextLayer(patch: Partial<TextLayer> = {}): TextLayer {
     shadow: { enabled: true, blur: 18, opacity: 55, x: 0, y: 8 },
     stroke: { enabled: false, width: 6, color: '#000000' },
     background: { enabled: false, color: '#000000', opacity: 45, padding: 6, radius: 14 },
+    ...patch,
+  }
+}
+
+export function makeBorderLayer(patch: Partial<BorderLayer> = {}): BorderLayer {
+  return {
+    id: uid(),
+    type: 'border',
+    name: '边框',
+    visible: true,
+    top: 24,
+    right: 24,
+    bottom: 24,
+    left: 24,
+    colorTop: '#FFFFFF',
+    colorRight: '#FFFFFF',
+    colorBottom: '#FFFFFF',
+    colorLeft: '#FFFFFF',
     ...patch,
   }
 }
@@ -122,6 +141,15 @@ export const useWatermarkStore = defineStore('watermark', () => {
   function addText(patch: Partial<TextLayer> = {}): void {
     const layer = makeTextLayer(patch)
     editTarget().push(layer)
+    selectedId.value = layer.id
+  }
+
+  function addBorderLayer(patch: Partial<BorderLayer> = {}): void {
+    const layer = makeBorderLayer(patch)
+    // 边框按「图层列表靠前者更贴近照片」叠加：新边框放在已有边框之后、其余图层之前
+    const list = editTarget()
+    const lastBorder = list.map((l) => l.type).lastIndexOf('border')
+    list.splice(lastBorder + 1, 0, layer)
     selectedId.value = layer.id
   }
 
@@ -252,8 +280,34 @@ export const useWatermarkStore = defineStore('watermark', () => {
     selectedId.value = layers.value[0]?.id ?? null
   }
 
+  /**
+   * 把模板图层应用到当前编辑目标（全局或独立水印副本）。
+   * replace 完全覆盖，append 追加到现有图层之后。
+   */
+  function applyToTarget(
+    layersData: WatermarkLayer[],
+    assetData: SerializedAsset[],
+    mode: 'replace' | 'append',
+  ): void {
+    for (const a of assetData) {
+      if (!assets.value[a.id]) {
+        assets.value[a.id] = { ...a, blob: null }
+      }
+    }
+    const incoming = layersData.map((l) => migrateLayer(structuredClone(l)))
+    if (mode === 'replace' && editId.value) {
+      perImage.value = { ...perImage.value, [editId.value]: incoming }
+    } else if (mode === 'replace') {
+      layers.value = incoming
+    } else {
+      editTarget().push(...incoming)
+    }
+    selectedId.value = incoming[0]?.id ?? null
+    schedulePersist()
+  }
+
   function serialize(): { layers: WatermarkLayer[]; assets: SerializedAsset[] } {
-    const raw = toRaw(layers.value)
+    const raw = toRaw(editTarget())
     const used = new Set(raw.filter((l) => l.type === 'image').map((l) => (l as ImageLayer).assetId))
     const list: SerializedAsset[] = []
     for (const a of Object.values(assets.value)) {
@@ -318,6 +372,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     setIndividual,
     update,
     addText,
+    addBorderLayer,
     addImageFile,
     replaceImageFile,
     addImageLayer,
@@ -328,6 +383,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     perImageSnapshot,
     assetPayloads,
     applySerialized,
+    applyToTarget,
     serialize,
     schedulePersist,
     hydrate,

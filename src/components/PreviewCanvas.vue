@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch } from 'vue'
 import { ChevronUp } from 'lucide-vue-next'
 import type { WatermarkLayer } from '@/types/watermark'
 import { clamp01, CROP_MIN, cropRatioOf, cropRot, cropSourceSize, FULL_CROP, rotatedInnerRect, type Crop } from '@/types/adjust'
@@ -320,10 +320,16 @@ async function renderBase(draft: boolean): Promise<void> {
       ? { x: 0, y: 0, w: 1, h: 1, rot: d?.rot, flipH: d?.flipH, flipV: d?.flipV }
       : adjust.cropOf(a.id)
     const crop = sel ? { ...sel } : undefined
+    // 边框层由 Worker 扩展画布（拍平为纯数据）；裁剪编辑时不加框，保持裁剪框坐标系
+    const borders = adjust.cropMode
+      ? []
+      : resolvedLayers()
+          .filter((l) => l.type === 'border')
+          .map((l) => structuredClone(toRaw(l)))
     const res = await renderClient.renderPreview(
       bmp,
       [],
-      [],
+      borders,
       adjust.snapshotFor(a.id),
       maxLong,
       crop,
@@ -483,9 +489,9 @@ function drawOverlay(): void {
     ctx.restore()
   }
 
-  // 选中图层的锚点十字
+  // 选中图层的锚点十字（边框层覆盖全画布、无定位锚点）
   const sel = wm.selected
-  if (sel) {
+  if (sel && sel.type !== 'border') {
     const a = anchorPoint(sel.anchor, bmp.width, bmp.height)
     ctx.save()
     ctx.strokeStyle = 'rgba(255, 167, 47, 0.75)'
@@ -759,7 +765,7 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
   const xs: number[] = [imgW / 2, imgW * 0.04, imgW * 0.96]
   const ys: number[] = [imgH / 2, imgH * 0.04, imgH * 0.96]
   for (const l of resolvedLayers()) {
-    if (l.id === excludeId || !l.visible) continue
+    if (l.id === excludeId || !l.visible || l.type === 'border') continue
     const c = layerPivot(l, imgW, imgH)
     xs.push(c.x)
     ys.push(c.y)
@@ -1015,7 +1021,8 @@ function onPointerDown(e: PointerEvent): void {
   }
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
-    if (!l.visible) continue
+    // 边框层覆盖全画布、无独立位置，只能从图层列表选中
+    if (l.type === 'border' || !l.visible) continue
     const box = measureLayer(resolvedLayer(l), resultMap.w, resultMap.h, measureContext())
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
@@ -1104,7 +1111,7 @@ function onPointerMove(e: PointerEvent): void {
     const cx = Math.min(imgW, Math.max(0, snapped.cx))
     const cy = Math.min(imgH, Math.max(0, snapped.cy))
     const layer = wm.editTarget().find((l) => l.id === gid)
-    if (!layer) return
+    if (!layer || layer.type === 'border') return
     const a = anchorPoint(layer.anchor, imgW, imgH)
     snapLines.value = snapped.lines.x !== undefined || snapped.lines.y !== undefined ? snapped.lines : null
     wm.update(gid, {
@@ -1232,7 +1239,15 @@ function resetView(): void {
 
 /* ---------- 渲染调度 ---------- */
 
-// 底图相关变化才走 Worker；水印图层变化只重绘叠加层
+// 底图相关变化才走 Worker；水印图层变化只重绘叠加层。
+// 例外：边框层参与画布几何（向外扩展），它的增删改必须走完整渲染
+let lastBorderSig = ""
+function borderSignature(): string {
+  const list = wm.effectiveLayers(active.value?.id ?? null)
+  return JSON.stringify(
+    list.filter((l) => l.type === "border").map((l) => toRaw(l)),
+  )
+}
 watch(
   [
     active,
@@ -1247,7 +1262,15 @@ watch(
 )
 watch(
   [() => wm.layers, () => wm.perImage, () => wm.selectedId],
-  () => scheduleOverlay(),
+  () => {
+    const sig = borderSignature()
+    if (sig !== lastBorderSig) {
+      lastBorderSig = sig
+      scheduleBase()
+    } else {
+      scheduleOverlay()
+    }
+  },
   { deep: true },
 )
 

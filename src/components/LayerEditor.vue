@@ -5,6 +5,7 @@ import {
   ArrowUp,
   Eye,
   EyeOff,
+  Frame,
   Image as ImageIcon,
   Replace,
   TriangleAlert,
@@ -12,8 +13,7 @@ import {
   Type,
 } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
-import AppDropdown from '@/components/ui/AppDropdown.vue'
-import type { DropdownItem } from '@/components/ui/AppDropdown.vue'
+import AppDialog from '@/components/ui/AppDialog.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
@@ -22,7 +22,7 @@ import { toast } from '@/stores/toast'
 import { useFontsStore, FONT_CATEGORY_LABELS } from '@/stores/fonts'
 import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
-import type { AnchorPreset, ImageLayer, TextLayer, WatermarkLayer } from '@/types/watermark'
+import type { AnchorPreset, BorderLayer, ImageLayer, TextLayer, WatermarkLayer } from '@/types/watermark'
 import type { ExifSummary } from '@/types/image'
 
 const props = withDefaults(
@@ -56,6 +56,30 @@ const selectedText = computed(() =>
 const selectedImage = computed(() =>
   wm.selected?.type === 'image' ? (wm.selected as ImageLayer) : null,
 )
+const selectedBorder = computed(() =>
+  wm.selected?.type === 'border' ? (wm.selected as BorderLayer) : null,
+)
+
+/** 当前编辑目标图层列表（全局或单独水印副本），供图层列表渲染 */
+const editLayers = computed(() => wm.editTarget())
+
+/* ---------- 模板选择：选模板后询问覆盖还是追加 ---------- */
+
+const tplOpen = ref(false)
+const tplPending = ref<{ id: string; name: string; layers: WatermarkLayer[]; assets: unknown[]; builtin?: boolean } | null>(null)
+
+function openTplPicker(): void {
+  tplPending.value = null
+  tplOpen.value = true
+}
+
+function applyTpl(mode: 'replace' | 'append'): void {
+  const t = tplPending.value
+  if (!t) return
+  wm.applyToTarget(t.layers, t.assets as never[], mode)
+  toast(mode === 'replace' ? `已覆盖为模板「${t.name}」` : `已追加模板「${t.name}」`, 'success')
+  tplOpen.value = false
+}
 
 const DEFAULT_FONT = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif'
 
@@ -105,15 +129,15 @@ const missing = computed(() => {
   return missingTokens(t.content, props.exif, props.baseName)
 })
 
-/* 偏移即固定像素：所有照片上距离一致，不随图片尺寸 / 比例缩放 */
-const offX = computed(() => wm.selected?.offsetX ?? 0)
-const offY = computed(() => wm.selected?.offsetY ?? 0)
+/* 偏移即固定像素：所有照片上距离一致，不随图片尺寸 / 比例缩放（边框层无偏移） */
+const offX = computed(() => (wm.selected && wm.selected.type !== 'border' ? wm.selected.offsetX : 0))
+const offY = computed(() => (wm.selected && wm.selected.type !== 'border' ? wm.selected.offsetY : 0))
 function setOffsetX(px: number): void {
-  if (!wm.selected) return
+  if (!wm.selected || wm.selected.type === 'border') return
   wm.update(wm.selected.id, { offsetX: Math.round(px) })
 }
 function setOffsetY(px: number): void {
-  if (!wm.selected) return
+  if (!wm.selected || wm.selected.type === 'border') return
   wm.update(wm.selected.id, { offsetY: Math.round(px) })
 }
 
@@ -170,19 +194,6 @@ function commitRename(): void {
   const l = wm.layers.find((x) => x.id === renamingId.value)
   if (l) wm.update(l.id, { name: renameValue.value.trim() })
   renamingId.value = null
-}
-
-function templateItems(): DropdownItem[] {
-  return [
-    { label: '把当前配置存为模板…', action: () => (showSave.value = true) },
-    ...templates.all.map((t) => ({
-      label: `应用模板「${t.name}」`,
-      action: () => {
-        void templates.apply(t.id)
-        toast(`已应用模板「${t.name}」`)
-      },
-    })),
-  ]
 }
 
 async function saveTemplate(): Promise<void> {
@@ -242,12 +253,9 @@ function applyCustomFont(): void {
     <div class="row">
       <AppButton size="sm" @click="wm.addText()"><Type :size="13" />文本</AppButton>
       <AppButton size="sm" @click="pickImage(null)"><ImageIcon :size="13" />图片 / SVG</AppButton>
+      <AppButton size="sm" @click="wm.addBorderLayer()"><Frame :size="13" />边框</AppButton>
       <span class="flex" />
-      <AppDropdown v-if="showTemplates" :items="templateItems()" align="right">
-        <template #trigger>
-          <AppButton size="sm">模板</AppButton>
-        </template>
-      </AppDropdown>
+      <AppButton v-if="showTemplates" size="sm" @click="openTplPicker">模板</AppButton>
     </div>
 
     <div v-if="showSave" class="save-row">
@@ -256,15 +264,16 @@ function applyCustomFont(): void {
       <AppButton size="sm" variant="ghost" @click="showSave = false">取消</AppButton>
     </div>
 
-    <ul class="layers" v-if="wm.layers.length">
+    <ul class="layers" v-if="editLayers.length">
       <li
-        v-for="(l, i) in wm.layers"
+        v-for="(l, i) in editLayers"
         :key="l.id"
         class="layer"
         :class="{ active: l.id === wm.selectedId }"
         @click="wm.selectedId = l.id"
       >
         <Type v-if="l.type === 'text'" :size="13" class="icon" />
+        <Frame v-else-if="l.type === 'border'" :size="13" class="icon" />
         <ImageIcon v-else :size="13" class="icon" />
         <input
           v-if="renamingId === l.id"
@@ -291,7 +300,7 @@ function applyCustomFont(): void {
         <button
           class="tool"
           aria-label="下移"
-          :disabled="i === wm.layers.length - 1"
+          :disabled="i === editLayers.length - 1"
           @click.stop="wm.move(i, 1)"
         >
           <ArrowDown :size="13" />
@@ -301,7 +310,7 @@ function applyCustomFont(): void {
         </button>
       </li>
     </ul>
-    <p v-else class="empty">还没有图层。添加文本或图片，开始制作水印。</p>
+    <p v-else class="empty">还没有图层。添加文本、图片或边框，开始制作水印。</p>
 
     <template v-if="selectedText">
       <section>
@@ -554,7 +563,35 @@ function applyCustomFont(): void {
       </section>
     </template>
 
-    <template v-if="wm.selected">
+    <!-- 边框层：四边独立的宽度与颜色 -->
+    <template v-if="selectedBorder">
+      <section>
+        <h3>边框</h3>
+        <p class="hint-inline">四边宽度为固定像素，边框向外扩展图片；列表中越靠前的边框越贴近照片。</p>
+        <div v-for="side in (['top', 'right', 'bottom', 'left'] as const)" :key="side" class="border-row">
+          <span class="border-label">{{ { top: '上', right: '右', bottom: '下', left: '左' }[side] }}</span>
+          <AppSlider
+            class="border-width"
+            :model-value="selectedBorder[side]"
+            :min="0"
+            :max="400"
+            label=""
+            :format="(v) => `${Math.round(v)} px`"
+            @update:model-value="wm.update(selectedBorder!.id, { [side]: Math.round($event) })"
+            @reset="wm.update(selectedBorder!.id, { [side]: 0 })"
+          />
+          <input
+            class="color-input"
+            type="color"
+            :value="selectedBorder[`color${side[0].toUpperCase()}${side.slice(1)}` as keyof BorderLayer] as string"
+            :title="`${{ top: '上', right: '右', bottom: '下', left: '左' }[side]}边颜色`"
+            @input="wm.update(selectedBorder!.id, { [`color${side[0].toUpperCase()}${side.slice(1)}`]: ($event.target as HTMLInputElement).value })"
+          />
+        </div>
+      </section>
+    </template>
+
+    <template v-if="wm.selected && wm.selected.type !== 'border'">
       <section>
         <h3>位置与变换</h3>
         <p class="anchor-label">定位锚点</p>
@@ -646,8 +683,8 @@ function applyCustomFont(): void {
           <span class="fl">混合</span>
           <select
             class="select grow"
-            :value="wm.selected.blend"
-            @change="wm.update(wm.selected!.id, { blend: ($event.target as HTMLSelectElement).value as WatermarkLayer['blend'] })"
+            :value="(wm.selected as ImageLayer).blend"
+            @change="wm.update(wm.selected!.id, { blend: ($event.target as HTMLSelectElement).value as ImageLayer['blend'] })"
           >
             <option v-for="b in BLEND_OPTIONS" :key="b.value" :value="b.value">{{ b.label }}</option>
           </select>
@@ -693,10 +730,118 @@ function applyCustomFont(): void {
       hidden
       @change="onImageFile"
     />
+
+    <!-- 模板选择：先选模板，再决定完全覆盖还是追加水印层 -->
+    <AppDialog :open="tplOpen" title="选择水印模板" :width="420" @close="tplOpen = false">
+      <div v-if="!tplPending" class="tpl-list">
+        <button v-for="t in templates.all" :key="t.id" class="tpl-item" @click="tplPending = t">
+          <span class="tpl-name">{{ t.name }}</span>
+          <span class="tpl-meta">{{ t.layers.length }} 个图层{{ t.builtin ? ' · 内置' : '' }}</span>
+        </button>
+        <p v-if="!templates.all.length" class="empty">还没有模板。先在对话框外把当前配置存为模板。</p>
+      </div>
+      <div v-else class="tpl-confirm">
+        <p class="tpl-question">
+          应用模板「{{ tplPending.name }}」（{{ tplPending.layers.length }} 个图层）：
+        </p>
+        <p class="tpl-note">
+          完全覆盖会替换当前{{ wm.editId ? '这张照片的独立水印' : '的全部水印图层' }}；追加会保留现有图层，把模板图层加在后面。
+        </p>
+        <div class="tpl-btns">
+          <AppButton variant="ghost" size="sm" @click="tplPending = null">返回</AppButton>
+          <span class="flex" />
+          <AppButton size="sm" @click="applyTpl('append')">追加水印层</AppButton>
+          <AppButton variant="primary" size="sm" @click="applyTpl('replace')">完全覆盖</AppButton>
+        </div>
+      </div>
+    </AppDialog>
   </div>
 </template>
 
 <style scoped>
+/* 边框层的四边控制 */
+.border-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.border-label {
+  flex: none;
+  width: 16px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.border-width {
+  flex: 1;
+}
+.color-input {
+  flex: none;
+  width: 30px;
+  height: 24px;
+  padding: 1px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: pointer;
+}
+.hint-inline {
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+/* 模板选择弹层 */
+.tpl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.tpl-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-m);
+  background: var(--bg);
+  text-align: left;
+  transition: border-color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
+}
+.tpl-item:hover {
+  border-color: var(--accent);
+  background: var(--hover);
+}
+.tpl-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+.tpl-meta {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.tpl-question {
+  font-size: 13px;
+  font-weight: 500;
+}
+.tpl-note {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+.tpl-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.tpl-btns .flex {
+  flex: 1;
+}
 .row {
   display: flex;
   align-items: center;

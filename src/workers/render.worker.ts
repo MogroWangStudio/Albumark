@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import { applyAdjustments } from '../core/adjust'
 import { drawLayers, type AssetMap } from '../core/draw'
-import type { WatermarkLayer } from '../types/watermark'
+import type { BorderLayer, WatermarkLayer } from '../types/watermark'
 import type { Adjustments, Crop } from '../types/adjust'
 
 export interface RenderJob {
@@ -99,6 +99,29 @@ async function handle(job: RenderJob): Promise<void> {
     ctx.putImageData(image, 0, 0)
   }
 
+  // 边框水印在调节之后、普通图层之前逐层向外扩展画布；图层列表靠前者更贴近照片
+  const borders = job.layers.filter((l): l is BorderLayer => l.type === 'border' && l.visible)
+  const pictureLayers = job.layers.filter((l) => l.type !== 'border')
+  let framed: OffscreenCanvas = canvas
+  let fw = w
+  let fh = h
+  for (const b of borders) {
+    const next = new OffscreenCanvas(fw + b.left + b.right, fh + b.top + b.bottom)
+    const nctx = next.getContext('2d') as OffscreenCanvasRenderingContext2D
+    nctx.fillStyle = b.colorTop
+    nctx.fillRect(0, 0, next.width, b.top)
+    nctx.fillStyle = b.colorBottom
+    nctx.fillRect(0, fh + b.top, next.width, b.bottom)
+    nctx.fillStyle = b.colorLeft
+    nctx.fillRect(0, b.top, b.left, fh)
+    nctx.fillStyle = b.colorRight
+    nctx.fillRect(fw + b.left, b.top, b.right, fh)
+    nctx.drawImage(framed, b.left, b.top)
+    framed = next
+    fw = next.width
+    fh = next.height
+  }
+
   const keep = new Set(job.assets.map((x) => x.id))
   for (const key of [...assetCache.keys()]) {
     if (!keep.has(key)) assetCache.delete(key)
@@ -114,14 +137,15 @@ async function handle(job: RenderJob): Promise<void> {
   }
 
   measureCtx()
-  drawLayers(ctx, w, h, job.layers, assetCache)
+  const outCtx = framed.getContext('2d') as OffscreenCanvasRenderingContext2D
+  drawLayers(outCtx, fw, fh, pictureLayers, assetCache)
 
   if (job.want === 'bitmap') {
-    const out = await createImageBitmap(canvas)
+    const out = await createImageBitmap(framed)
     post({ id: job.id, bitmap: out, srcBack: job.bitmap }, [out, job.bitmap])
   } else {
-    const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: job.quality })
+    const blob = await framed.convertToBlob({ type: 'image/jpeg', quality: job.quality })
     const bytes = await blob.arrayBuffer()
-    post({ id: job.id, bytes, width: w, height: h, srcBack: job.bitmap }, [bytes, job.bitmap])
+    post({ id: job.id, bytes, width: fw, height: fh, srcBack: job.bitmap }, [bytes, job.bitmap])
   }
 }

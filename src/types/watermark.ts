@@ -87,7 +87,26 @@ export interface ImageLayer extends BaseLayer {
   aspect: number
 }
 
-export type WatermarkLayer = TextLayer | ImageLayer
+/**
+ * 边框水印：在图片四周向外扩展画布，逐边独立控制宽度与颜色。
+ * 宽度为固定像素（原图尺度），可叠加多层（图层列表靠前者更贴近照片）。
+ */
+export interface BorderLayer {
+  id: string
+  type: 'border'
+  name: string
+  visible: boolean
+  top: number
+  right: number
+  bottom: number
+  left: number
+  colorTop: string
+  colorRight: string
+  colorBottom: string
+  colorLeft: string
+}
+
+export type WatermarkLayer = TextLayer | ImageLayer | BorderLayer
 
 export interface SerializedAsset {
   id: string
@@ -119,6 +138,8 @@ export type AnchorPreset =
 
 /** 旧版百分比坐标 → 锚点 + 偏移 的迁移；文字框锚点缺省跟随定位锚点。 */
 export function migrateLayer<T extends WatermarkLayer>(l: T): T {
+  // 边框层没有锚点 / 偏移几何，原样保留
+  if (l.type === 'border') return l
   let out = l
   if (!('anchor' in l) || typeof l.anchor !== 'string') {
     const legacy = l as unknown as { x?: number; y?: number }
@@ -146,6 +167,8 @@ export function migrateLayer<T extends WatermarkLayer>(l: T): T {
  * 以标称长边 1000px 折算（百分比数值 ×10），观感接近中等尺寸照片上的原效果。
  */
 export function migrateOffsetsToPx<T extends WatermarkLayer>(l: T): T {
+  // 边框层没有偏移字段
+  if (l.type === 'border') return l
   return {
     ...l,
     offsetX: Math.round(l.offsetX * 10),
@@ -155,4 +178,5 @@ export function migrateOffsetsToPx<T extends WatermarkLayer>(l: T): T {
 
 export type TextLayerPatch = Partial<Omit<TextLayer, 'type'>>
 export type ImageLayerPatch = Partial<Omit<ImageLayer, 'type'>>
-export type LayerPatch = TextLayerPatch | ImageLayerPatch
+export type BorderLayerPatch = Partial<Omit<BorderLayer, 'type'>>
+export type LayerPatch = TextLayerPatch | ImageLayerPatch | BorderLayerPatch

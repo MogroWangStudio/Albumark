@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
-import { makeTextLayer, useWatermarkStore } from './watermark'
+import { makeBorderLayer, makeTextLayer, useWatermarkStore } from './watermark'
 import { toast } from './toast'
 import { migrateOffsetsToPx, type WatermarkTemplate } from '@/types/watermark'
 
@@ -59,10 +59,49 @@ function builtinTemplates(): WatermarkTemplate[] {
     shadow: { enabled: false, blur: 0, opacity: 0, x: 0, y: 0 },
     background: { enabled: true, color: '#000000', opacity: 45, padding: 7, radius: 16 },
   })
+  const thinFrame = makeBorderLayer({
+    name: '细白边框',
+    top: 28,
+    right: 28,
+    bottom: 28,
+    left: 28,
+  })
+  const galleryFrame = [
+    makeBorderLayer({
+      name: '画框 · 内衬',
+      top: 44,
+      right: 44,
+      bottom: 44,
+      left: 44,
+      colorTop: '#F5F1E8',
+      colorRight: '#F5F1E8',
+      colorBottom: '#F5F1E8',
+      colorLeft: '#F5F1E8',
+    }),
+    makeBorderLayer({
+      name: '画框 · 外沿',
+      top: 14,
+      right: 14,
+      bottom: 14,
+      left: 14,
+      colorTop: '#211D19',
+      colorRight: '#211D19',
+      colorBottom: '#211D19',
+      colorLeft: '#211D19',
+    }),
+  ]
   return [
     { id: 'builtin-signature', name: '右下签名', builtin: true, layers: [signature], assets: [] },
     { id: 'builtin-tile', name: '全图平铺', builtin: true, layers: [tile], assets: [] },
     { id: 'builtin-exif', name: 'EXIF 参数条', builtin: true, layers: [exifBar], assets: [] },
+    { id: 'builtin-frame-thin', name: '细白边框', builtin: true, layers: [thinFrame], assets: [] },
+    {
+      id: 'builtin-frame-gallery',
+      name: '画廊双框',
+      builtin: true,
+      layers: galleryFrame,
+      assets: [],
+    },
   ]
 }
 

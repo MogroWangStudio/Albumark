@@ -1,5 +1,4 @@
-import type { TextLayer, WatermarkLayer } from '@/types/watermark'
-
+import type { ImageLayer, TextLayer, WatermarkLayer } from '@/types/watermark'
 export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 
 export interface LayerBox {
@@ -22,7 +21,11 @@ export function anchorPoint(anchor: string, imgW: number, imgH: number): { x: nu
 }
 
 /** 图层定位点：锚点 + 偏移（像素）。文字框锚点决定文字框的哪个位置对准这个点。 */
-export function layerPivot(l: WatermarkLayer, imgW: number, imgH: number): { x: number; y: number } {
+export function layerPivot(
+  l: TextLayer | ImageLayer | { anchor: TextLayer['anchor']; offsetX: number; offsetY: number },
+  imgW: number,
+  imgH: number,
+): { x: number; y: number } {
   const a = anchorPoint(l.anchor, imgW, imgH)
   return { x: a.x + l.offsetX, y: a.y + l.offsetY }
 }
@@ -88,13 +91,16 @@ export function textMetrics(l: TextLayer, fontSize: number, ctx: Ctx2D): TextMet
   }
 }
 
-/** 计算图层在图片坐标系中的包围盒（含旋转前的宽高）。 */
+/** 计算图层在图片坐标系中的包围盒（含旋转前的宽高）。边框层为全画布。 */
 export function measureLayer(
   layer: WatermarkLayer,
   imgW: number,
   imgH: number,
   mctx: Ctx2D,
 ): LayerBox {
+  if (layer.type === 'border') {
+    return { cx: imgW / 2, cy: imgH / 2, w: imgW, h: imgH, rotation: 0 }
+  }
   const long = Math.max(imgW, imgH)
   const pivot = layerPivot(layer, imgW, imgH)
 
