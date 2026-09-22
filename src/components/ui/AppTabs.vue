@@ -18,11 +18,12 @@ const emit = defineEmits<{
       :key="o.value"
       role="tab"
       :aria-selected="o.value === modelValue"
+      :aria-label="o.label"
+      :title="o.label"
       :class="{ on: o.value === modelValue }"
       @click="emit('update:modelValue', o.value)"
     >
-      <component :is="o.icon" v-if="o.icon" :size="15" />
-      <span>{{ o.label }}</span>
+      <component :is="o.icon" v-if="o.icon" :size="16" />
     </button>
   </div>
 </template>
@@ -30,7 +31,7 @@ const emit = defineEmits<{
 <style scoped>
 .tabs {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   padding: 4px;
   border-radius: 999px;
   background: var(--hover);
@@ -40,11 +41,9 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
   height: 30px;
-  padding-inline: 14px;
+  padding-inline: 10px;
   border-radius: 999px;
-  font-size: 13px;
   color: var(--text-3);
   transition:
     background var(--dur-hover) var(--ease-soft),
@@ -58,7 +57,6 @@ button:hover:not(.on) {
 button.on {
   background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 600;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 </style>

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ChevronLeft,
   ChevronRight,
+  Crop,
   Droplets,
   SlidersHorizontal,
   Upload,
@@ -11,6 +12,7 @@ import type { PluginListenerHandle } from '@capacitor/core'
 import AppTitleBar from '@/components/AppTitleBar.vue'
 import AdjustPanel from '@/components/AdjustPanel.vue'
 import AppContextMenu, { type ContextMenuItem } from '@/components/AppContextMenu.vue'
+import CropPanel from '@/components/CropPanel.vue'
 import ExportPanel from '@/components/ExportPanel.vue'
 import ImportOverlay from '@/components/ImportOverlay.vue'
 import ImportPreviewDialog from '@/components/ImportPreviewDialog.vue'
@@ -27,6 +29,7 @@ import ToastHost from '@/components/ui/ToastHost.vue'
 import { isCapacitor, isTauri, pickImagePaths } from '@/core/platform'
 import { projectMomentum, springTo, type SpringHandle } from '@/core/spring'
 import { baseName } from '@/core/fs'
+import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
@@ -36,9 +39,9 @@ const images = useImagesStore()
 const wm = useWatermarkStore()
 const templates = useTemplatesStore()
 const ws = useWorkspaceStore()
+const adjust = useAdjustStore()
 
 const view = ref<'main' | 'studio' | 'settings'>('main')
-const panel = ref<'watermark' | 'adjust' | 'export'>('watermark')
 const urlOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragDepth = ref(0)
@@ -63,6 +66,7 @@ watch(
 const PANELS = {
   watermark: WatermarkPanel,
   adjust: AdjustPanel,
+  crop: CropPanel,
   export: ExportPanel,
 } as const
 
@@ -529,10 +533,11 @@ onBeforeUnmount(() => {
                   @pointercancel="onPanelDragUp"
                 >
                   <AppTabs
-                    v-model="panel"
+                    v-model="adjust.panel"
                     :options="[
                       { value: 'watermark', label: '水印', icon: Droplets },
                       { value: 'adjust', label: '调节', icon: SlidersHorizontal },
+                      { value: 'crop', label: '裁剪', icon: Crop },
                       { value: 'export', label: '导出', icon: Upload },
                     ]"
                   />
@@ -544,7 +549,7 @@ onBeforeUnmount(() => {
                 <div class="inspector-body">
                   <Transition name="pane" mode="out-in">
                     <KeepAlive>
-                      <component :is="PANELS[panel]" :key="panel" />
+                      <component :is="PANELS[adjust.panel]" :key="adjust.panel" />
                     </KeepAlive>
                   </Transition>
                 </div>

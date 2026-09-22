@@ -66,6 +66,9 @@ async function start(): Promise<void> {
 
 <template>
   <div class="export panel-scroll">
+    <div class="head">
+      <h1>导出</h1>
+    </div>
     <template v-if="!running && !finished">
       <p class="lead">
         将导出全部 {{ images.count }} 张照片，当前水印与调节会一并应用。导出为重新编码的
@@ -163,6 +166,16 @@ async function start(): Promise<void> {
 </template>
 
 <style scoped>
+.head {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.head h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
 .lead {
   color: var(--text-2);
   margin-bottom: 14px;

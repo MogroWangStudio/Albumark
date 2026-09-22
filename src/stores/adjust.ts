@@ -1,4 +1,4 @@
-import { reactive, ref, toRaw, watch } from 'vue'
+import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { NEUTRAL, type AdjustKey, type Adjustments, type Crop } from '@/types/adjust'
 
@@ -74,14 +74,21 @@ export const useAdjustStore = defineStore('adjust', () => {
 
   /* ---------- 裁剪：随照片独立，会话内有效（与「单独调节」同一生命周期） ---------- */
 
+  /** 操作面板当前页：裁剪页即裁剪模式（预览显示全图与裁剪框） */
+  const panel = ref<'watermark' | 'adjust' | 'crop' | 'export'>('watermark')
+  /** 裁剪模式（派生自面板页）：预览显示全图与裁剪框 */
+  const cropMode = computed(() => panel.value === 'crop')
   /** 照片 id → 已应用的裁剪区域 */
   const crops = ref<Record<string, Crop>>({})
-  /** 裁剪编辑模式：预览显示全图与裁剪框，面板切换为裁剪工具 */
-  const cropMode = ref(false)
   /** 编辑中的裁剪框（归一化），确认后写入 crops */
   const cropDraft = ref<Crop | null>(null)
   /** 裁剪比例预设值（CROP_RATIOS 的 value） */
   const cropRatio = ref('free')
+
+  /** 离开裁剪页 = 放弃未确认的调整 */
+  function exitCrop(): void {
+    panel.value = 'adjust'
+  }
 
   function cropOf(id: string | null): Crop | undefined {
     return id ? crops.value[id] : undefined
@@ -108,6 +115,7 @@ export const useAdjustStore = defineStore('adjust', () => {
     snapshotFor,
     perImageSnapshot,
     resetToGlobal,
+    panel,
     crops,
     cropMode,
     cropDraft,
@@ -115,5 +123,6 @@ export const useAdjustStore = defineStore('adjust', () => {
     cropOf,
     setCrop,
     clearCrop,
+    exitCrop,
   }
 })

@@ -1190,7 +1190,8 @@ watch(
 
 /* ---------- 裁剪模式 ---------- */
 
-// 进入时以当前裁剪为起点（无则整图），并回到适应视图看清全图
+// 进入时以当前裁剪为起点（无则整图），并回到适应视图看清全图；
+// 退出时重新适应，确保确认后的裁剪结果完整呈现
 watch(
   () => adjust.cropMode,
   (on) => {
@@ -1201,6 +1202,7 @@ watch(
       fitView()
     } else {
       adjust.cropDraft = null
+      fitView()
     }
   },
 )
@@ -1225,7 +1227,7 @@ watch(
 )
 
 function onCropKey(e: KeyboardEvent): void {
-  if (e.key === 'Escape' && adjust.cropMode) adjust.cropMode = false
+  if (e.key === 'Escape' && adjust.cropMode) adjust.exitCrop()
 }
 
 onMounted(() => {

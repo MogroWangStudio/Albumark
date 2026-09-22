@@ -26,7 +26,8 @@ const imgH = computed(() => images.active?.height || 1067)
 
 <template>
   <div class="panel-scroll">
-    <div class="mode">
+    <div class="head">
+      <h1>水印</h1>
       <span class="fl">单独水印这张照片</span>
       <AppSwitch
         :model-value="individual"
@@ -47,16 +48,22 @@ const imgH = computed(() => images.active?.height || 1067)
 </template>
 
 <style scoped>
-.mode {
+.head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--line);
 }
+.head h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
 .fl {
+  flex: 1;
+  text-align: right;
   font-size: 12px;
   color: var(--text-2);
 }
