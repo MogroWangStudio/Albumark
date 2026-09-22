@@ -41,9 +41,28 @@ self.addEventListener('message', (e: MessageEvent<{ job: RenderJob }>) => {
 })
 
 async function handle(job: RenderJob): Promise<void> {
-  const src = job.bitmap
-  // 裁剪在取样阶段完成：只把裁剪区域画进画布，后续调节与水印都以裁剪后的图为画布
+  let src: ImageBitmap | OffscreenCanvas = job.bitmap
+  // 几何变换先行：翻转 → 绕中心拉直旋转（包围盒画布，四角留空），裁剪矩形即定义在变换后的源上
   const c = job.crop
+  const rot = c?.rot ? Math.max(-45, Math.min(45, c.rot)) : 0
+  const flipH = !!c?.flipH
+  const flipV = !!c?.flipV
+  if (flipH || flipV || rot !== 0) {
+    const w0 = job.bitmap.width
+    const h0 = job.bitmap.height
+    const rad = (rot * Math.PI) / 180
+    const cos = Math.abs(Math.cos(rad))
+    const sin = Math.abs(Math.sin(rad))
+    const w1 = Math.max(1, Math.round(w0 * cos + h0 * sin))
+    const h1 = Math.max(1, Math.round(w0 * sin + h0 * cos))
+    const t = new OffscreenCanvas(w1, h1)
+    const tctx = t.getContext('2d') as OffscreenCanvasRenderingContext2D
+    tctx.translate(w1 / 2, h1 / 2)
+    tctx.rotate(rad)
+    tctx.scale(flipH ? -1 : 1, flipV ? -1 : 1)
+    tctx.drawImage(job.bitmap, -w0 / 2, -h0 / 2)
+    src = t
+  }
   const sx = c ? Math.round(clamp01(c.x) * src.width) : 0
   const sy = c ? Math.round(clamp01(c.y) * src.height) : 0
   const sw = c ? Math.max(1, Math.round(clamp01(c.w) * src.width)) : src.width
@@ -56,6 +75,7 @@ async function handle(job: RenderJob): Promise<void> {
 
   const canvas = new OffscreenCanvas(w, h)
   const ctx = canvas.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D
+  ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(src, sx, sy, sw, sh, 0, 0, w, h)
 
   const a = job.adjustments
@@ -68,6 +88,10 @@ async function handle(job: RenderJob): Promise<void> {
     a.temperature !== 0 ||
     a.tint !== 0 ||
     a.vignette !== 0 ||
+    a.dehaze !== 0 ||
+    a.clarity !== 0 ||
+    a.sharpen !== 0 ||
+    a.grain !== 0 ||
     (a.curve && a.curve.length >= 4)
   ) {
     const image = ctx.getImageData(0, 0, w, h)
@@ -94,10 +118,10 @@ async function handle(job: RenderJob): Promise<void> {
 
   if (job.want === 'bitmap') {
     const out = await createImageBitmap(canvas)
-    post({ id: job.id, bitmap: out, srcBack: src }, [out, src])
+    post({ id: job.id, bitmap: out, srcBack: job.bitmap }, [out, job.bitmap])
   } else {
     const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: job.quality })
     const bytes = await blob.arrayBuffer()
-    post({ id: job.id, bytes, width: w, height: h, srcBack: src }, [bytes, src])
+    post({ id: job.id, bytes, width: w, height: h, srcBack: job.bitmap }, [bytes, job.bitmap])
   }
 }

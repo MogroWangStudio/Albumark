@@ -1,6 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Aperture, Circle, CloudMoon, Contrast, Droplet, RotateCcw, Sun, SunDim, Thermometer } from 'lucide-vue-next'
+import {
+  Aperture,
+  Circle,
+  CloudFog,
+  CloudMoon,
+  Contrast,
+  Droplet,
+  Focus,
+  RotateCcw,
+  Sparkles,
+  Sun,
+  SunDim,
+  Thermometer,
+  Zap,
+} from 'lucide-vue-next'
 import type { Component } from 'vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
@@ -21,6 +35,10 @@ const icons: Record<string, Component> = {
   shadows: CloudMoon,
   temperature: Thermometer,
   tint: Droplet,
+  dehaze: CloudFog,
+  clarity: Focus,
+  sharpen: Zap,
+  grain: Sparkles,
   vignette: Circle,
 }
 

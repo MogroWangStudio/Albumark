@@ -2,12 +2,15 @@
 import { computed, watch } from 'vue'
 import LayerEditor from '@/components/LayerEditor.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
+import { croppedSize } from '@/types/adjust'
+import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useWatermarkStore } from '@/stores/watermark'
 
 /** 悬浮面板的水印页：单独水印开关 + 图层编辑器，工作室入口在主窗口顶栏 */
 const images = useImagesStore()
 const wm = useWatermarkStore()
+const adjust = useAdjustStore()
 
 const activeId = computed(() => images.active?.id ?? null)
 const individual = computed(() => wm.isIndividual(activeId.value))
@@ -19,9 +22,17 @@ watch(
   { immediate: true },
 )
 
-/** 像素距离基于当前照片的原始尺寸 */
-const imgW = computed(() => images.active?.width || 1600)
-const imgH = computed(() => images.active?.height || 1067)
+/** 像素距离基于当前照片的生效尺寸（裁剪 / 拉直后的长边） */
+const imgW = computed(() => {
+  const a = images.active
+  if (!a?.width) return 1600
+  return croppedSize(a.width, a.height, adjust.cropOf(activeId.value)).w
+})
+const imgH = computed(() => {
+  const a = images.active
+  if (!a?.height) return 1067
+  return croppedSize(a.width, a.height, adjust.cropOf(activeId.value)).h
+})
 </script>
 
 <template>

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ChevronUp } from 'lucide-vue-next'
 import type { WatermarkLayer } from '@/types/watermark'
-import { clamp01, clampCrop, CROP_MIN, cropRatioOf, FULL_CROP, type Crop } from '@/types/adjust'
+import { clamp01, CROP_MIN, cropRatioOf, cropRot, cropSourceSize, FULL_CROP, rotatedInnerRect, type Crop } from '@/types/adjust'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { drawLayers, type AssetMap } from '@/core/draw'
 import { renderClient } from '@/core/renderer'
@@ -288,8 +288,12 @@ async function renderBase(draft: boolean): Promise<void> {
     : Math.min(perf.value.final, viewLong)
   srcBitmap = null // 即将转移给 Worker
   try {
-    // 裁剪编辑中渲染全图（框外要可见），确认后的裁剪在 Worker 取样阶段完成
-    const crop = adjust.cropMode ? undefined : adjust.cropOf(a.id)
+    // 裁剪编辑中渲染「变换后全图」（框外要可见），确认后按矩形取样；
+    // 翻转与拉直在两种状态下都生效
+    const d = adjust.cropMode ? adjust.cropDraft : undefined
+    const crop = adjust.cropMode
+      ? { x: 0, y: 0, w: 1, h: 1, rot: d?.rot, flipH: d?.flipH, flipV: d?.flipV }
+      : adjust.cropOf(a.id)
     const res = await renderClient.renderPreview(
       bmp,
       [],
@@ -756,6 +760,35 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
 
 /* ---------- 裁剪：框几何 ---------- */
 
+/** 拉直（rot≠0）时框的活动范围：变换后源图中不含透明角落的内接矩形（归一化）。 */
+function cropBounds(): { x0: number; y0: number; x1: number; y1: number } {
+  const d = adjust.cropDraft
+  const a = active.value
+  if (!d || !a?.width || !a.height || !cropRot(d)) {
+    return { x0: 0, y0: 0, x1: 1, y1: 1 }
+  }
+  const inner = rotatedInnerRect(a.width, a.height, cropRot(d))
+  const src = cropSourceSize(a.width, a.height, d)
+  const w = inner.w / src.w
+  const h = inner.h / src.h
+  return { x0: (1 - w) / 2, y0: (1 - h) / 2, x1: (1 + w) / 2, y1: (1 + h) / 2 }
+}
+
+/** 把矩形收敛到活动范围内（含最小边）。 */
+function clampRect(
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  bd: { x0: number; y0: number; x1: number; y1: number },
+): Crop {
+  const left = Math.min(Math.max(bd.x0, x0), bd.x1 - CROP_MIN)
+  const top = Math.min(Math.max(bd.y0, y0), bd.y1 - CROP_MIN)
+  const right = Math.min(Math.max(left + CROP_MIN, x1), bd.x1)
+  const bottom = Math.min(Math.max(top + CROP_MIN, y1), bd.y1)
+  return { x: left, y: top, w: right - left, h: bottom - top }
+}
+
 /**
  * 拖动手柄后的新裁剪框（归一化坐标）。比例锁定（ratio 为像素宽高比）时
  * 以锚定边/对角为基准联动另一维，可用空间不足时回缩，比例始终严格成立。
@@ -767,6 +800,7 @@ function resizeCrop(
   ny: number,
   ratio: number | null,
   imgAspect: number,
+  bd: { x0: number; y0: number; x1: number; y1: number },
 ): Crop {
   let left = start.x
   let top = start.y
@@ -776,7 +810,7 @@ function resizeCrop(
   if (handle.includes('e')) right = Math.max(nx, left + CROP_MIN)
   if (handle.includes('n')) top = Math.min(ny, bottom - CROP_MIN)
   if (handle.includes('s')) bottom = Math.max(ny, top + CROP_MIN)
-  if (!ratio) return clampCrop(left, top, right, bottom)
+  if (!ratio) return clampRect(left, top, right, bottom, bd)
 
   const k = imgAspect / ratio // 归一化高 = 归一化宽 × k
   const hasN = handle.includes('n')
@@ -787,36 +821,39 @@ function resizeCrop(
     // 横边：垂直方向以框中心对称伸缩
     const cx = (left + right) / 2
     const cy = (top + bottom) / 2
-    const availW = Math.min(2 * cx, 2 * (1 - cx))
-    const availH = Math.min(2 * cy, 2 * (1 - cy))
+    const availW = Math.min(2 * (cx - bd.x0), 2 * (bd.x1 - cx))
+    const availH = Math.min(2 * (cy - bd.y0), 2 * (bd.y1 - cy))
     let w = Math.min(Math.max(CROP_MIN, right - left), Math.max(CROP_MIN, availW))
     let h = w * k
     if (h > availH) {
       h = Math.max(CROP_MIN, availH)
       w = h / k
     }
-    return clampCrop(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+    return clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd)
   }
   if (!hasW && !hasE) {
     // 纵边：水平方向以框中心对称伸缩
     const cx = (left + right) / 2
     const cy = (top + bottom) / 2
-    const availW = Math.min(2 * cx, 2 * (1 - cx))
-    const availH = Math.min(2 * cy, 2 * (1 - cy))
+    const availW = Math.min(2 * (cx - bd.x0), 2 * (bd.x1 - cx))
+    const availH = Math.min(2 * (cy - bd.y0), 2 * (bd.y1 - cy))
     let h = Math.min(Math.max(CROP_MIN, bottom - top), Math.max(CROP_MIN, availH))
     let w = h / k
     if (w > availW) {
       w = Math.max(CROP_MIN, availW)
       h = w * k
     }
-    return clampCrop(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+    return clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd)
   }
   // 角：对角为锚
   const ax = hasW ? right : left
   const ay = hasN ? bottom : top
-  const availW = hasW ? ax : 1 - ax
-  const availH = hasN ? ay : 1 - ay
-  let w = Math.min(Math.max(CROP_MIN, hasW ? ax - left : right - ax), Math.max(CROP_MIN, availW))
+  const availW = hasW ? ax - bd.x0 : bd.x1 - ax
+  const availH = hasN ? ay - bd.y0 : bd.y1 - ay
+  let w = Math.min(
+    Math.max(CROP_MIN, hasW ? ax - left : right - ax),
+    Math.max(CROP_MIN, availW),
+  )
   let h = w * k
   if (h > availH) {
     h = Math.max(CROP_MIN, availH)
@@ -871,16 +908,17 @@ function hitCropHandle(p: { x: number; y: number }): CropHandle | null {
   return null
 }
 
-/** 选择比例后把当前框调整为该比例的最大内接矩形（保持中心）。 */
+/** 选择比例后把当前框调整为该比例的最大内接矩形（保持中心，限制在活动范围内）。 */
 function applyRatioToDraft(): void {
   const d = adjust.cropDraft
   const ratio = cropRatioOf(adjust.cropRatio)
   if (!d || !ratio || !resultMap.w) return
   const k = resultMap.w / resultMap.h / ratio
+  const bd = cropBounds()
   const cx = d.x + d.w / 2
   const cy = d.y + d.h / 2
-  const availW = Math.min(2 * cx, 2 * (1 - cx))
-  const availH = Math.min(2 * cy, 2 * (1 - cy))
+  const availW = Math.min(2 * (cx - bd.x0), 2 * (bd.x1 - cx))
+  const availH = Math.min(2 * (cy - bd.y0), 2 * (bd.y1 - cy))
   let w = Math.min(d.w, availW)
   let h = w * k
   if (h > availH) {
@@ -889,7 +927,7 @@ function applyRatioToDraft(): void {
   }
   w = Math.max(w, CROP_MIN)
   h = Math.max(h, CROP_MIN)
-  adjust.cropDraft = clampCrop(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+  adjust.cropDraft = clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd)
 }
 
 function onPointerDown(e: PointerEvent): void {
@@ -1005,17 +1043,21 @@ function onPointerMove(e: PointerEvent): void {
     const nx = clamp01(p.x / resultMap.w)
     const ny = clamp01(p.y / resultMap.h)
     const d = gesture.startCrop
+    const bd = cropBounds()
     if (gesture.handle === 'move') {
       adjust.cropDraft = {
-        x: Math.min(Math.max(0, d.x + nx - gesture.startNx), 1 - d.w),
-        y: Math.min(Math.max(0, d.y + ny - gesture.startNy), 1 - d.h),
+        x: Math.min(Math.max(bd.x0, d.x + nx - gesture.startNx), bd.x1 - d.w),
+        y: Math.min(Math.max(bd.y0, d.y + ny - gesture.startNy), bd.y1 - d.h),
         w: d.w,
         h: d.h,
+        rot: d.rot,
+        flipH: d.flipH,
+        flipV: d.flipV,
       }
     } else {
       const ratio = cropRatioOf(adjust.cropRatio)
       const imgAspect = resultMap.w / resultMap.h
-      adjust.cropDraft = resizeCrop(d, gesture.handle, nx, ny, ratio, imgAspect)
+      adjust.cropDraft = resizeCrop(d, gesture.handle, nx, ny, ratio, imgAspect, bd)
     }
     drawOverlay()
     return
@@ -1223,6 +1265,19 @@ watch(
   () => {
     applyRatioToDraft()
     drawOverlay()
+  },
+)
+
+// 翻转 / 拉直变化：重新渲染变换后的全图（防抖，只在调整停顿时渲染一次）
+watch(
+  () => {
+    const d = adjust.cropDraft
+    return d ? `${d.rot ?? 0}|${d.flipH ? 1 : 0}|${d.flipV ? 1 : 0}` : ''
+  },
+  () => {
+    if (!adjust.cropMode) return
+    if (finalTimer) window.clearTimeout(finalTimer)
+    finalTimer = window.setTimeout(() => void renderBase(false), 140)
   },
 )
 
