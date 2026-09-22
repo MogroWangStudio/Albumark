@@ -55,6 +55,7 @@ export const useExportStore = defineStore('export', () => {
           layers: wm.plainLayers(),
           adjustments: adjust.snapshotFor(null),
           perImage: adjust.perImageSnapshot(),
+          crops: { ...adjust.crops },
           assets,
           quality: quality.value,
           longEdge: longEdge.value,

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ChevronUp } from 'lucide-vue-next'
 import type { WatermarkLayer } from '@/types/watermark'
+import { clamp01, clampCrop, CROP_MIN, cropRatioOf, FULL_CROP, type Crop } from '@/types/adjust'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { drawLayers, type AssetMap } from '@/core/draw'
 import { renderClient } from '@/core/renderer'
@@ -284,12 +285,15 @@ async function renderBase(draft: boolean): Promise<void> {
     : Math.min(perf.value.final, viewLong)
   srcBitmap = null // 即将转移给 Worker
   try {
+    // 裁剪编辑中渲染全图（框外要可见），确认后的裁剪在 Worker 取样阶段完成
+    const crop = adjust.cropMode ? undefined : adjust.cropOf(a.id)
     const res = await renderClient.renderPreview(
       bmp,
       [],
       [],
       adjust.snapshotFor(a.id),
       maxLong,
+      crop,
     )
     if (seq !== baseSeq) return
     srcBitmap = res.srcBack
@@ -397,7 +401,29 @@ function drawOverlay(): void {
   ctx.scale(scale, scale)
 
   const layers = resolvedLayers()
-  drawLayers(ctx, bmp.width, bmp.height, layers, assetBmps)
+  const draft = adjust.cropMode ? adjust.cropDraft : null
+  if (draft) {
+    // 水印画进裁剪框坐标系：预览位置与应用裁剪后完全一致
+    const sx = draft.x * bmp.width
+    const sy = draft.y * bmp.height
+    const sw = Math.max(1, draft.w * bmp.width)
+    const sh = Math.max(1, draft.h * bmp.height)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(sx, sy, sw, sh)
+    ctx.clip()
+    ctx.translate(sx, sy)
+    drawLayers(ctx, sw, sh, layers, assetBmps)
+    ctx.restore()
+  } else {
+    drawLayers(ctx, bmp.width, bmp.height, layers, assetBmps)
+  }
+
+  if (draft) {
+    drawCropChrome(ctx, draft, scale, dpr)
+    selRect.value = null
+    return
+  }
 
   // 吸附参考线
   const snap = snapLines.value
@@ -440,6 +466,83 @@ function drawOverlay(): void {
   }
 
   updateSelRect()
+}
+
+/** 裁剪覆盖层：框外压暗、三分网格、白色边框与角标、裁剪后像素尺寸。 */
+function drawCropChrome(ctx: CanvasRenderingContext2D, d: Crop, scale: number, oDpr: number): void {
+  const W = resultMap.w
+  const H = resultMap.h
+  const x0 = d.x * W
+  const y0 = d.y * H
+  const x1 = (d.x + d.w) * W
+  const y1 = (d.y + d.h) * H
+
+  ctx.save()
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'
+  ctx.fillRect(0, 0, W, y0)
+  ctx.fillRect(0, y1, W, H - y1)
+  ctx.fillRect(0, y0, x0, y1 - y0)
+  ctx.fillRect(x1, y0, W - x1, y1 - y0)
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'
+  ctx.lineWidth = 1 / scale
+  ctx.beginPath()
+  for (let i = 1; i <= 2; i++) {
+    const gx = x0 + ((x1 - x0) * i) / 3
+    const gy = y0 + ((y1 - y0) * i) / 3
+    ctx.moveTo(gx, y0)
+    ctx.lineTo(gx, y1)
+    ctx.moveTo(x0, gy)
+    ctx.lineTo(x1, gy)
+  }
+  ctx.stroke()
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)'
+  ctx.lineWidth = 1.5 / scale
+  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0)
+
+  // 四角 L 形与四边中点短线：握点暗示
+  const arm = Math.min(18 / scale, (x1 - x0) / 3, (y1 - y0) / 3)
+  const notch = Math.min(10 / scale, (x1 - x0) / 4, (y1 - y0) / 4)
+  ctx.lineWidth = 2.5 / scale
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  ctx.moveTo(x0, y0 + arm); ctx.lineTo(x0, y0); ctx.lineTo(x0 + arm, y0)
+  ctx.moveTo(x1 - arm, y0); ctx.lineTo(x1, y0); ctx.lineTo(x1, y0 + arm)
+  ctx.moveTo(x1, y1 - arm); ctx.lineTo(x1, y1); ctx.lineTo(x1 - arm, y1)
+  ctx.moveTo(x0 + arm, y1); ctx.lineTo(x0, y1); ctx.lineTo(x0, y1 - arm)
+  ctx.moveTo((x0 + x1) / 2, y0); ctx.lineTo((x0 + x1) / 2, y0 + notch)
+  ctx.moveTo((x0 + x1) / 2, y1); ctx.lineTo((x0 + x1) / 2, y1 - notch)
+  ctx.moveTo(x0, (y0 + y1) / 2); ctx.lineTo(x0 + notch, (y0 + y1) / 2)
+  ctx.moveTo(x1, (y0 + y1) / 2); ctx.lineTo(x1 - notch, (y0 + y1) / 2)
+  ctx.stroke()
+  ctx.restore()
+
+  // 裁剪后尺寸（原图像素）：按叠加层自身密度绘制，保证任何缩放下字号一致。
+  // 图片坐标 → 底图设备像素（resultMap）→ 乘 k（叠加层/底图密度比）→ 叠加层像素
+  const a = active.value
+  if (!a?.width || !a.height) return
+  const k = oDpr / (view.dpr || 1)
+  const cx = (resultMap.ox + ((x0 + x1) / 2) * scale) * k
+  const devY = (resultMap.oy + y0 * scale) * k
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  const text = `${Math.round(d.w * a.width)} × ${Math.round(d.h * a.height)}`
+  ctx.font = `600 ${10.5 * oDpr}px ${getComputedStyle(document.documentElement).fontFamily}`
+  const tw = ctx.measureText(text).width
+  const chipW = tw + 14 * oDpr
+  const chipH = 19 * oDpr
+  const bx = cx - chipW / 2
+  const by = devY + 8 * oDpr
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.62)'
+  ctx.beginPath()
+  ctx.roundRect(bx, by, chipW, chipH, chipH / 2)
+  ctx.fill()
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, cx, by + chipH / 2 + 0.5 * oDpr)
+  ctx.restore()
 }
 
 function updateSelRect(): void {
@@ -581,6 +684,15 @@ type Gesture =
       startMid: { x: number; y: number }
       startPan: { x: number; y: number }
     }
+  | {
+      type: 'crop'
+      handle: CropHandle
+      startCrop: Crop
+      startNx: number
+      startNy: number
+    }
+
+type CropHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move'
 
 let gesture: Gesture = { type: 'idle' }
 let lastTap: { t: number; x: number; y: number } | null = null
@@ -637,6 +749,144 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
   return out
 }
 
+/* ---------- 裁剪：框几何 ---------- */
+
+/**
+ * 拖动手柄后的新裁剪框（归一化坐标）。比例锁定（ratio 为像素宽高比）时
+ * 以锚定边/对角为基准联动另一维，可用空间不足时回缩，比例始终严格成立。
+ */
+function resizeCrop(
+  start: Crop,
+  handle: CropHandle,
+  nx: number,
+  ny: number,
+  ratio: number | null,
+  imgAspect: number,
+): Crop {
+  let left = start.x
+  let top = start.y
+  let right = start.x + start.w
+  let bottom = start.y + start.h
+  if (handle.includes('w')) left = Math.min(nx, right - CROP_MIN)
+  if (handle.includes('e')) right = Math.max(nx, left + CROP_MIN)
+  if (handle.includes('n')) top = Math.min(ny, bottom - CROP_MIN)
+  if (handle.includes('s')) bottom = Math.max(ny, top + CROP_MIN)
+  if (!ratio) return clampCrop(left, top, right, bottom)
+
+  const k = imgAspect / ratio // 归一化高 = 归一化宽 × k
+  const hasN = handle.includes('n')
+  const hasS = handle.includes('s')
+  const hasW = handle.includes('w')
+  const hasE = handle.includes('e')
+  if (!hasN && !hasS) {
+    // 横边：垂直方向以框中心对称伸缩
+    const cx = (left + right) / 2
+    const cy = (top + bottom) / 2
+    const availW = Math.min(2 * cx, 2 * (1 - cx))
+    const availH = Math.min(2 * cy, 2 * (1 - cy))
+    let w = Math.min(Math.max(CROP_MIN, right - left), Math.max(CROP_MIN, availW))
+    let h = w * k
+    if (h > availH) {
+      h = Math.max(CROP_MIN, availH)
+      w = h / k
+    }
+    return clampCrop(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+  }
+  if (!hasW && !hasE) {
+    // 纵边：水平方向以框中心对称伸缩
+    const cx = (left + right) / 2
+    const cy = (top + bottom) / 2
+    const availW = Math.min(2 * cx, 2 * (1 - cx))
+    const availH = Math.min(2 * cy, 2 * (1 - cy))
+    let h = Math.min(Math.max(CROP_MIN, bottom - top), Math.max(CROP_MIN, availH))
+    let w = h / k
+    if (w > availW) {
+      w = Math.max(CROP_MIN, availW)
+      h = w * k
+    }
+    return clampCrop(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+  }
+  // 角：对角为锚
+  const ax = hasW ? right : left
+  const ay = hasN ? bottom : top
+  const availW = hasW ? ax : 1 - ax
+  const availH = hasN ? ay : 1 - ay
+  let w = Math.min(Math.max(CROP_MIN, hasW ? ax - left : right - ax), Math.max(CROP_MIN, availW))
+  let h = w * k
+  if (h > availH) {
+    h = Math.max(CROP_MIN, availH)
+    w = h / k
+  }
+  return {
+    x: hasW ? ax - w : ax,
+    y: hasN ? ay - h : ay,
+    w,
+    h,
+  }
+}
+
+/** 手柄在图片坐标系中的位置（角优先于边做命中）。 */
+function cropHandles(d: Crop): { id: CropHandle; x: number; y: number }[] {
+  const x0 = d.x * resultMap.w
+  const x1 = (d.x + d.w) * resultMap.w
+  const y0 = d.y * resultMap.h
+  const y1 = (d.y + d.h) * resultMap.h
+  const xm = (x0 + x1) / 2
+  const ym = (y0 + y1) / 2
+  return [
+    { id: 'nw', x: x0, y: y0 },
+    { id: 'ne', x: x1, y: y0 },
+    { id: 'se', x: x1, y: y1 },
+    { id: 'sw', x: x0, y: y1 },
+    { id: 'n', x: xm, y: y0 },
+    { id: 'e', x: x1, y: ym },
+    { id: 's', x: xm, y: y1 },
+    { id: 'w', x: x0, y: ym },
+  ]
+}
+
+/** 命中裁剪手柄；框内整体返回 move，框外返回 null（交给平移手势）。 */
+function hitCropHandle(p: { x: number; y: number }): CropHandle | null {
+  const d = adjust.cropDraft
+  if (!d || !resultMap.w) return null
+  const dpr = view.dpr || 1
+  const cssPerImg = resultMap.scale / dpr
+  // 命中半径约 16 CSS px，小框时收进框内避免角/边重叠
+  const r = Math.min(16 / cssPerImg, d.w * resultMap.w * 0.45, d.h * resultMap.h * 0.45)
+  const hs = cropHandles(d)
+  for (const h of hs) {
+    if (h.id.length === 2 && Math.hypot(p.x - h.x, p.y - h.y) <= r) return h.id
+  }
+  for (const h of hs) {
+    if (h.id.length === 1 && Math.hypot(p.x - h.x, p.y - h.y) <= r) return h.id
+  }
+  if (p.x >= d.x * resultMap.w && p.x <= (d.x + d.w) * resultMap.w && p.y >= d.y * resultMap.h && p.y <= (d.y + d.h) * resultMap.h) {
+    return 'move'
+  }
+  return null
+}
+
+/** 选择比例后把当前框调整为该比例的最大内接矩形（保持中心）。 */
+function applyRatioToDraft(): void {
+  const d = adjust.cropDraft
+  const ratio = cropRatioOf(adjust.cropRatio)
+  if (!d || !ratio || !resultMap.w) return
+  const k = resultMap.w / resultMap.h / ratio
+  const cx = d.x + d.w / 2
+  const cy = d.y + d.h / 2
+  const availW = Math.min(2 * cx, 2 * (1 - cx))
+  const availH = Math.min(2 * cy, 2 * (1 - cy))
+  let w = Math.min(d.w, availW)
+  let h = w * k
+  if (h > availH) {
+    h = availH
+    w = h / k
+  }
+  w = Math.max(w, CROP_MIN)
+  h = Math.max(h, CROP_MIN)
+  adjust.cropDraft = clampCrop(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+}
+
 function onPointerDown(e: PointerEvent): void {
   const canvas = cvBase.value
   if (!canvas || !resultMap.w) return
@@ -661,6 +911,28 @@ function onPointerDown(e: PointerEvent): void {
     return
   }
   if (pointers.size > 2) return
+
+  // 裁剪模式：手柄/框内交给裁剪手势，其余区域仍可平移视图
+  if (adjust.cropMode && adjust.cropDraft) {
+    if (e.button === 1) {
+      gesture = { type: 'pan', startPan: { x: pan.x, y: pan.y }, startClient: { x: e.clientX, y: e.clientY } }
+      return
+    }
+    const p = toImagePx(e.clientX, e.clientY)
+    const hit = hitCropHandle(p)
+    if (hit) {
+      gesture = {
+        type: 'crop',
+        handle: hit,
+        startCrop: { ...adjust.cropDraft },
+        startNx: clamp01(p.x / resultMap.w),
+        startNy: clamp01(p.y / resultMap.h),
+      }
+    } else {
+      gesture = { type: 'pan', startPan: { x: pan.x, y: pan.y }, startClient: { x: e.clientX, y: e.clientY } }
+    }
+    return
+  }
 
   const p = toImagePx(e.clientX, e.clientY)
   const list = wm.layers
@@ -718,6 +990,28 @@ function onPointerMove(e: PointerEvent): void {
     pan.x = mid.x - u.x * z
     pan.y = mid.y - u.y * z
     drawBase()
+    drawOverlay()
+    return
+  }
+
+  if (gesture.type === 'crop') {
+    if (!resultMap.w) return
+    const p = toImagePx(e.clientX, e.clientY)
+    const nx = clamp01(p.x / resultMap.w)
+    const ny = clamp01(p.y / resultMap.h)
+    const d = gesture.startCrop
+    if (gesture.handle === 'move') {
+      adjust.cropDraft = {
+        x: Math.min(Math.max(0, d.x + nx - gesture.startNx), 1 - d.w),
+        y: Math.min(Math.max(0, d.y + ny - gesture.startNy), 1 - d.h),
+        w: d.w,
+        h: d.h,
+      }
+    } else {
+      const ratio = cropRatioOf(adjust.cropRatio)
+      const imgAspect = resultMap.w / resultMap.h
+      adjust.cropDraft = resizeCrop(d, gesture.handle, nx, ny, ratio, imgAspect)
+    }
     drawOverlay()
     return
   }
@@ -867,7 +1161,14 @@ function resetView(): void {
 
 // 底图相关变化才走 Worker；水印图层变化只重绘叠加层
 watch(
-  [active, () => adjust.values, () => adjust.perImage, () => settings.previewQuality],
+  [
+    active,
+    () => adjust.values,
+    () => adjust.perImage,
+    () => settings.previewQuality,
+    () => adjust.cropMode,
+    () => adjust.crops,
+  ],
   () => scheduleBase(),
   { deep: true },
 )
@@ -883,7 +1184,48 @@ watch(
   () => resetView(),
 )
 
+/* ---------- 裁剪模式 ---------- */
+
+// 进入时以当前裁剪为起点（无则整图），并回到适应视图看清全图
+watch(
+  () => adjust.cropMode,
+  (on) => {
+    if (on) {
+      const a = active.value
+      adjust.cropRatio = 'free'
+      adjust.cropDraft = { ...(a ? (adjust.cropOf(a.id) ?? FULL_CROP) : FULL_CROP) }
+      fitView()
+    } else {
+      adjust.cropDraft = null
+    }
+  },
+)
+
+// 编辑中切换照片：把框带到新照片（已裁剪用其裁剪，否则整图）
+watch(
+  [() => adjust.cropMode, () => active.value?.id],
+  ([on]) => {
+    if (!on) return
+    const a = active.value
+    adjust.cropDraft = { ...(a ? (adjust.cropOf(a.id) ?? FULL_CROP) : FULL_CROP) }
+  },
+)
+
+// 比例切换：立即把框调整为该比例的最大内接矩形
+watch(
+  () => adjust.cropRatio,
+  () => {
+    applyRatioToDraft()
+    drawOverlay()
+  },
+)
+
+function onCropKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && adjust.cropMode) adjust.cropMode = false
+}
+
 onMounted(() => {
+  window.addEventListener('keydown', onCropKey)
   if (frame.value) {
     ro = new ResizeObserver((entries) => {
       const r = entries[0]?.contentRect
@@ -901,6 +1243,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onCropKey)
   ro?.disconnect()
   if (finalTimer) window.clearTimeout(finalTimer)
   if (settleTimer) window.clearTimeout(settleTimer)

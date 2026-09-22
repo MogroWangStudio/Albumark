@@ -1,5 +1,5 @@
 import type { WatermarkLayer } from '@/types/watermark'
-import type { Adjustments } from '@/types/adjust'
+import type { Adjustments, Crop } from '@/types/adjust'
 import type { RenderJob } from '@/workers/render.worker'
 
 interface RenderReply {
@@ -63,9 +63,10 @@ export class RenderClient {
     layers: WatermarkLayer[],
     adjustments: Adjustments,
     maxSize: number,
+    crop?: Crop,
   ): Promise<{ bitmap: ImageBitmap; srcBack: ImageBitmap }> {
     const res = await this.request(
-      { bitmap: src, assets, layers, adjustments, maxSize, quality: 0.92, want: 'bitmap' },
+      { bitmap: src, assets, layers, adjustments, crop, maxSize, quality: 0.92, want: 'bitmap' },
       [src],
     )
     if (!res.bitmap) throw new Error('预览渲染失败')
@@ -80,10 +81,11 @@ export class RenderClient {
     adjustments: Adjustments,
     maxSize: number,
     quality: number,
+    crop?: Crop,
   ): Promise<{ bytes: ArrayBuffer; width: number; height: number }> {
     const src = await createImageBitmap(blob)
     const res = await this.request(
-      { bitmap: src, assets, layers, adjustments, maxSize, quality, want: 'jpeg' },
+      { bitmap: src, assets, layers, adjustments, crop, maxSize, quality, want: 'jpeg' },
       [src],
     )
     if (!res.bytes) throw new Error('导出渲染失败')

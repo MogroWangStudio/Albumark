@@ -1,6 +1,6 @@
 import { reactive, ref, toRaw, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { NEUTRAL, type AdjustKey, type Adjustments } from '@/types/adjust'
+import { NEUTRAL, type AdjustKey, type Adjustments, type Crop } from '@/types/adjust'
 
 const PERSIST_KEY = 'albumark.adjust.v1'
 
@@ -72,6 +72,32 @@ export const useAdjustStore = defineStore('adjust', () => {
     }
   })
 
+  /* ---------- 裁剪：随照片独立，会话内有效（与「单独调节」同一生命周期） ---------- */
+
+  /** 照片 id → 已应用的裁剪区域 */
+  const crops = ref<Record<string, Crop>>({})
+  /** 裁剪编辑模式：预览显示全图与裁剪框，面板切换为裁剪工具 */
+  const cropMode = ref(false)
+  /** 编辑中的裁剪框（归一化），确认后写入 crops */
+  const cropDraft = ref<Crop | null>(null)
+  /** 裁剪比例预设值（CROP_RATIOS 的 value） */
+  const cropRatio = ref('free')
+
+  function cropOf(id: string | null): Crop | undefined {
+    return id ? crops.value[id] : undefined
+  }
+
+  function setCrop(id: string, c: Crop): void {
+    crops.value = { ...crops.value, [id]: { ...c } }
+  }
+
+  function clearCrop(id: string): void {
+    if (!(id in crops.value)) return
+    const next = { ...crops.value }
+    delete next[id]
+    crops.value = next
+  }
+
   return {
     values,
     perImage,
@@ -82,5 +108,12 @@ export const useAdjustStore = defineStore('adjust', () => {
     snapshotFor,
     perImageSnapshot,
     resetToGlobal,
+    crops,
+    cropMode,
+    cropDraft,
+    cropRatio,
+    cropOf,
+    setCrop,
+    clearCrop,
   }
 })

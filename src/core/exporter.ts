@@ -1,7 +1,7 @@
 import { zipSync } from 'fflate'
 import type { ImageItem } from '@/types/image'
 import type { WatermarkLayer } from '@/types/watermark'
-import type { Adjustments } from '@/types/adjust'
+import type { Adjustments, Crop } from '@/types/adjust'
 import type { AssetPayload } from './renderer'
 import { RenderClient } from './renderer'
 import { resolveTokens } from './tokens'
@@ -12,6 +12,8 @@ export interface ExportPayload {
   adjustments: Adjustments
   /** 开启「单独调节」的照片 id → 独立参数，优先于全局 */
   perImage: Record<string, Adjustments>
+  /** 照片 id → 裁剪区域（归一化 0–1） */
+  crops: Record<string, Crop>
   assets: AssetPayload[]
   quality: number
   longEdge: number
@@ -85,6 +87,7 @@ export async function runExport(
           payload.perImage[item.id] ?? payload.adjustments,
           payload.longEdge,
           payload.quality / 100,
+          payload.crops[item.id],
         )
         let name = buildFilename(payload.pattern, item, i, items.length)
         let n = 2

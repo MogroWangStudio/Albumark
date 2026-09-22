@@ -2,7 +2,7 @@
 import { applyAdjustments } from '../core/adjust'
 import { drawLayers, type AssetMap } from '../core/draw'
 import type { WatermarkLayer } from '../types/watermark'
-import type { Adjustments } from '../types/adjust'
+import type { Adjustments, Crop } from '../types/adjust'
 
 export interface RenderJob {
   id: number
@@ -10,6 +10,8 @@ export interface RenderJob {
   assets: { id: string; blob: Blob }[]
   layers: WatermarkLayer[]
   adjustments: Adjustments
+  /** 裁剪区域（归一化 0–1），不传 = 不裁剪 */
+  crop?: Crop
   /** 长边上限（像素），0 表示原图尺寸 */
   maxSize: number
   /** JPEG 质量 0-1 */
@@ -19,6 +21,10 @@ export interface RenderJob {
 
 type PostMessage = (message: unknown, transfer?: Transferable[]) => void
 const post = (self as unknown as { postMessage: PostMessage }).postMessage.bind(self)
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v
+}
 
 const assetCache: AssetMap = new Map()
 let mctx: OffscreenCanvasRenderingContext2D | null = null
@@ -36,14 +42,21 @@ self.addEventListener('message', (e: MessageEvent<{ job: RenderJob }>) => {
 
 async function handle(job: RenderJob): Promise<void> {
   const src = job.bitmap
-  const long = Math.max(src.width, src.height)
+  // 裁剪在取样阶段完成：只把裁剪区域画进画布，后续调节与水印都以裁剪后的图为画布
+  const c = job.crop
+  const sx = c ? Math.round(clamp01(c.x) * src.width) : 0
+  const sy = c ? Math.round(clamp01(c.y) * src.height) : 0
+  const sw = c ? Math.max(1, Math.round(clamp01(c.w) * src.width)) : src.width
+  const sh = c ? Math.max(1, Math.round(clamp01(c.h) * src.height)) : src.height
+
+  const long = Math.max(sw, sh)
   const scale = job.maxSize > 0 ? Math.min(1, job.maxSize / long) : 1
-  const w = Math.max(1, Math.round(src.width * scale))
-  const h = Math.max(1, Math.round(src.height * scale))
+  const w = Math.max(1, Math.round(sw * scale))
+  const h = Math.max(1, Math.round(sh * scale))
 
   const canvas = new OffscreenCanvas(w, h)
   const ctx = canvas.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D
-  ctx.drawImage(src, 0, 0, w, h)
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, w, h)
 
   const a = job.adjustments
   if (
