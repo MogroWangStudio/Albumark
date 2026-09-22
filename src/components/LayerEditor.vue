@@ -105,21 +105,20 @@ const missing = computed(() => {
   return missingTokens(t.content, props.exif, props.baseName)
 })
 
-/* 像素距离 ↔ 偏移：偏移按图片「长边」的百分比存储，
-   横竖屏切换时长边不变，像素数值不会互换 */
-const long = computed(() => Math.max(props.imgW, props.imgH))
-const offX = computed(() => (wm.selected ? (wm.selected.offsetX / 100) * long.value : 0))
-const offY = computed(() => (wm.selected ? (wm.selected.offsetY / 100) * long.value : 0))
+/* 偏移即固定像素：所有照片上距离一致，不随图片尺寸 / 比例缩放 */
+const offX = computed(() => wm.selected?.offsetX ?? 0)
+const offY = computed(() => wm.selected?.offsetY ?? 0)
 function setOffsetX(px: number): void {
   if (!wm.selected) return
-  wm.update(wm.selected.id, { offsetX: (px / long.value) * 100 })
+  wm.update(wm.selected.id, { offsetX: Math.round(px) })
 }
 function setOffsetY(px: number): void {
   if (!wm.selected) return
-  wm.update(wm.selected.id, { offsetY: (px / long.value) * 100 })
+  wm.update(wm.selected.id, { offsetY: Math.round(px) })
 }
 
 /* 文字大小：以当前参照图长边上的像素值呈现（不同尺寸照片按比例换算） */
+const long = computed(() => Math.max(props.imgW, props.imgH))
 const fontPx = computed(() =>
   selectedText.value ? (selectedText.value.scale / 100) * long.value : 0,
 )
@@ -587,8 +586,8 @@ function applyCustomFont(): void {
         </template>
         <AppSlider
           :model-value="offX"
-          :min="-Math.round(long * 0.6)"
-          :max="Math.round(long * 0.6)"
+          :min="-1200"
+          :max="1200"
           label="距锚点 · 水平"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="setOffsetX"
@@ -596,14 +595,14 @@ function applyCustomFont(): void {
         />
         <AppSlider
           :model-value="offY"
-          :min="-Math.round(long * 0.6)"
-          :max="Math.round(long * 0.6)"
+          :min="-1200"
+          :max="1200"
           label="距锚点 · 垂直"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="setOffsetY"
           @reset="setOffsetY(0)"
         />
-        <p class="hint">以锚点为起点、按当前照片长边的像素距离定位；横竖屏切换时数值不变，不同尺寸照片按比例换算。</p>
+        <p class="hint">以锚点为起点的固定像素距离：所有照片上保持一致，不随图片尺寸或比例缩放。</p>
         <AppSlider
           v-if="wm.selected!.type === 'text'"
           :model-value="fontPx"

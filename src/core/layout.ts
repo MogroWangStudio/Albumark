@@ -21,11 +21,10 @@ export function anchorPoint(anchor: string, imgW: number, imgH: number): { x: nu
   return { x: (col / 2) * imgW, y: (row / 2) * imgH }
 }
 
-/** 图层定位点：锚点 + 偏移。文字框锚点决定文字框的哪个位置对准这个点。 */
+/** 图层定位点：锚点 + 偏移（像素）。文字框锚点决定文字框的哪个位置对准这个点。 */
 export function layerPivot(l: WatermarkLayer, imgW: number, imgH: number): { x: number; y: number } {
   const a = anchorPoint(l.anchor, imgW, imgH)
-  const long = Math.max(imgW, imgH)
-  return { x: a.x + (l.offsetX / 100) * long, y: a.y + (l.offsetY / 100) * long }
+  return { x: a.x + l.offsetX, y: a.y + l.offsetY }
 }
 
 /** 文字框锚点在框内的位置（top-left = 左上角原点）。缺省按「居中」处理。 */

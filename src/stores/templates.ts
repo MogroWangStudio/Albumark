@@ -3,9 +3,11 @@ import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { makeTextLayer, useWatermarkStore } from './watermark'
 import { toast } from './toast'
-import type { WatermarkTemplate } from '@/types/watermark'
+import { migrateOffsetsToPx, type WatermarkTemplate } from '@/types/watermark'
 
-const PERSIST_KEY = 'albumark.templates.v1'
+const PERSIST_KEY = 'albumark.templates.v2'
+/** 旧版模板存储键：偏移按长边百分比存储，读取后一次性迁移为固定像素 */
+const LEGACY_TEMPLATES_KEY = 'albumark.templates.v1'
 /** 旧版「水印预设」存储键：并入模板库后移除 */
 const LEGACY_PRESETS_KEY = 'albumark.presets.v1'
 /** 单个模板的体积上限（assets 以 dataUrl 内嵌） */
@@ -26,8 +28,8 @@ function builtinTemplates(): WatermarkTemplate[] {
     name: '签名',
     content: '辑印 Albumark',
     anchor: 'bottom-right',
-    offsetX: -4,
-    offsetY: -4,
+    offsetX: -40,
+    offsetY: -40,
     scale: 3.6,
     shadow: { enabled: true, blur: 18, opacity: 55, x: 0, y: 8 },
   })
@@ -48,8 +50,8 @@ function builtinTemplates(): WatermarkTemplate[] {
     name: 'EXIF 参数条',
     content: '{机型}　{镜头}\n{焦距}　{光圈}　{快门}　{感光度}',
     anchor: 'bottom-left',
-    offsetX: 4,
-    offsetY: -4,
+    offsetX: 40,
+    offsetY: -40,
     scale: 2.2,
     lineHeight: 1.6,
     letterSpacing: 2,
@@ -77,6 +79,10 @@ function migrateLegacyPresets(): SavedTemplate[] {
   }
 }
 
+function migrateTemplateLayers(t: SavedTemplate): SavedTemplate {
+  return { ...t, layers: t.layers.map(migrateOffsetsToPx) }
+}
+
 function loadSaved(): SavedTemplate[] {
   let saved: SavedTemplate[] = []
   try {
@@ -85,8 +91,24 @@ function loadSaved(): SavedTemplate[] {
   } catch {
     /* 忽略损坏数据 */
   }
+  if (!saved.length) {
+    // 旧版模板键（偏移按长边百分比存储）：读出后迁移并移除
+    try {
+      const raw = window.localStorage.getItem(LEGACY_TEMPLATES_KEY)
+      if (raw) {
+        const list = JSON.parse(raw) as SavedTemplate[]
+        if (Array.isArray(list) && list.length) {
+          saved = list.map(migrateTemplateLayers)
+          window.localStorage.removeItem(LEGACY_TEMPLATES_KEY)
+        }
+      }
+    } catch {
+      /* 忽略损坏数据 */
+    }
+  }
   const legacy = migrateLegacyPresets()
-  return legacy.length ? [...legacy, ...saved] : saved
+  if (legacy.length) saved = [...legacy.map(migrateTemplateLayers), ...saved]
+  return saved
 }
 
 export const useTemplatesStore = defineStore('templates', () => {

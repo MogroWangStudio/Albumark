@@ -48,7 +48,10 @@ export const useExportStore = defineStore('export', () => {
     current.value = ''
 
     try {
-      const assets = await wm.assetPayloads(wm.layers)
+      // 素材按「全局 + 各照片独立水印」引用的并集收集
+      const perImageLayers = wm.perImageSnapshot()
+      const allLayers = [...wm.plainLayers(), ...Object.values(perImageLayers).flat()]
+      const assets = await wm.assetPayloads(allLayers)
       const outputs = await runExport(
         images.items,
         {
@@ -56,6 +59,7 @@ export const useExportStore = defineStore('export', () => {
           adjustments: adjust.snapshotFor(null),
           perImage: adjust.perImageSnapshot(),
           crops: { ...adjust.crops },
+          perImageLayers,
           assets,
           quality: quality.value,
           longEdge: longEdge.value,

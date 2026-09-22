@@ -215,9 +215,11 @@ function resolvedLayer(l: WatermarkLayer): WatermarkLayer {
 }
 
 function resolvedLayers(): WatermarkLayer[] {
-  // 先取纯数据副本，再做令牌替换（响应式 Proxy 无法直接用于克隆）
+  // 先取纯数据副本，再做令牌替换（响应式 Proxy 无法直接用于克隆）；
+  // 用当前照片生效的图层（单独水印优先，否则全局）
   const a = active.value
-  return wm.plainLayers().map((l) =>
+  const list = wm.effectiveLayers(a?.id ?? null)
+  return list.map((l) =>
     l.type === 'text'
       ? { ...l, content: resolveTokens(l.content, a?.exif, a?.baseName) }
       : l,
@@ -252,7 +254,8 @@ function scheduleOverlay(): void {
 }
 
 function hasMissingAssets(): boolean {
-  return wm.layers.some((l) => l.type === 'image' && !assetBmps.has((l as { assetId: string }).assetId))
+  const list = resolvedLayers()
+  return list.some((l) => l.type === 'image' && !assetBmps.has((l as { assetId: string }).assetId))
 }
 
 async function ensureBitmap(): Promise<ImageBitmap | null> {
@@ -311,7 +314,9 @@ async function renderBase(draft: boolean): Promise<void> {
 /** 保持素材位图缓存与图层引用一致（异步加载缺失项后重绘叠加层）。 */
 async function syncAssets(): Promise<void> {
   const needed = new Set(
-    wm.layers.filter((l) => l.type === 'image').map((l) => (l as { assetId: string }).assetId),
+    resolvedLayers()
+      .filter((l) => l.type === 'image')
+      .map((l) => (l as { assetId: string }).assetId),
   )
   let dirty = false
   for (const key of [...assetBmps.keys()]) {
@@ -722,7 +727,7 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
   const imgH = resultMap.h
   const xs: number[] = [imgW / 2, imgW * 0.04, imgW * 0.96]
   const ys: number[] = [imgH / 2, imgH * 0.04, imgH * 0.96]
-  for (const l of wm.layers) {
+  for (const l of resolvedLayers()) {
     if (l.id === excludeId || !l.visible) continue
     const c = layerPivot(l, imgW, imgH)
     xs.push(c.x)
@@ -935,7 +940,7 @@ function onPointerDown(e: PointerEvent): void {
   }
 
   const p = toImagePx(e.clientX, e.clientY)
-  const list = wm.layers
+  const list = resolvedLayers()
   // 中键只负责平移预览，不选中 / 不拖动图层
   if (e.button === 1) {
     wm.selectedId = null
@@ -1024,19 +1029,18 @@ function onPointerMove(e: PointerEvent): void {
     const cssPerImg = resultMap.scale / dpr
     const imgW = resultMap.w
     const imgH = resultMap.h
-    const long = Math.max(imgW, imgH)
     const proposedX = gesture.startCx + (e.clientX - gesture.startClient.x) / cssPerImg
     const proposedY = gesture.startCy + (e.clientY - gesture.startClient.y) / cssPerImg
     const snapped = applySnap(proposedX, proposedY, gid)
     const cx = Math.min(imgW, Math.max(0, snapped.cx))
     const cy = Math.min(imgH, Math.max(0, snapped.cy))
-    const layer = wm.layers.find((l) => l.id === gid)
+    const layer = wm.editTarget().find((l) => l.id === gid)
     if (!layer) return
     const a = anchorPoint(layer.anchor, imgW, imgH)
     snapLines.value = snapped.lines.x !== undefined || snapped.lines.y !== undefined ? snapped.lines : null
     wm.update(gid, {
-      offsetX: ((cx - a.x) / long) * 100,
-      offsetY: ((cy - a.y) / long) * 100,
+      offsetX: Math.round(cx - a.x),
+      offsetY: Math.round(cy - a.y),
     })
     return
   }
@@ -1173,7 +1177,7 @@ watch(
   { deep: true },
 )
 watch(
-  [() => wm.layers, () => wm.selectedId],
+  [() => wm.layers, () => wm.perImage, () => wm.selectedId],
   () => scheduleOverlay(),
   { deep: true },
 )

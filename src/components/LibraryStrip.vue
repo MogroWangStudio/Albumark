@@ -1,15 +1,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Copy, Link2, Link2Off, MapPin, X } from 'lucide-vue-next'
+import { Copy, Droplets, Link2, Link2Off, MapPin, SlidersHorizontal, X } from 'lucide-vue-next'
 import { exifSummaryLine } from '@/core/exif'
 import { isTauri, pickImagePaths } from '@/core/platform'
+import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
+import { useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const images = useImagesStore()
 const ws = useWorkspaceStore()
+const adjust = useAdjustStore()
+const wm = useWatermarkStore()
 
 const emit = defineEmits<{ photoCtx: [e: MouseEvent, id: string] }>()
+
+/** 照片是否启用了任何按张独立处理（单独调节 / 单独水印） */
+function individualFlag(id: string): { adj: boolean; wm: boolean } {
+  return { adj: adjust.isIndividual(id), wm: wm.isIndividual(id) }
+}
 
 const active = computed(() => images.active)
 const infoLine = computed(() => {
@@ -71,6 +80,21 @@ async function removeSelected(): Promise<void> {
         <span v-if="mixedKinds && !item.missing" class="kind" :title="item.kind === 'link' ? '链接源文件' : '已复制原文件'">
           <Link2 v-if="item.kind === 'link'" :size="9" />
           <Copy v-else :size="9" />
+        </span>
+        <span
+          v-if="!item.missing && individualFlag(item.id).adj"
+          class="flag"
+          title="这张照片已开启单独调节"
+        >
+          <SlidersHorizontal :size="9" />
+        </span>
+        <span
+          v-if="!item.missing && individualFlag(item.id).wm"
+          class="flag"
+          :class="{ second: individualFlag(item.id).adj }"
+          title="这张照片已开启单独水印"
+        >
+          <Droplets :size="9" />
         </span>
         <span class="idx">{{ i + 1 }}</span>
         <button class="rm" aria-label="移除这张" @click.stop="ws.removeImage(item.id)">
@@ -172,6 +196,22 @@ async function removeSelected(): Promise<void> {
   border-radius: 4px;
   background: rgba(0, 0, 0, 0.55);
   color: var(--accent);
+}
+/* 单独调节 / 单独水印角标：右上角，第二个图标贴在第一个左侧 */
+.flag {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--accent);
+}
+.flag.second {
+  right: 20px;
 }
 .rm {
   position: absolute;

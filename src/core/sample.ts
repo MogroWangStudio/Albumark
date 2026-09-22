@@ -5,7 +5,6 @@ import type { SerializedAsset, WatermarkLayer } from '@/types/watermark'
 /** 样张尺寸：工作室预览与模板缩略图共用同一构图 */
 export const SAMPLE_W = 1600
 export const SAMPLE_H = 1067
-export const SAMPLE_LONG = Math.max(SAMPLE_W, SAMPLE_H)
 
 /** 生成一张干净的样张（渐变天空 + 地平线），画到任意 2D 上下文上 */
 export function drawSample(

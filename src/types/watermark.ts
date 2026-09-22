@@ -20,13 +20,12 @@ export interface BaseLayer {
   name: string
   visible: boolean
   /**
-   * 定位锚点（九宫格）。图层中心 = 锚点 + 偏移，
-   * 偏移以图片宽/高的百分比存储，跨分辨率保持构图一致。
+   * 定位锚点（九宫格）。图层定位点 = 锚点 + 偏移。
    */
   anchor: AnchorPreset
-  /** 相对锚点的水平偏移（图片长边百分比，可为负；横竖屏切换数值不变） */
+  /** 相对锚点的水平偏移（像素，可为负；所有照片上保持一致，不随尺寸缩放） */
   offsetX: number
-  /** 相对锚点的垂直偏移（图片长边百分比，可为负） */
+  /** 相对锚点的垂直偏移（像素，可为负） */
   offsetY: number
   /** 基准尺寸占图片长边的百分比 */
   scale: number
@@ -133,6 +132,18 @@ export function migrateLayer<T extends WatermarkLayer>(l: T): T {
   delete rest.x
   delete rest.y
   return { ...rest, anchor, offsetX: x - col * 50, offsetY: y - row * 50 } as T
+}
+
+/**
+ * 偏移单位迁移：旧数据按「图片长边百分比」存储，现改为固定像素。
+ * 以标称长边 1000px 折算（百分比数值 ×10），观感接近中等尺寸照片上的原效果。
+ */
+export function migrateOffsetsToPx<T extends WatermarkLayer>(l: T): T {
+  return {
+    ...l,
+    offsetX: Math.round(l.offsetX * 10),
+    offsetY: Math.round(l.offsetY * 10),
+  }
 }
 
 export type TextLayerPatch = Partial<Omit<TextLayer, 'type'>>

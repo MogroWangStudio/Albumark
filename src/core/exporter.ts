@@ -14,6 +14,8 @@ export interface ExportPayload {
   perImage: Record<string, Adjustments>
   /** 照片 id → 裁剪区域（归一化 0–1） */
   crops: Record<string, Crop>
+  /** 开启「单独水印」的照片 id → 独立图层，优先于全局 layers */
+  perImageLayers: Record<string, WatermarkLayer[]>
   assets: AssetPayload[]
   quality: number
   longEdge: number
@@ -75,7 +77,9 @@ export async function runExport(
         continue
       }
       try {
-        const layers = payload.layers.map((l) =>
+        // 单独水印的照片用独立图层，其余用全局
+        const baseLayers = payload.perImageLayers[item.id] ?? payload.layers
+        const layers = baseLayers.map((l) =>
           l.type === 'text'
             ? { ...l, content: resolveTokens(l.content, item.exif, item.baseName) }
             : l,

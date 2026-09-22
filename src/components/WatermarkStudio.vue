@@ -5,7 +5,7 @@ import LayerEditor from '@/components/LayerEditor.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { drawLayers, type AssetMap } from '@/core/draw'
-import { makeSampleBitmap, SAMPLE_H, SAMPLE_LONG, SAMPLE_W } from '@/core/sample'
+import { makeSampleBitmap, SAMPLE_H, SAMPLE_W } from '@/core/sample'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { resolveTokens } from '@/core/tokens'
 import { toast } from '@/stores/toast'
@@ -427,8 +427,8 @@ function onPointerMove(e: PointerEvent): void {
     }
     const a = anchorPoint(layer.anchor, SAMPLE_W, SAMPLE_H)
     wm.update(layer.id, {
-      offsetX: ((cx - a.x) / SAMPLE_LONG) * 100,
-      offsetY: ((cy - a.y) / SAMPLE_LONG) * 100,
+      offsetX: Math.round(cx - a.x),
+      offsetY: Math.round(cy - a.y),
     })
     return
   }
@@ -563,6 +563,8 @@ function onCursorMove(e: PointerEvent): void {
 let ro: ResizeObserver | null = null
 
 onMounted(async () => {
+  // 工作室编辑的是全局水印模板，脱离照片级编辑上下文
+  wm.setEditContext(null)
   sampleBmp = await makeSampleBitmap()
   ro = new ResizeObserver(() => redraw())
   if (boxEl.value) ro.observe(boxEl.value)
