@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { buildZip, runExport } from '@/core/exporter'
 import { isTauri, pickDirectory, revealInFolder, saveZip, writeFilesToDir } from '@/core/platform'
+import type { Crop } from '@/types/adjust'
 import { useAdjustStore } from './adjust'
 import { useImagesStore } from './images'
 import { useWatermarkStore } from './watermark'
@@ -52,13 +53,16 @@ export const useExportStore = defineStore('export', () => {
       const perImageLayers = wm.perImageSnapshot()
       const allLayers = [...wm.plainLayers(), ...Object.values(perImageLayers).flat()]
       const assets = await wm.assetPayloads(allLayers)
+      // 裁剪对象来自响应式存储，传 Worker 前拍平为纯数据
+      const crops: Record<string, Crop> = {}
+      for (const [id, c] of Object.entries(adjust.crops)) crops[id] = { ...c }
       const outputs = await runExport(
         images.items,
         {
           layers: wm.plainLayers(),
           adjustments: adjust.snapshotFor(null),
           perImage: adjust.perImageSnapshot(),
-          crops: { ...adjust.crops },
+          crops,
           perImageLayers,
           assets,
           quality: quality.value,

@@ -228,11 +228,35 @@ function resolvedLayers(): WatermarkLayer[] {
 
 /* ---------- 分层渲染：Worker 只负责底图（解码+调节），水印叠加层在主线程 ---------- */
 
+let draftInFlight = false
+let draftQueued = false
+
+/**
+ * 低清即时渲染：同一时刻只允许一个在途任务。
+ * 拖动滑杆时逐帧请求会被合并——在途任务完成后若参数又变过，用最新参数补一帧，
+ * 避免任务在 Worker 里排队堆积、延迟越滚越大。
+ */
+function scheduleDraft(): void {
+  if (draftInFlight) {
+    draftQueued = true
+    return
+  }
+  draftInFlight = true
+  void renderBase(true).finally(() => {
+    draftInFlight = false
+    if (draftQueued) {
+      draftQueued = false
+      scheduleDraft()
+    }
+  })
+}
+
 function scheduleBase(): void {
   if (!active.value) return
-  void renderBase(true)
+  scheduleDraft()
+  // 停顿 300ms 后再请求一次全分辨率精修
   if (finalTimer) window.clearTimeout(finalTimer)
-  finalTimer = window.setTimeout(() => void renderBase(false), 160)
+  finalTimer = window.setTimeout(() => void renderBase(false), 300)
 }
 
 function scheduleOverlay(): void {
@@ -289,11 +313,13 @@ async function renderBase(draft: boolean): Promise<void> {
   srcBitmap = null // 即将转移给 Worker
   try {
     // 裁剪编辑中渲染「变换后全图」（框外要可见），确认后按矩形取样；
-    // 翻转与拉直在两种状态下都生效
+    // 翻转与拉直在两种状态下都生效。crops 里存的是响应式代理，
+    // 传 Worker 前必须拍平为纯数据，否则结构化克隆失败、渲染静默中断
     const d = adjust.cropMode ? adjust.cropDraft : undefined
-    const crop = adjust.cropMode
+    const sel = adjust.cropMode
       ? { x: 0, y: 0, w: 1, h: 1, rot: d?.rot, flipH: d?.flipH, flipV: d?.flipV }
       : adjust.cropOf(a.id)
+    const crop = sel ? { ...sel } : undefined
     const res = await renderClient.renderPreview(
       bmp,
       [],
@@ -309,7 +335,8 @@ async function renderBase(draft: boolean): Promise<void> {
     resultBmp = res.bitmap
     drawBase()
     drawOverlay()
-  } catch {
+  } catch (err) {
+    console.error("底图渲染失败", err)
     srcBitmap = null
     srcId = null
   }
