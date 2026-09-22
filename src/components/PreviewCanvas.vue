@@ -18,8 +18,10 @@ const props = withDefaults(
     panelInset?: number
     /** 面板吸附在哪一侧：可用区域让到另一侧 */
     panelSide?: 'left' | 'right'
+    /** 移动端底部抽屉占用的高度（CSS px），0 = 未弹起；预览中心相应上移 */
+    panelBottomInset?: number
   }>(),
-  { panelInset: 0, panelSide: 'right' },
+  { panelInset: 0, panelSide: 'right', panelBottomInset: 0 },
 )
 
 const emit = defineEmits<{ ctx: [e: MouseEvent] }>()
@@ -65,6 +67,8 @@ const selRect = ref<{
   height: number
   rotate: number
 } | null>(null)
+/** 底图正在渲染（低清刷新或精修进行中），用于加载提示 */
+const rendering = ref(false)
 /** 吸附参考线（图片坐标系中的 x/y），拖动中显示 */
 const snapLines = ref<{ x?: number; y?: number } | null>(null)
 
@@ -99,10 +103,14 @@ interface Rect {
 function targetAvail(): Rect {
   const maxInset = Math.max(0, view.w - 80)
   const inset = Math.min(Math.max(0, props.panelInset), maxInset)
-  if (inset <= 0) return { x: 0, y: 0, w: view.w, h: view.h }
-  return props.panelSide === 'left'
-    ? { x: inset, y: 0, w: view.w - inset, h: view.h }
-    : { x: 0, y: 0, w: view.w - inset, h: view.h }
+  const maxBottom = Math.max(0, view.h - 80)
+  const bottom = Math.min(Math.max(0, props.panelBottomInset), maxBottom)
+  return {
+    x: inset > 0 && props.panelSide === 'left' ? inset : 0,
+    y: 0,
+    w: view.w - inset,
+    h: view.h - bottom,
+  }
 }
 
 /** 面板展开/收起/换边时可用区域平滑过渡（可被下一次变化接管） */
@@ -136,7 +144,7 @@ const availCx = (): number => avail.x + avail.w / 2
 const availCy = (): number => avail.y + avail.h / 2
 
 watch(
-  [() => props.panelInset, () => props.panelSide, () => view.w, () => view.h],
+  [() => props.panelInset, () => props.panelSide, () => props.panelBottomInset, () => view.w, () => view.h],
   () => {
     const t = targetAvail()
     // 首次（或从无到有）直接就位，之后的变化平滑过渡
@@ -253,10 +261,15 @@ function scheduleDraft(): void {
 
 function scheduleBase(): void {
   if (!active.value) return
+  rendering.value = true
   scheduleDraft()
   // 停顿 300ms 后再请求一次全分辨率精修
   if (finalTimer) window.clearTimeout(finalTimer)
-  finalTimer = window.setTimeout(() => void renderBase(false), 300)
+  finalTimer = window.setTimeout(() => {
+    void renderBase(false).finally(() => {
+      rendering.value = false
+    })
+  }, 300)
 }
 
 function scheduleOverlay(): void {
@@ -307,8 +320,10 @@ async function renderBase(draft: boolean): Promise<void> {
   if (!bmp) return
   const seq = ++baseSeq
   const viewLong = Math.max(view.w, view.h) * view.dpr || 800
+  // 即时刷新用「不低于当前显示分辨率」的档位：替换位图时尺寸不变，避免画面忽糊忽清地闪烁
+  const currentLong = resultBmp ? Math.max(resultBmp.width, resultBmp.height) : 0
   const maxLong = draft
-    ? Math.min(perf.value.draft, viewLong)
+    ? Math.max(perf.value.draft, currentLong)
     : Math.min(perf.value.final, viewLong)
   srcBitmap = null // 即将转移给 Worker
   try {
@@ -1226,7 +1241,12 @@ function scheduleHiRes(): void {
     if (!resultBmp || !active.value) return
     const desired = Math.round(Math.max(view.w, view.h) * zoom.value * (view.dpr || 1))
     const current = Math.max(resultBmp.width, resultBmp.height)
-    if (desired > current + 100) void renderBase(false)
+    if (desired > current + 100) {
+      rendering.value = true
+      void renderBase(false).finally(() => {
+        rendering.value = false
+      })
+    }
   }, 280)
 }
 
@@ -1326,8 +1346,13 @@ watch(
   },
   () => {
     if (!adjust.cropMode) return
+    rendering.value = true
     if (finalTimer) window.clearTimeout(finalTimer)
-    finalTimer = window.setTimeout(() => void renderBase(false), 140)
+    finalTimer = window.setTimeout(() => {
+      void renderBase(false).finally(() => {
+        rendering.value = false
+      })
+    }, 140)
   },
 )
 
@@ -1403,6 +1428,11 @@ onBeforeUnmount(() => {
         }"
       />
     </div>
+    <Transition name="fade">
+      <div v-if="rendering" class="render-hint" aria-hidden="true">
+        <span class="render-spin" />渲染中
+      </div>
+    </Transition>
     <button
       class="zoom-badge"
       :class="{ open: zoomMenuOpen }"
@@ -1462,6 +1492,43 @@ onBeforeUnmount(() => {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   transition: box-shadow var(--dur-fast) var(--ease);
 }
+/* 渲染中提示：与缩放药丸同风格的小徽章 */
+.render-hint {
+  position: absolute;
+  left: calc(10px + var(--safe-left));
+  bottom: calc(40px + var(--safe-bottom));
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  backdrop-filter: var(--blur-material);
+  -webkit-backdrop-filter: var(--blur-material);
+  font-size: 11px;
+  color: var(--text-2);
+}
+.render-spin {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: render-spin 0.9s linear infinite;
+}
+@keyframes render-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .render-spin {
+    animation-duration: 2s;
+  }
+}
 .zoom-badge {
   position: absolute;
   left: calc(10px + var(--safe-left));
@@ -1469,7 +1536,7 @@ onBeforeUnmount(() => {
   z-index: 5;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 0;
   padding: 3px 9px;
   border-radius: 999px;
   border: 1px solid var(--line);
@@ -1479,20 +1546,28 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
-  transition: color var(--dur-hover) var(--ease-soft), border-color var(--dur-hover) var(--ease-soft);
+  transition: color var(--dur-hover) var(--ease-soft), border-color var(--dur-hover) var(--ease-soft),
+    padding var(--dur-hover) var(--ease-soft);
+}
+/* 箭头默认不占位，悬停 / 打开时药丸扩宽、箭头滑入 */
+.zoom-caret {
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(1px);
+  transition: opacity var(--dur-hover) var(--ease-soft), transform var(--dur-hover) var(--ease-soft),
+    width var(--dur-hover) var(--ease-soft), margin-left var(--dur-hover) var(--ease-soft);
 }
 .zoom-badge:hover,
 .zoom-badge.open {
   color: var(--text);
   border-color: var(--line-strong);
-}
-.zoom-caret {
-  opacity: 0;
-  transform: translateY(1px);
-  transition: opacity var(--dur-hover) var(--ease-soft), transform var(--dur-hover) var(--ease-soft);
+  padding-right: 6px;
 }
 .zoom-badge:hover .zoom-caret,
 .zoom-badge.open .zoom-caret {
+  width: 11px;
+  margin-left: 3px;
   opacity: 0.75;
   transform: translateY(0);
 }

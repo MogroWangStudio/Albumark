@@ -4,8 +4,8 @@ import { ArrowLeft, Check, Plus, Save } from 'lucide-vue-next'
 import LayerEditor from '@/components/LayerEditor.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
 import AppButton from '@/components/ui/AppButton.vue'
-import { drawLayers, type AssetMap } from '@/core/draw'
-import { makeSampleBitmap, SAMPLE_H, SAMPLE_W } from '@/core/sample'
+import { type AssetMap } from '@/core/draw'
+import { makeSampleBitmap, paintComposed, SAMPLE_H, SAMPLE_W } from '@/core/sample'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { resolveTokens } from '@/core/tokens'
 import { toast } from '@/stores/toast'
@@ -109,6 +109,23 @@ function resolvedLayers(): WatermarkLayer[] {
   )
 }
 
+/** 含边框扩展的最终画布尺寸（照片区域仍是样张尺寸） */
+const frameSize = computed(() => {
+  let l = 0
+  let r = 0
+  let t = 0
+  let b = 0
+  for (const layer of wm.layers) {
+    if (layer.type === 'border' && layer.visible) {
+      l += layer.left
+      r += layer.right
+      t += layer.top
+      b += layer.bottom
+    }
+  }
+  return { w: SAMPLE_W + l + r, h: SAMPLE_H + t + b }
+})
+
 function redraw(): void {
   const canvas = canvasEl.value
   if (!canvas || !sampleBmp) return
@@ -124,21 +141,23 @@ function redraw(): void {
   if (!ctx) return
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, cw, ch)
-  // 样张先按容器适应并居中，再叠加视图缩放与平移（放大后可平移查看边缘）
-  const baseFit = Math.min(rect.width / SAMPLE_W, rect.height / SAMPLE_H)
+  // 画布（照片 + 边框）按容器适应并居中，再叠加视图缩放与平移（放大后可平移查看边缘）
+  const frame = frameSize.value
+  const baseFit = Math.min(rect.width / frame.w, rect.height / frame.h)
   const fit = baseFit * viewZoom.value
-  const ox = (rect.width * dpr - SAMPLE_W * fit) / 2 + viewPan.x * dpr
-  const oy = (rect.height * dpr - SAMPLE_H * fit) / 2 + viewPan.y * dpr
+  const ox = (rect.width * dpr - frame.w * fit) / 2 + viewPan.x * dpr
+  const oy = (rect.height * dpr - frame.h * fit) / 2 + viewPan.y * dpr
   ctx.translate(ox, oy)
   ctx.scale(fit, fit)
-  ctx.drawImage(sampleBmp, 0, 0)
-  drawLayers(ctx, SAMPLE_W, SAMPLE_H, resolvedLayers(), assetBmps)
+  const composed = paintComposed(ctx, sampleBmp, SAMPLE_W, SAMPLE_H, resolvedLayers(), assetBmps)
+  const { photoX, photoY } = composed
 
-  // 选中图层：描边框 + 锚点十字，与主界面预览一致（边框层全画布，不画锚点）
+  // 选中图层：描边框 + 锚点十字，画在照片区域坐标系（边框层全画布，不画锚点）
   const sel = wm.selected
   if (sel && sel.type !== 'border') {
-    const box = measureLayer(sel, SAMPLE_W, SAMPLE_H, measureContext())
     ctx.save()
+    ctx.translate(photoX, photoY)
+    const box = measureLayer(sel, SAMPLE_W, SAMPLE_H, measureContext())
     ctx.strokeStyle = 'rgba(255, 167, 47, 0.95)'
     ctx.lineWidth = 1.5 / fit
     ctx.setLineDash([5 / fit, 4 / fit])
@@ -158,8 +177,9 @@ function redraw(): void {
     ctx.restore()
   }
   vmap.scale = fit
-  vmap.ox = ox
-  vmap.oy = oy
+  // 指针换算基于照片区域原点（水印定位坐标系）
+  vmap.ox = ox + photoX * fit
+  vmap.oy = oy + photoY * fit
   vmap.dpr = dpr
 }
 
@@ -210,8 +230,9 @@ let viewAnim = 0
 
 /** 样张在当前容器下 zoom=1 的显示尺寸（CSS px） */
 function fitSize(rect: DOMRect): { w: number; h: number } {
-  const fit = Math.min(rect.width / SAMPLE_W, rect.height / SAMPLE_H)
-  return { w: SAMPLE_W * fit, h: SAMPLE_H * fit }
+  const frame = frameSize.value
+  const fit = Math.min(rect.width / frame.w, rect.height / frame.h)
+  return { w: frame.w * fit, h: frame.h * fit }
 }
 
 /** Apple 式橡皮筋：越界越多阻力越大 */
@@ -645,7 +666,7 @@ watch(mode, async (m) => {
         <p class="tip">滚轮缩放、拖动平移样张；直接拖动水印可调整位置，保存的水印会应用到项目里的每一张照片。</p>
       </div>
       <aside class="editor material">
-        <LayerEditor :img-w="SAMPLE_W" :img-h="SAMPLE_H" :show-templates="false" />
+        <LayerEditor :img-w="frameSize.w" :img-h="frameSize.h" :show-templates="false" />
       </aside>
     </div>
   </div>

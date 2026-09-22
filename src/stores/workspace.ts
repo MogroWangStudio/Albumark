@@ -382,6 +382,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       images.setItems(items)
       manifest.value = data
       current.value = meta
+    } catch (err) {
+      // 安卓 / 慢存储上读文件可能偶发失败：给出提示而不是静默失败，让用户能重试
+      toast(`打开项目失败：${err instanceof Error ? err.message : '文件读取异常，请重试'}`, 'error')
     } finally {
       loading.value = false
     }

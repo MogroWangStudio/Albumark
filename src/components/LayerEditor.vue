@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import {
   ArrowDown,
   ArrowUp,
@@ -18,6 +18,7 @@ import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import { TOKENS, missingTokens } from '@/core/tokens'
+import { renderTemplateThumb } from '@/core/sample'
 import { toast } from '@/stores/toast'
 import { useFontsStore, FONT_CATEGORY_LABELS } from '@/stores/fonts'
 import { useTemplatesStore } from '@/stores/templates'
@@ -134,15 +135,36 @@ function borderColor(side: Side): string {
 /** 当前编辑目标图层列表（全局或单独水印副本），供图层列表渲染 */
 const editLayers = computed(() => wm.editTarget())
 
-/* ---------- 模板选择：选模板后询问覆盖还是追加 ---------- */
+/* ---------- 模板选择：卡片网格（带缩略图），选模板后询问覆盖还是追加 ---------- */
 
 const tplOpen = ref(false)
 const tplPending = ref<{ id: string; name: string; layers: WatermarkLayer[]; assets: unknown[]; builtin?: boolean } | null>(null)
+const tplCanvases = new Map<string, HTMLCanvasElement>()
+let tplRenderSeq = 0
 
 function openTplPicker(): void {
   tplPending.value = null
   tplOpen.value = true
 }
+
+function setTplCanvas(id: string): (el: unknown) => void {
+  return (el) => {
+    if (el) tplCanvases.set(id, el as HTMLCanvasElement)
+    else tplCanvases.delete(id)
+  }
+}
+
+watch(tplOpen, async (open) => {
+  if (!open) return
+  const seq = ++tplRenderSeq
+  await nextTick()
+  for (const t of templates.all) {
+    const canvas = tplCanvases.get(t.id)
+    if (!canvas) continue
+    await renderTemplateThumb(canvas, t.layers, t.assets as never[])
+    if (seq !== tplRenderSeq) return
+  }
+})
 
 function applyTpl(mode: 'replace' | 'append'): void {
   const t = tplPending.value
@@ -837,14 +859,15 @@ function applyCustomFont(): void {
       @change="onImageFile"
     />
 
-    <!-- 模板选择：先选模板，再决定完全覆盖还是追加水印层 -->
-    <AppDialog :open="tplOpen" title="选择水印模板" :width="420" @close="tplOpen = false">
-      <div v-if="!tplPending" class="tpl-list">
-        <button v-for="t in templates.all" :key="t.id" class="tpl-item" @click="tplPending = t">
+    <!-- 模板选择：卡片网格带缩略图，选模板后决定完全覆盖还是追加水印层 -->
+    <AppDialog :open="tplOpen" title="选择水印模板" :width="480" @close="tplOpen = false">
+      <div v-if="!tplPending" class="tpl-grid">
+        <button v-for="t in templates.all" :key="t.id" class="tpl-card" @click="tplPending = t">
+          <canvas :ref="setTplCanvas(t.id)" class="tpl-thumb" />
           <span class="tpl-name">{{ t.name }}</span>
           <span class="tpl-meta">{{ t.layers.length }} 个图层{{ t.builtin ? ' · 内置' : '' }}</span>
         </button>
-        <p v-if="!templates.all.length" class="empty">还没有模板。先在对话框外把当前配置存为模板。</p>
+        <p v-if="!templates.all.length" class="empty">还没有模板。先把当前配置存为模板。</p>
       </div>
       <div v-else class="tpl-confirm">
         <p class="tpl-question">
@@ -908,36 +931,42 @@ function applyCustomFont(): void {
   line-height: 1.5;
   margin-bottom: 10px;
 }
-/* 模板选择弹层 */
-.tpl-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 320px;
+/* 模板选择：卡片网格 */
+.tpl-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  max-height: 380px;
   overflow-y: auto;
 }
-.tpl-item {
+.tpl-card {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: var(--r-m);
   background: var(--bg);
   text-align: left;
   transition: border-color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
 }
-.tpl-item:hover {
+.tpl-card:hover {
   border-color: var(--accent);
   background: var(--hover);
 }
+.tpl-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--r-s);
+  background: var(--canvas);
+  display: block;
+}
 .tpl-name {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
 }
 .tpl-meta {
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--text-3);
 }
 .tpl-question {

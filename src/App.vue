@@ -321,6 +321,13 @@ const panelInset = computed(() =>
   inProject.value && panelOpen.value && !isNarrow.value ? PANEL_W + PANEL_EDGE * 2 : 0,
 )
 
+/** 移动端底部抽屉弹起时让出的高度：预览中心上移到抽屉上方的剩余区域 */
+const panelBottomInset = computed(() => {
+  if (!inProject.value || !panelOpen.value || !isNarrow.value) return 0
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800
+  return Math.min(vh * 0.46, 430) + 30
+})
+
 /* ---------- 自定义右键菜单 ---------- */
 
 const ctxState = ref<{ x: number; y: number; items: ContextMenuItem[] } | null>(null)
@@ -506,6 +513,7 @@ onBeforeUnmount(() => {
                     ref="previewRef"
                     :panel-inset="panelInset"
                     :panel-side="panelSide"
+                    :panel-bottom-inset="panelBottomInset"
                     @ctx="onPreviewCtx"
                   />
                   <ImportOverlay
@@ -513,6 +521,7 @@ onBeforeUnmount(() => {
                     key="import"
                     :panel-inset="panelInset"
                     :panel-side="panelSide"
+                    :panel-bottom-inset="panelBottomInset"
                     @pick="openPicker"
                     @open-url="urlOpen = true"
                   />

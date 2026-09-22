@@ -9,8 +9,10 @@ const props = withDefaults(
     /** 悬浮面板让出的宽度：0 = 面板收起或移动端底部形态 */
     panelInset?: number
     panelSide?: 'left' | 'right'
+    /** 移动端底部抽屉让出的高度：内容中心上移 */
+    panelBottomInset?: number
   }>(),
-  { panelInset: 0, panelSide: 'right' },
+  { panelInset: 0, panelSide: 'right', panelBottomInset: 0 },
 )
 
 defineEmits<{
@@ -27,10 +29,16 @@ const greeting =
 const shift = computed(() =>
   props.panelInset > 0 ? (props.panelInset / 2) * (props.panelSide === 'left' ? 1 : -1) : 0,
 )
+const lift = computed(() => (props.panelBottomInset > 0 ? props.panelBottomInset / 2 : 0))
 </script>
 
 <template>
-  <div class="empty" :style="shift ? { transform: `translateX(${shift}px)` } : undefined">
+  <div
+    class="empty"
+    :style="{
+      transform: `translate(${shift}px, ${-lift}px)`,
+    }"
+  >
     <LogoMark class="mark" />
     <h1>{{ greeting }}</h1>
     <p>选择或拖入照片，开始今天的辑录。</p>

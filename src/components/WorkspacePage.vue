@@ -270,6 +270,14 @@ onMounted(() => {
       </div>
     </Transition>
 
+    <!-- 打开项目 / 切换目录：页面级加载提示 -->
+    <Transition name="fade">
+      <div v-if="ws.loading" class="page-loading" aria-hidden="true">
+        <span class="page-spin" />
+        <p>正在打开…</p>
+      </div>
+    </Transition>
+
     <!-- 移除工作目录记录 -->
     <AppDialog :open="!!removeDirTarget" title="移除工作目录" :width="380" @close="removeDirTarget = null">
       <p class="confirm-text">
@@ -679,5 +687,44 @@ h1 {
 .fwd-leave-to {
   opacity: 0;
   transform: translateX(-22px);
+}
+
+/* 打开项目 / 扫描中：居中加载提示 */
+.page-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.page-loading p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.page-spin {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2.5px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: page-spin 0.9s linear infinite;
+}
+@keyframes page-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-spin {
+    animation-duration: 2s;
+  }
 }
 </style>
