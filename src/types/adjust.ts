@@ -6,6 +6,10 @@ export interface Adjustments {
   highlights: number
   temperature: number
   tint: number
+  /** 自然饱和度：低饱和像素提升更多，高饱和区域基本不动 */
+  vibrance: number
+  /** 饱和度：全画面线性增减 */
+  saturation: number
   vignette: number
   /** 去雾：拉黑场 + 提对比，减轻灰蒙感 */
   dehaze: number
@@ -20,6 +24,15 @@ export interface Adjustments {
    * 空数组 / undefined = 恒等曲线（不调整）。
    */
   curve?: number[]
+  /** HSL 分色调整：8 色带各自的色相 / 饱和度 / 亮度偏移（-100~100）；undefined = 全部中性 */
+  hsl?: HslShift
+}
+
+/** 8 色带 [红, 橙, 黄, 绿, 青, 蓝, 紫, 洋红] 的分色偏移 */
+export interface HslShift {
+  h: number[]
+  s: number[]
+  l: number[]
 }
 
 export type AdjustKey = keyof Adjustments
@@ -32,6 +45,8 @@ export const NEUTRAL: Adjustments = {
   highlights: 0,
   temperature: 0,
   tint: 0,
+  vibrance: 0,
+  saturation: 0,
   vignette: 0,
   dehaze: 0,
   clarity: 0,
@@ -39,7 +54,28 @@ export const NEUTRAL: Adjustments = {
   grain: 0,
 }
 
-export const ADJUST_DEFS: { key: Exclude<AdjustKey, 'curve'>; label: string }[] = [
+/** HSL 色带：hue 为色相中心（度），swatch 用于 UI 色点 */
+export const HSL_BANDS: { label: string; hue: number; swatch: string }[] = [
+  { label: '红', hue: 0, swatch: '#e5484d' },
+  { label: '橙', hue: 30, swatch: '#f76b15' },
+  { label: '黄', hue: 60, swatch: '#f5d90a' },
+  { label: '绿', hue: 120, swatch: '#46a758' },
+  { label: '青', hue: 180, swatch: '#00a2c7' },
+  { label: '蓝', hue: 240, swatch: '#3e63dd' },
+  { label: '紫', hue: 270, swatch: '#8e4ec6' },
+  { label: '洋红', hue: 300, swatch: '#d6409f' },
+]
+
+export function neutralHsl(): HslShift {
+  return { h: [0, 0, 0, 0, 0, 0, 0, 0], s: [0, 0, 0, 0, 0, 0, 0, 0], l: [0, 0, 0, 0, 0, 0, 0, 0] }
+}
+
+export function isHslNeutral(hsl?: HslShift): boolean {
+  if (!hsl) return true
+  return !hsl.h.some((v) => v !== 0) && !hsl.s.some((v) => v !== 0) && !hsl.l.some((v) => v !== 0)
+}
+
+export const ADJUST_DEFS: { key: Exclude<AdjustKey, 'curve' | 'hsl'>; label: string }[] = [
   { key: 'exposure', label: '曝光' },
   { key: 'brightness', label: '亮度' },
   { key: 'contrast', label: '对比度' },
@@ -47,6 +83,8 @@ export const ADJUST_DEFS: { key: Exclude<AdjustKey, 'curve'>; label: string }[] 
   { key: 'shadows', label: '阴影' },
   { key: 'temperature', label: '色温' },
   { key: 'tint', label: '色调' },
+  { key: 'vibrance', label: '自然饱和度' },
+  { key: 'saturation', label: '饱和度' },
   { key: 'dehaze', label: '去雾' },
   { key: 'clarity', label: '清晰度' },
   { key: 'sharpen', label: '锐化' },
@@ -59,7 +97,11 @@ export function isCurveNeutral(curve?: number[]): boolean {
 }
 
 export function isNeutral(a: Adjustments): boolean {
-  return ADJUST_DEFS.every(({ key }) => a[key] === 0) && isCurveNeutral(a.curve)
+  return (
+    ADJUST_DEFS.every(({ key }) => a[key] === 0) &&
+    isCurveNeutral(a.curve) &&
+    isHslNeutral(a.hsl)
+  )
 }
 
 /* ---------- 裁剪 ---------- */

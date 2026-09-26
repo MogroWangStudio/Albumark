@@ -70,6 +70,46 @@ export const useImagesStore = defineStore('images', () => {
     activeId.value = id
   }
 
+  /* ---------- 多选模式：勾选 / 框选 / 快捷键批量选中后统一操作 ---------- */
+
+  const multiSelect = ref(false)
+  /** Shift 范围选择的锚点（最近一次勾选的照片） */
+  const lastChecked = ref<string | null>(null)
+
+  function toggleMultiSelect(on?: boolean): void {
+    const next = on ?? !multiSelect.value
+    multiSelect.value = next
+    if (!next) {
+      selectedIds.value = new Set()
+      lastChecked.value = null
+    }
+  }
+
+  /** 勾选 / 取消勾选一张（不改变当前照片） */
+  function toggleSelect(id: string): void {
+    const next = new Set(selectedIds.value)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    selectedIds.value = next
+    lastChecked.value = id
+  }
+
+  /** 从锚点到目标照片的区间全部勾选（Shift+点击） */
+  function selectRange(anchorId: string, id: string): void {
+    const order = items.value.map((i) => i.id)
+    const a = order.indexOf(anchorId)
+    const b = order.indexOf(id)
+    if (a < 0 || b < 0) return
+    const next = new Set(selectedIds.value)
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) next.add(order[i])
+    selectedIds.value = next
+    lastChecked.value = id
+  }
+
+  function selectAll(): void {
+    selectedIds.value = new Set(items.value.map((i) => i.id))
+  }
+
   /** 按方向键顺序切换当前照片（循环），返回是否切换成功。 */
   function step(delta: 1 | -1): boolean {
     const list = items.value
@@ -199,6 +239,12 @@ export const useImagesStore = defineStore('images', () => {
     active,
     count,
     select,
+    multiSelect,
+    lastChecked,
+    toggleMultiSelect,
+    toggleSelect,
+    selectRange,
+    selectAll,
     step,
     addFiles,
     addFromUrl,

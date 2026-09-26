@@ -1,5 +1,8 @@
 import type { Adjustments } from '@/types/adjust'
-import { isCurveNeutral } from '@/types/adjust'
+import { isCurveNeutral, isHslNeutral } from '@/types/adjust'
+
+/** HSL 色带中心（度），与 HSL_BANDS 一致：红 橙 黄 绿 青 蓝 紫 洋红 */
+const HUE_CENTERS = [0, 30, 60, 120, 180, 240, 270, 300]
 
 /* ---------- 色调曲线 ---------- */
 
@@ -136,8 +139,8 @@ function toRGBFloat(data: Uint8ClampedArray): Float32Array {
 }
 
 /**
- * 单遍像素调节管线：曝光 → 亮度 → 对比度 → 阴影/高光 → 色温/色调 → 去雾 →
- * 清晰度 → 锐化 → 晕影 → 曲线 → 颗粒。
+ * 单遍像素调节管线：曝光 → 亮度 → 对比度 → 阴影/高光 → 色温/色调 →
+ * 自然饱和度/饱和度 → HSL 分色 → 去雾 → 清晰度 → 锐化 → 晕影 → 曲线 → 颗粒。
  * 直接操作 RGBA 数据，供 Web Worker 调用；滑杆参数取 -100 ~ 100，曲线为 0–1 控制点。
  */
 export function applyAdjustments(
@@ -159,6 +162,13 @@ export function applyAdjustments(
   const sharpen = a.sharpen / 100
   const grain = a.grain / 100
   const lut = buildCurveLut(a.curve)
+
+  // 自然饱和度 + 饱和度：以 luma 为轴缩放色度；自然饱和度对低饱和像素加权更大
+  const vib = (a.vibrance / 100) * 1.6
+  const satMul = 1 + a.saturation / 100
+  const colorOn = satMul !== 1 || vib !== 0
+  // HSL 分色：仅在给出非中性偏移时进入逐像素 RGB↔HSL 的开销
+  const hs = isHslNeutral(a.hsl) ? null : a.hsl
 
   const cx = w / 2
   const cy = h / 2
@@ -208,6 +218,82 @@ export function applyAdjustments(
         g -= tint
         r += tint * 0.4
         b += tint * 0.4
+      }
+      // 自然饱和度 / 饱和度：向 luma 轴缩放色度，自然饱和度在低饱和像素上权重更高
+      if (colorOn) {
+        const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        let f = satMul
+        if (vib !== 0) {
+          const cmx = r > g ? (r > b ? r : b) : g > b ? g : b
+          const cmn = r < g ? (r < b ? r : b) : g < b ? g : b
+          f *= 1 + vib * (1 - (cmx - cmn) / 255)
+        }
+        r = lum + (r - lum) * f
+        g = lum + (g - lum) * f
+        b = lum + (b - lum) * f
+      }
+      // HSL 分色：像素色相落在哪个色带（相邻带线性过渡）就按该带偏移调整
+      if (hs) {
+        const hmx = r > g ? (r > b ? r : b) : g > b ? g : b
+        const hmn = r < g ? (r < b ? r : b) : g < b ? g : b
+        const d = hmx - hmn
+        if (d > 0.5) {
+          const L = (hmx + hmn) / 510
+          let hue: number
+          if (hmx === r) hue = 60 * (((g - b) / d) % 6)
+          else if (hmx === g) hue = 60 * ((b - r) / d + 2)
+          else hue = 60 * ((r - g) / d + 4)
+          if (hue < 0) hue += 360
+          const S = d / 255 / (1 - Math.abs(2 * L - 1) + 1e-6)
+          let seg = 7
+          for (let i = 0; i < 7; i++) {
+            if (hue >= HUE_CENTERS[i] && hue < HUE_CENTERS[i + 1]) {
+              seg = i
+              break
+            }
+          }
+          const next = seg === 7 ? 0 : seg + 1
+          const span = (seg === 7 ? 360 : HUE_CENTERS[next]) - HUE_CENTERS[seg]
+          const t = (hue - HUE_CENTERS[seg]) / span
+          const w0 = 1 - t
+          const w1 = t
+          const dh = (w0 * hs.h[seg] + w1 * hs.h[next]) * 0.45
+          const ds = (w0 * hs.s[seg] + w1 * hs.s[next]) / 100
+          const dl = (w0 * hs.l[seg] + w1 * hs.l[next]) / 100
+          const h2 = (hue + dh + 360) % 360
+          const s2 = S > 1 ? 1 : S * (1 + (ds < -1 ? -1 : ds > 1 ? 1 : ds))
+          const L2 = L + dl * 0.4
+          // HSL → RGB
+          const c = (1 - Math.abs(2 * (L2 < 0 ? 0 : L2 > 1 ? 1 : L2) - 1)) * (s2 < 0 ? 0 : s2 > 1 ? 1 : s2)
+          const hp = h2 / 60
+          const xx = c * (1 - Math.abs((hp % 2) - 1))
+          let r1 = 0
+          let g1 = 0
+          let b1 = 0
+          if (hp < 1) {
+            r1 = c
+            g1 = xx
+          } else if (hp < 2) {
+            r1 = xx
+            g1 = c
+          } else if (hp < 3) {
+            g1 = c
+            b1 = xx
+          } else if (hp < 4) {
+            g1 = xx
+            b1 = c
+          } else if (hp < 5) {
+            r1 = xx
+            b1 = c
+          } else {
+            r1 = c
+            b1 = xx
+          }
+          const m2 = (L2 < 0 ? 0 : L2 > 1 ? 1 : L2) - c / 2
+          r = (r1 + m2) * 255
+          g = (g1 + m2) * 255
+          b = (b1 + m2) * 255
+        }
       }
       // 去雾：按雾量拉黑场再补一点对比，减掉大气灰蒙
       if (dehaze > 0) {

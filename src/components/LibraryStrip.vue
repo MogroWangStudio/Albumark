@@ -1,6 +1,17 @@
 <script setup lang="ts">
-import { computed, toRaw, watch } from 'vue'
-import { Copy, Crop, Droplets, Link2, Link2Off, MapPin, SlidersHorizontal, X } from 'lucide-vue-next'
+import { computed, ref, toRaw, watch } from 'vue'
+import {
+  CheckSquare,
+  Copy,
+  Crop,
+  Droplets,
+  Link2,
+  Link2Off,
+  MapPin,
+  SlidersHorizontal,
+  Square,
+  X,
+} from 'lucide-vue-next'
 import { exifSummaryLine } from '@/core/exif'
 import { composeThumb } from '@/core/compose'
 import { isTauri, pickImagePaths } from '@/core/platform'
@@ -10,6 +21,8 @@ import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore } from '@/stores/workspace'
+import AppButton from '@/components/ui/AppButton.vue'
+import AppDialog from '@/components/ui/AppDialog.vue'
 
 const images = useImagesStore()
 const ws = useWorkspaceStore()
@@ -95,17 +108,117 @@ async function relinkActive(): Promise<void> {
 async function removeSelected(): Promise<void> {
   for (const id of [...images.selectedIds]) await ws.removeImage(id)
 }
+
+/* ---------- 移除确认：单张 / 所选 / 清空都先询问 ---------- */
+
+const confirmState = ref<{ kind: 'one' | 'selected' | 'all'; id?: string; name: string; count: number } | null>(null)
+const confirmText = computed(() => {
+  const c = confirmState.value
+  if (!c) return ''
+  if (c.kind === 'one') return `移除「${c.name}」？照片将移入回收站，仍可从回收站找回。`
+  if (c.kind === 'selected') return `移除所选的 ${c.count} 张照片？将移入回收站，仍可从回收站找回。`
+  return `清空全部 ${c.count} 张照片？`
+})
+
+function askRemoveOne(id: string): void {
+  const it = images.items.find((i) => i.id === id)
+  confirmState.value = { kind: 'one', id, name: it?.name ?? '照片', count: 1 }
+}
+function askRemoveSelected(): void {
+  confirmState.value = { kind: 'selected', name: '', count: images.selectedIds.size }
+}
+function askRemoveAll(): void {
+  confirmState.value = { kind: 'all', name: '', count: images.count }
+}
+async function confirmRemove(): Promise<void> {
+  const c = confirmState.value
+  confirmState.value = null
+  if (!c) return
+  if (c.kind === 'one' && c.id) await ws.removeImage(c.id)
+  else if (c.kind === 'selected') await removeSelected()
+  else images.clear()
+}
+
+/* ---------- 多选模式：点击勾选、Shift 范围、拖动框选 ---------- */
+
+const thumbsEl = ref<HTMLElement | null>(null)
+const marquee = ref<{ x: number; y: number; w: number; h: number } | null>(null)
+let marqueeStart: { x: number; y: number } | null = null
+let marqueeActive = false
+
+function onThumbClick(e: MouseEvent, id: string): void {
+  if (marqueeActive) {
+    marqueeActive = false
+    marquee.value = null
+    return
+  }
+  if (images.multiSelect) {
+    if (e.shiftKey && images.lastChecked) images.selectRange(images.lastChecked, id)
+    else images.toggleSelect(id)
+    return
+  }
+  images.select(id, e.metaKey || e.ctrlKey)
+}
+
+function onThumbDown(e: PointerEvent): void {
+  if (!images.multiSelect) return
+  if (e.pointerType === 'mouse' && e.button !== 0) return
+  marqueeStart = { x: e.clientX, y: e.clientY }
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+}
+
+function onThumbMove(e: PointerEvent): void {
+  if (!marqueeStart) return
+  if (!marqueeActive && Math.abs(e.clientX - marqueeStart.x) + Math.abs(e.clientY - marqueeStart.y) < 8) return
+  marqueeActive = true
+  const x = Math.min(marqueeStart.x, e.clientX)
+  const y = Math.min(marqueeStart.y, e.clientY)
+  const w = Math.abs(e.clientX - marqueeStart.x)
+  const h = Math.abs(e.clientY - marqueeStart.y)
+  marquee.value = { x, y, w, h }
+  // 实时预览：与选框相交的缩略图进入选中集合
+  const ids = new Set<string>()
+  thumbsEl.value?.querySelectorAll<HTMLElement>('.thumb').forEach((el) => {
+    const r = el.getBoundingClientRect()
+    if (r.right > x && r.left < x + w && r.bottom > y && r.top < y + h) {
+      const id = el.dataset.id
+      if (id) ids.add(id)
+    }
+  })
+  images.selectedIds = ids
+}
+
+function onThumbUp(): void {
+  marqueeStart = null
+  // 结算留在 click 里：没有拖动时按勾选处理，拖动后忽略 click
+}
+
+const marqueeStyle = computed(() => {
+  const m = marquee.value
+  return m
+    ? { left: `${m.x}px`, top: `${m.y}px`, width: `${m.w}px`, height: `${m.h}px` }
+    : {}
+})
 </script>
 
 <template>
   <div class="strip material">
-    <div class="thumbs">
+    <div
+      ref="thumbsEl"
+      class="thumbs"
+      :class="{ choosing: images.multiSelect }"
+    >
       <div
         v-for="(item, i) in images.items"
         :key="item.id"
         class="thumb"
         :class="{ active: item.id === images.activeId, selected: images.selectedIds.has(item.id), missing: item.missing }"
-        @click="images.select(item.id, $event.metaKey || $event.ctrlKey)"
+        :data-id="item.id"
+        @click="onThumbClick($event, item.id)"
+        @pointerdown="onThumbDown"
+        @pointermove="onThumbMove"
+        @pointerup="onThumbUp"
+        @pointercancel="onThumbUp"
         @contextmenu.stop="emit('photoCtx', $event, item.id)"
       >
         <img
@@ -116,6 +229,12 @@ async function removeSelected(): Promise<void> {
           decoding="async"
         />
         <Link2Off v-else-if="item.missing" :size="18" class="missing-icon" />
+        <span
+          v-if="images.multiSelect && images.selectedIds.has(item.id)"
+          class="pick"
+        >
+          <CheckSquare :size="13" />
+        </span>
         <span v-if="mixedKinds && !item.missing" class="kind" :title="item.kind === 'link' ? '链接源文件' : '已复制原文件'">
           <Link2 v-if="item.kind === 'link'" :size="9" />
           <Copy v-else :size="9" />
@@ -132,7 +251,12 @@ async function removeSelected(): Promise<void> {
           <Crop v-else :size="9" />
         </span>
         <span class="idx">{{ i + 1 }}</span>
-        <button class="rm" aria-label="移除这张" @click.stop="ws.removeImage(item.id)">
+        <button
+          v-if="!images.multiSelect"
+          class="rm"
+          aria-label="移除这张"
+          @click.stop="askRemoveOne(item.id)"
+        >
           <X :size="11" />
         </button>
       </div>
@@ -155,9 +279,26 @@ async function removeSelected(): Promise<void> {
       >
         <MapPin :size="12" />{{ missingCount }} 张源文件失联，重新定位
       </button>
-      <button v-if="images.selectedIds.size > 1" class="link" @click="removeSelected">移除所选</button>
-      <button v-if="images.count" class="link" @click="images.clear()">清空</button>
+      <template v-if="images.multiSelect">
+        <button class="link" @click="images.selectAll()"><Square :size="12" />全选</button>
+        <button v-if="images.selectedIds.size" class="link warn" @click="askRemoveSelected">
+          <X :size="12" />移除所选
+        </button>
+      </template>
+      <button v-else-if="images.selectedIds.size > 1" class="link" @click="askRemoveSelected">移除所选</button>
+      <button v-if="images.count && !images.multiSelect" class="link" @click="askRemoveAll">清空</button>
+      <button class="link toggle" :class="{ on: images.multiSelect }" @click="images.toggleMultiSelect()">
+        <CheckSquare :size="12" />{{ images.multiSelect ? '完成' : '选择' }}
+      </button>
     </div>
+    <div v-if="marquee" class="marquee" :style="marqueeStyle" aria-hidden="true" />
+    <AppDialog :open="!!confirmState" title="移除照片" :width="400" @close="confirmState = null">
+      <p class="confirm-text">{{ confirmText }}</p>
+      <div class="confirm-btns">
+        <AppButton variant="ghost" size="sm" @click="confirmState = null">取消</AppButton>
+        <AppButton variant="danger" size="sm" @click="confirmRemove">移除</AppButton>
+      </div>
+    </AppDialog>
   </div>
 </template>
 
@@ -204,6 +345,40 @@ async function removeSelected(): Promise<void> {
 }
 .thumb.active {
   border-color: var(--accent);
+}
+/* 多选模式下的勾选角标 */
+.pick {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.6));
+}
+/* 框选矩形 */
+.marquee {
+  position: fixed;
+  z-index: 70;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 4px;
+  pointer-events: none;
+}
+.link.toggle.on {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.confirm-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  margin: 4px 0 14px;
+}
+.confirm-btns {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .missing-icon {
   opacity: 0.7;

@@ -2,7 +2,7 @@
 import { applyAdjustments } from '../core/adjust'
 import { drawLayers, type AssetMap } from '../core/draw'
 import type { BorderLayer, WatermarkLayer } from '../types/watermark'
-import type { Adjustments, Crop } from '../types/adjust'
+import { isHslNeutral, type Adjustments, type Crop } from '../types/adjust'
 
 export interface RenderJob {
   id: number
@@ -87,11 +87,14 @@ async function handle(job: RenderJob): Promise<void> {
     a.highlights !== 0 ||
     a.temperature !== 0 ||
     a.tint !== 0 ||
+    a.vibrance !== 0 ||
+    a.saturation !== 0 ||
     a.vignette !== 0 ||
     a.dehaze !== 0 ||
     a.clarity !== 0 ||
     a.sharpen !== 0 ||
     a.grain !== 0 ||
+    !isHslNeutral(a.hsl) ||
     (a.curve && a.curve.length >= 4)
   ) {
     const image = ctx.getImageData(0, 0, w, h)

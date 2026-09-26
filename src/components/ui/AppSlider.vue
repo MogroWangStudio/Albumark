@@ -139,6 +139,40 @@ function onValUp(e: PointerEvent): void {
   scrubbing.value = false
   ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
 }
+
+/* ---------- 触屏防误触：点按轨道不跳值，拖动后才生效 ---------- */
+
+let touch: { id: number; startX: number; moved: boolean } | null = null
+
+function onTouchDown(e: PointerEvent): void {
+  if (e.pointerType !== 'touch' || props.disabled) return
+  // 阻止原生 range 的「点按即跳到该处」；拖动意图确认后由我们按手指位置取值
+  e.preventDefault()
+  touch = { id: e.pointerId, startX: e.clientX, moved: false }
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+}
+
+function onTouchMove(e: PointerEvent): void {
+  if (!touch || e.pointerId !== touch.id) return
+  if (!touch.moved) {
+    if (Math.abs(e.clientX - touch.startX) < 6) return
+    touch.moved = true
+  }
+  const el = e.currentTarget as HTMLInputElement
+  const r = el.getBoundingClientRect()
+  const t = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
+  let v = props.min + t * (props.max - props.min)
+  if (props.step > 0) {
+    v = Math.round((v - props.min) / props.step) * props.step + props.min
+    v = Number(v.toFixed(4))
+  }
+  if (v !== props.modelValue) emit('update:modelValue', v)
+}
+
+function onTouchUp(e: PointerEvent): void {
+  if (!touch || e.pointerId !== touch.id) return
+  touch = null
+}
 </script>
 
 <template>
@@ -188,6 +222,10 @@ function onValUp(e: PointerEvent): void {
       :disabled="disabled"
       :style="fillStyle"
       @input="onInput"
+      @pointerdown.capture="onTouchDown"
+      @pointermove.capture="onTouchMove"
+      @pointerup.capture="onTouchUp"
+      @pointercancel.capture="onTouchUp"
     />
   </div>
 </template>
@@ -270,6 +308,8 @@ input[type='range'] {
   cursor: pointer;
   --lo: 0%;
   --hi: 100%;
+  /* 触屏：横向给滑块（拖动调值），纵向留给页面滚动 */
+  touch-action: pan-y;
 }
 /* 凹槽轨道 + 实心填充，拇指带描边与悬浮光晕 */
 input[type='range']::-webkit-slider-runnable-track {

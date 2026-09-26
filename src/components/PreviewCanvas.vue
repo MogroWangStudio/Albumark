@@ -363,9 +363,82 @@ async function renderBase(draft: boolean): Promise<void> {
   }
 }
 
+/* ---------- 拉直 / 翻转的即时粗渲：低清位图缓存 + 主线程绘制 ---------- */
+
+/** 裁剪模式下的一次性低清解码：拖动拉直时主线程逐帧绘制，不再每帧进 Worker */
+let cropPreviewBmp: ImageBitmap | null = null
+let cropPreviewId: string | null = null
+
+async function ensureCropPreview(): Promise<ImageBitmap | null> {
+  const a = active.value
+  if (!a?.blob) return null
+  if (cropPreviewBmp && cropPreviewId === a.id) return cropPreviewBmp
+  releaseCropPreview()
+  try {
+    const long = Math.max(a.width, a.height) || 1
+    const target = Math.min(1100, long)
+    cropPreviewBmp = await createImageBitmap(a.blob, {
+      resizeWidth: Math.max(1, Math.round((a.width / long) * target)),
+      resizeHeight: Math.max(1, Math.round((a.height / long) * target)),
+    })
+    cropPreviewId = a.id
+  } catch {
+    cropPreviewBmp = null
+  }
+  return cropPreviewBmp
+}
+
+function releaseCropPreview(): void {
+  cropPreviewBmp?.close()
+  cropPreviewBmp = null
+  cropPreviewId = null
+}
+
+/**
+ * 拉直 / 翻转的即时粗渲：按 Worker 同一几何（翻转 → 旋转 → 轴对齐包围盒）
+ * 把低清全图画到底图画布并更新映射，拖动中实时跟手；停顿后仍由 Worker 精修。
+ */
+function drawRotatedDraft(): void {
+  const canvas = cvBase.value
+  const d = adjust.cropDraft
+  if (!canvas || !d) return
+  if (!cropPreviewBmp) {
+    void ensureCropPreview().then((bmp) => {
+      if (bmp && adjust.cropDraft) drawRotatedDraft()
+    })
+    return
+  }
+  const bmp = cropPreviewBmp
+  const dpr = view.dpr || 1
+  const cw = Math.max(1, Math.round(view.w * dpr))
+  const ch = Math.max(1, Math.round(view.h * dpr))
+  if (canvas.width !== cw) canvas.width = cw
+  if (canvas.height !== ch) canvas.height = ch
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  const s = cropSourceSize(bmp.width, bmp.height, d)
+  const fit = Math.min((avail.w * dpr) / s.w, (avail.h * dpr) / s.h)
+  const scale = fit * zoom.value
+  const ox = avail.x * dpr + (avail.w * dpr - s.w * scale) / 2 + pan.x * dpr
+  const oy = avail.y * dpr + (avail.h * dpr - s.h * scale) / 2 + pan.y * dpr
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, cw, ch)
+  ctx.imageSmoothingQuality = 'high'
+  ctx.translate(ox + (s.w * scale) / 2, oy + (s.h * scale) / 2)
+  ctx.scale(scale, scale)
+  ctx.rotate((cropRot(d) * Math.PI) / 180)
+  ctx.scale(d.flipH ? -1 : 1, d.flipV ? -1 : 1)
+  ctx.drawImage(bmp, -bmp.width / 2, -bmp.height / 2)
+  resultMap.w = s.w
+  resultMap.h = s.h
+  resultMap.scale = scale
+  resultMap.ox = ox
+  resultMap.oy = oy
+  drawOverlay()
+}
+
 /** 保持素材位图缓存与图层引用一致（异步加载缺失项后重绘叠加层）。 */
-async function syncAssets(): Promise<void> {
-  const needed = new Set(
+async function syncAssets(): Promise<void> {  const needed = new Set(
     resolvedLayers()
       .filter((l) => l.type === 'image')
       .map((l) => (l as { assetId: string }).assetId),
@@ -1311,9 +1384,11 @@ watch(
       const a = active.value
       adjust.cropRatio = 'free'
       adjust.cropDraft = { ...(a ? (adjust.cropOf(a.id) ?? FULL_CROP) : FULL_CROP) }
+      void ensureCropPreview()
       fitView()
     } else {
       adjust.cropDraft = null
+      releaseCropPreview()
       fitView()
     }
   },
@@ -1338,7 +1413,8 @@ watch(
   },
 )
 
-// 翻转 / 拉直变化：重新渲染变换后的全图（防抖，只在调整停顿时渲染一次）
+// 翻转 / 拉直变化：先在主线程用低清位图即时粗渲（拖动中实时跟手），
+// 停顿 140ms 后再交给 Worker 精修（保留防抖，只在停顿时渲染一次）
 watch(
   () => {
     const d = adjust.cropDraft
@@ -1346,6 +1422,7 @@ watch(
   },
   () => {
     if (!adjust.cropMode) return
+    drawRotatedDraft()
     rendering.value = true
     if (finalTimer) window.clearTimeout(finalTimer)
     finalTimer = window.setTimeout(() => {
@@ -1385,6 +1462,7 @@ onBeforeUnmount(() => {
   if (settleTimer) window.clearTimeout(settleTimer)
   if (availAnim) cancelAnimationFrame(availAnim)
   stopViewAnim()
+  releaseCropPreview()
   document.removeEventListener('click', closeZoomMenu)
   document.removeEventListener('keydown', onZoomKey)
   if (srcBitmap) {

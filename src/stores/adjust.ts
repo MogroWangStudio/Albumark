@@ -24,13 +24,14 @@ export const useAdjustStore = defineStore('adjust', () => {
   /** 单独调节的照片：id → 独立参数（存在即为开启），随会话结束不持久化 */
   const perImage = ref<Record<string, Adjustments>>({})
 
-  function set(key: Exclude<AdjustKey, 'curve'>, v: number): void {
+  function set(key: Exclude<AdjustKey, 'curve' | 'hsl'>, v: number): void {
     values[key] = v
   }
 
   function reset(): void {
     Object.assign(values, NEUTRAL)
     delete values.curve
+    delete values.hsl
   }
 
   function isIndividual(id: string | null): boolean {

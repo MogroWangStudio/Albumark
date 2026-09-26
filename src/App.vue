@@ -460,6 +460,15 @@ function onKeydown(e: KeyboardEvent): void {
     }
     urlOpen.value = false
     importPreviewOpen.value = false
+    if (images.multiSelect) {
+      images.toggleMultiSelect(false)
+      return
+    }
+  }
+  // 多选模式：Cmd/Ctrl+A 全选（输入框内不拦截）
+  if (!typing && images.multiSelect && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+    e.preventDefault()
+    images.selectAll()
     return
   }
   // 左右方向键：顺序切换当前照片
