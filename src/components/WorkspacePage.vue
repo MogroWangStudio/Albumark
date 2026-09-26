@@ -106,7 +106,6 @@ onMounted(() => {
       <div v-if="step === 'oobe'" key="oobe" class="card">
         <LogoMark class="mark" animated />
         <h1>欢迎使用辑印</h1>
-        <p class="lead">选择软件数据的存放位置。数据目录保存你的工作目录记录与水印预设。</p>
 
         <div class="oobe-dir">
           <HardDrive :size="16" />
@@ -116,7 +115,6 @@ onMounted(() => {
           </div>
           <AppButton size="sm" @click="pickDataDir">浏览…</AppButton>
         </div>
-        <p class="hint">便携版默认放在程序所在文件夹（随 U 盘携带）；换位置后软件会记住。数据子文件夹为「AlbumarkData」。</p>
 
         <AppButton variant="primary" class="cta" @click="finishOobe">
           开始使用<ArrowRight :size="15" />
@@ -182,13 +180,7 @@ onMounted(() => {
               </button>
             </li>
           </ul>
-          <p v-else class="empty">
-            还没有工作目录。添加一个文件夹作为资料库——已包含辑印项目的文件夹也会被识别。
-          </p>
-          <p v-if="!sandboxedFs" class="hint">
-            工作目录可以是已有照片项目的文件夹；列表中的记录可随时移除，不影响磁盘上的文件。
-          </p>
-          <p v-else class="hint">工作目录保存在本应用的数据目录内；删除项目时会移入应用内回收站。</p>
+          <p v-else class="empty">还没有工作目录</p>
         </section>
 
         <!-- 工作项目 -->
@@ -230,7 +222,7 @@ onMounted(() => {
                 </span>
               </button>
             </div>
-            <p v-else class="empty">这个目录里还没有工作项目。起个名字，创建第一个项目开始辑录。</p>
+            <p v-else class="empty">这个目录里还没有工作项目</p>
           </template>
 
           <template v-else-if="fsAvailable && !sandboxedFs">
@@ -238,14 +230,6 @@ onMounted(() => {
               <FolderOpen :size="30" :stroke-width="1.6" />
             </div>
             <h1>选择工作目录</h1>
-            <p class="lead">
-              工作目录是用来收纳工作项目的文件夹，相当于你的图片资料库。选一个空文件夹，
-              或直接选一个已包含辑印项目的文件夹。
-            </p>
-            <ul class="rules">
-              <li><Layers :size="13" />里面的每个项目都是它的子文件夹</li>
-              <li><ArrowLeftRight :size="13" />可以记录多个目录，随时在列表中切换</li>
-            </ul>
             <AppButton variant="primary" class="cta" :disabled="ws.loading" @click="addDir">
               <FolderPlus :size="15" />选择文件夹…
             </AppButton>
@@ -256,12 +240,10 @@ onMounted(() => {
               <FolderOpen :size="30" :stroke-width="1.6" />
             </div>
             <h1>选择工作目录</h1>
-            <p class="lead">先在上方新建一个工作目录，或点击目录旁的「使用」切换到已有目录。</p>
           </template>
 
           <template v-else>
             <h1>开始辑录</h1>
-            <p class="lead">此环境不支持文件夹工作目录，可使用仅保留在本次会话的临时项目。</p>
             <AppButton variant="primary" class="cta" @click="ws.openEphemeralProject()">
               <Layers :size="15" />进入临时项目
             </AppButton>
@@ -493,37 +475,6 @@ h1 {
   font-weight: 600;
   letter-spacing: 0;
 }
-.lead {
-  margin-top: 6px;
-  max-width: 400px;
-  color: var(--text-2);
-  font-size: 12.5px;
-  line-height: 1.6;
-  align-self: center;
-}
-.rules {
-  list-style: none;
-  padding: 0;
-  margin: 18px 0 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.rules li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--text-2);
-  padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-m);
-  background: var(--bg);
-}
-.rules svg {
-  color: var(--accent);
-  flex: none;
-}
 .oobe-dir {
   display: flex;
   align-items: center;
@@ -646,15 +597,6 @@ h1 {
   padding: 14px 2px;
   font-size: 12.5px;
   line-height: 1.6;
-  text-align: center;
-}
-.hint {
-  font-size: 11.5px;
-  color: var(--text-3);
-  line-height: 1.55;
-  margin-top: 10px;
-}
-.card:not(.grow) .hint {
   text-align: center;
 }
 .cta {

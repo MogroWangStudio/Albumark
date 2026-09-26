@@ -101,9 +101,6 @@ function onReset(): void {
         <RotateCcw :size="13" />{{ individual ? '还原为全局' : '全部重置' }}
       </AppButton>
     </div>
-    <p class="note">
-      调节默认应用到全部照片，与水印一同导出；开启「单独调节」后，这张照片使用独立参数，不再应用全局调节。双击名称可复位单项，双击数值可直接键入。
-    </p>
   </div>
 </template>
 
@@ -133,12 +130,5 @@ function onReset(): void {
 }
 .foot {
   margin-top: 12px;
-}
-.note {
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-  font-size: 11.5px;
-  color: var(--text-3);
 }
 </style>

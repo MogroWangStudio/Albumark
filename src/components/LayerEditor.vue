@@ -347,8 +347,9 @@ function applyCustomFont(): void {
       <AppButton size="sm" @click="wm.addText()"><Type :size="13" />文本</AppButton>
       <AppButton size="sm" @click="pickImage(null)"><ImageIcon :size="13" />图片 / SVG</AppButton>
       <AppButton size="sm" @click="wm.addBorderLayer()"><Frame :size="13" />边框</AppButton>
-      <span class="flex" />
-      <AppButton v-if="showTemplates" size="sm" @click="openTplPicker">模板</AppButton>
+    </div>
+    <div v-if="showTemplates" class="row">
+      <AppButton size="sm" @click="openTplPicker">应用模板</AppButton>
     </div>
 
     <div v-if="showSave" class="save-row">
@@ -403,7 +404,7 @@ function applyCustomFont(): void {
         </button>
       </li>
     </ul>
-    <p v-else class="empty">还没有图层。添加文本、图片或边框，开始制作水印。</p>
+    <p v-else class="empty">还没有图层</p>
 
     <template v-if="selectedText">
       <section>
@@ -420,56 +421,51 @@ function applyCustomFont(): void {
           spellcheck="false"
           @input="wm.update(selectedText!.id, { content: ($event.target as HTMLTextAreaElement).value })"
         />
-        <p class="tokens-hint">点击插入 EXIF 令牌，导出时按每张照片的信息替换：</p>
         <div class="tokens">
           <button v-for="t in TOKENS" :key="t.key" class="chip" @click="insertToken(t.key)">
             {{ t.label }}
           </button>
         </div>
 
-        <div class="grid2">
-          <label class="field">
-            <span>字体</span>
-            <select
-              class="select"
-              :value="isCustomFont ? '__current__' : selectedText!.fontFamily"
-              @focus="fonts.ensureFonts()"
-              @pointerdown="fonts.ensureFonts()"
-              @change="
-                ($event.target as HTMLSelectElement).value === '__custom__'
-                  ? openCustomFont()
-                  : wm.update(selectedText!.id, { fontFamily: ($event.target as HTMLSelectElement).value })
-              "
+        <label class="field">
+          <span>字体</span>
+          <select
+            class="select"
+            :value="isCustomFont ? '__current__' : selectedText!.fontFamily"
+            @focus="fonts.ensureFonts()"
+            @pointerdown="fonts.ensureFonts()"
+            @change="
+              ($event.target as HTMLSelectElement).value === '__custom__'
+                ? openCustomFont()
+                : wm.update(selectedText!.id, { fontFamily: ($event.target as HTMLSelectElement).value })
+            "
+          >
+            <option v-if="isCustomFont" value="__current__">
+              自定义：{{ selectedText!.fontFamily.replace(/"/g, '') }}
+            </option>
+            <option :value="DEFAULT_FONT">系统默认</option>
+            <optgroup
+              v-for="g in fonts.grouped()"
+              :key="g.category"
+              :label="FONT_CATEGORY_LABELS[g.category]"
             >
-              <option v-if="isCustomFont" value="__current__">
-                自定义：{{ selectedText!.fontFamily.replace(/"/g, '') }}
+              <option v-for="f in g.items" :key="f.family" :value="`&quot;${f.family}&quot;`">
+                {{ f.family }}
               </option>
-              <option :value="DEFAULT_FONT">系统默认</option>
-              <optgroup
-                v-for="g in fonts.grouped()"
-                :key="g.category"
-                :label="FONT_CATEGORY_LABELS[g.category]"
-              >
-                <option v-for="f in g.items" :key="f.family" :value="`&quot;${f.family}&quot;`">
-                  {{ f.family }}
-                </option>
-              </optgroup>
-              <option value="__custom__">手动输入字体名…</option>
-            </select>
-          </label>
-          <div class="field">
-            <span>字重</span>
-            <AppSlider
-              :model-value="selectedText!.fontWeight"
-              :min="100"
-              :max="900"
-              :step="1"
-              :default="600"
-              @update:model-value="wm.update(selectedText!.id, { fontWeight: $event })"
-              @reset="wm.update(selectedText!.id, { fontWeight: 600 })"
-            />
-          </div>
-        </div>
+            </optgroup>
+            <option value="__custom__">手动输入字体名…</option>
+          </select>
+        </label>
+        <AppSlider
+          :model-value="selectedText!.fontWeight"
+          :min="100"
+          :max="900"
+          :step="1"
+          label="字重"
+          :default="600"
+          @update:model-value="wm.update(selectedText!.id, { fontWeight: $event })"
+          @reset="wm.update(selectedText!.id, { fontWeight: 600 })"
+        />
         <p v-if="fonts.loading" class="hint">正在读取系统字体…</p>
         <p v-else-if="fonts.denied" class="hint">浏览器未授权读取系统字体，以下为常用字体清单，也可手动键入。</p>
         <div v-if="showCustomFont" class="custom-font">
@@ -667,13 +663,6 @@ function applyCustomFont(): void {
             @update:model-value="borderLinkedModel = $event"
           />
         </div>
-        <p class="hint-inline">
-          边框向外扩展图片；列表中越靠前的边框越贴近照片。{{
-            borderLinked
-              ? '同步模式：调整任一边，四边宽度与颜色一起变化。'
-              : '独立模式：各边单独调整；四边调至一致后可重新开启同步。'
-          }}
-        </p>
         <div v-if="borderLinked" class="border-row">
           <span class="border-label">四边</span>
           <AppSlider
@@ -735,8 +724,7 @@ function applyCustomFont(): void {
           </button>
         </div>
         <template v-if="wm.selected!.type === 'text'">
-          <p class="anchor-label">文字框锚点</p>
-          <div class="anchor-grid" role="group" aria-label="文字框锚点">
+          <p class="anchor-label">文字框锚点</p>          <div class="anchor-grid" role="group" aria-label="文字框锚点">
             <button
               v-for="a in anchors"
               :key="a.key"
@@ -747,7 +735,6 @@ function applyCustomFont(): void {
               <span />
             </button>
           </div>
-          <p class="hint">决定文字框的哪个位置对准定位锚点：居中即框中心对准，选角时文字向另一侧展开。</p>
         </template>
         <AppSlider
           :model-value="offX"
@@ -767,7 +754,6 @@ function applyCustomFont(): void {
           @update:model-value="setOffsetY"
           @reset="setOffsetY(0)"
         />
-        <p class="hint">以锚点为起点的固定像素距离：所有照片上保持一致，不随图片尺寸或比例缩放。</p>
         <AppSlider
           v-if="wm.selected!.type === 'text'"
           :model-value="fontPx"
@@ -873,9 +859,6 @@ function applyCustomFont(): void {
         <p class="tpl-question">
           应用模板「{{ tplPending.name }}」（{{ tplPending.layers.length }} 个图层）：
         </p>
-        <p class="tpl-note">
-          完全覆盖会替换当前{{ wm.editId ? '这张照片的独立水印' : '的全部水印图层' }}；追加会保留现有图层，把模板图层加在后面。
-        </p>
         <div class="tpl-btns">
           <AppButton variant="ghost" size="sm" @click="tplPending = null">返回</AppButton>
           <span class="flex" />
@@ -925,12 +908,6 @@ function applyCustomFont(): void {
   background: var(--bg);
   cursor: pointer;
 }
-.hint-inline {
-  font-size: 11.5px;
-  color: var(--text-3);
-  line-height: 1.5;
-  margin-bottom: 10px;
-}
 /* 模板选择：卡片网格 */
 .tpl-grid {
   display: grid;
@@ -972,12 +949,6 @@ function applyCustomFont(): void {
 .tpl-question {
   font-size: 13px;
   font-weight: 500;
-}
-.tpl-note {
-  margin-top: 6px;
-  font-size: 11.5px;
-  color: var(--text-3);
-  line-height: 1.6;
 }
 .tpl-btns {
   display: flex;
@@ -1126,11 +1097,6 @@ h3 {
   margin-bottom: 8px;
   letter-spacing: 0.02em;
 }
-.tokens-hint {
-  font-size: 11.5px;
-  color: var(--text-3);
-  margin: 8px 0 4px;
-}
 .tokens {
   display: flex;
   flex-wrap: wrap;
@@ -1148,12 +1114,6 @@ h3 {
 .chip:hover {
   color: var(--accent);
   border-color: var(--accent);
-}
-.grid2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  margin: 10px 0;
 }
 .field {
   display: flex;

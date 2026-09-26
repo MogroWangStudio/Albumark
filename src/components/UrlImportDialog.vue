@@ -63,7 +63,6 @@ function close(): void {
 
 <template>
   <AppDialog :open="props.open" title="从链接导入照片" @close="close">
-    <p class="lead">每行粘贴一个图片链接（JPG）。链接抓取在本地完成，部分网站会因跨域限制拒绝访问。</p>
     <textarea
       v-model="text"
       class="urls"
@@ -94,10 +93,6 @@ function close(): void {
 </template>
 
 <style scoped>
-.lead {
-  color: var(--text-2);
-  margin-bottom: 10px;
-}
 .urls {
   width: 100%;
   resize: vertical;

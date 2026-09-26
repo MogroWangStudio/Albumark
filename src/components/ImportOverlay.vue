@@ -46,7 +46,6 @@ const lift = computed(() => (props.panelBottomInset > 0 ? props.panelBottomInset
       <AppButton variant="primary" @click="$emit('pick')"><ImagePlus :size="15" />选择照片</AppButton>
       <AppButton @click="$emit('openUrl')"><Link2 :size="15" />导入链接</AppButton>
     </div>
-    <p class="hint">支持直接拖入整个文件夹 · 全部处理在本机完成，不会上传</p>
   </div>
 </template>
 
@@ -88,10 +87,5 @@ p {
   display: flex;
   gap: 10px;
   margin-top: 14px;
-}
-.hint {
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--text-3);
 }
 </style>

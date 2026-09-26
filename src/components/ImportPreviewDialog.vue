@@ -61,11 +61,6 @@ function confirm(): void {
       />
       <span v-else class="copy-only"><Copy :size="13" />复制原文件</span>
     </div>
-    <p class="hint">
-      {{ mode === 'link'
-        ? '只记录源文件路径与识别码，不占用额外磁盘。'
-        : '把照片复制一份进项目，源文件移动或删除都不影响。' }}
-    </p>
 
     <div class="btns">
       <AppButton variant="ghost" @click="emit('close')">取消</AppButton>
@@ -127,11 +122,6 @@ function confirm(): void {
   gap: 5px;
   font-size: 12.5px;
   color: var(--text);
-}
-.hint {
-  margin-top: 8px;
-  font-size: 11.5px;
-  color: var(--text-3);
 }
 .btns {
   display: flex;

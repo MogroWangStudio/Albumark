@@ -70,10 +70,6 @@ async function start(): Promise<void> {
       <h1>导出</h1>
     </div>
     <template v-if="!running && !finished">
-      <p class="lead">
-        将导出全部 {{ images.count }} 张照片，当前水印与调节会一并应用。导出为重新编码的
-        JPG，不回写 EXIF 信息。
-      </p>
       <AppSlider v-model="ex.quality" :min="50" :max="100" label="JPEG 质量" :format="(v) => `${v}%`" @reset="ex.quality = 90" />
       <div class="field">
         <span class="fl">图像长边像素</span>
@@ -99,7 +95,6 @@ async function start(): Promise<void> {
             @input="onCustomLongEdge"
           />
         </div>
-        <p class="hint">导出图像的长边上限，0 表示保持原图尺寸。</p>
       </div>
       <div class="field">
         <span class="fl">文件名模板</span>
@@ -109,10 +104,6 @@ async function start(): Promise<void> {
             {{ t.label }}
           </button>
         </div>
-        <p class="hint">
-          可用 {name} 原文件名、{index} 序号、{date} 日期，以及上方 EXIF
-          令牌；同批重复名会自动加序号。
-        </p>
       </div>
       <div class="field">
         <span class="fl">导出方式</span>
@@ -124,7 +115,6 @@ async function start(): Promise<void> {
             { value: 'folder', label: '文件夹（桌面端）', disabled: !isTauri },
           ]"
         />
-        <p v-if="!isTauri" class="hint">当前为浏览器版本，仅支持导出 ZIP；桌面端可直接写入文件夹。</p>
       </div>
       <AppButton variant="primary" class="start" :disabled="!exportable" @click="start">
         <Package :size="15" />开始导出
@@ -175,10 +165,6 @@ async function start(): Promise<void> {
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 0;
-}
-.lead {
-  color: var(--text-2);
-  margin-bottom: 14px;
 }
 .field {
   display: flex;
@@ -241,10 +227,6 @@ async function start(): Promise<void> {
   color: var(--text);
   border-color: var(--accent);
   background: var(--accent-soft);
-}
-.hint {
-  font-size: 11.5px;
-  color: var(--text-3);
 }
 .start {
   width: 100%;

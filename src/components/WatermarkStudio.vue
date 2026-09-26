@@ -83,7 +83,6 @@ async function saveAsNew(): Promise<void> {
   toast(`已保存模板「${name}」`, 'success')
 }
 
-
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 const boxEl = ref<HTMLDivElement | null>(null)
 /** 画布上悬停/拖动到图层时的抓取光标 */
@@ -663,7 +662,6 @@ watch(mode, async (m) => {
           @pointerleave="onLeave"
           @wheel="onZoomWheel"
         />
-        <p class="tip">滚轮缩放、拖动平移样张；直接拖动水印可调整位置，保存的水印会应用到项目里的每一张照片。</p>
       </div>
       <aside class="editor material">
         <LayerEditor :img-w="frameSize.w" :img-h="frameSize.h" :show-templates="false" />
@@ -774,15 +772,6 @@ h1 {
 }
 .sample.grab {
   cursor: grab;
-}
-.tip {
-  position: absolute;
-  bottom: 10px;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: 11.5px;
-  color: var(--text-3);
 }
 .editor {
   border-left: 1px solid var(--line);

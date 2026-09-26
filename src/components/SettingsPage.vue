@@ -101,7 +101,6 @@ async function relaunchOobe(): Promise<void> {
         <div class="row">
           <div class="text">
             <span class="label">主题</span>
-            <p class="desc">深浅色跟随此设置或系统。</p>
           </div>
           <AppSegment
             v-model="themeModel"
@@ -115,7 +114,6 @@ async function relaunchOobe(): Promise<void> {
         <div class="row col">
           <div class="text">
             <span class="label">显示字体</span>
-            <p class="desc">界面文字使用的字体；「系统默认」跟随平台。</p>
           </div>
           <select
             class="select"
@@ -147,7 +145,6 @@ async function relaunchOobe(): Promise<void> {
         <div class="row col">
           <div class="text">
             <span class="label">预览安全区</span>
-            <p class="desc">图片允许缩小的下限；调低后可以把照片缩得更远，留出更多留白。</p>
           </div>
           <AppSlider
             v-model="minZoomModel"
@@ -164,7 +161,6 @@ async function relaunchOobe(): Promise<void> {
         <div class="row col">
           <div class="text">
             <span class="label">渲染质量</span>
-            <p class="desc">手机或老设备建议「均衡」或「省电」，可明显降低拖动时的发热与掉帧。</p>
           </div>
           <AppSegment
             v-model="qualityModel"
@@ -182,14 +178,12 @@ async function relaunchOobe(): Promise<void> {
         <div class="row">
           <div class="text">
             <span class="label">水印吸附</span>
-            <p class="desc">拖动水印时自动吸到中线与边距，并显示参考线。</p>
           </div>
           <AppSwitch v-model="settings.wmSnap" />
         </div>
         <div class="row">
           <div class="text">
             <span class="label">EXIF 缺失提醒</span>
-            <p class="desc">导入时检测到照片缺少拍摄参数时给出提示。</p>
           </div>
           <AppSwitch v-model="settings.exifNotice" />
         </div>
@@ -211,14 +205,10 @@ async function relaunchOobe(): Promise<void> {
 
       <section class="group">
         <h2>关于</h2>
-        <p class="about-lead">
-          辑印 Albumark——轻量、本地优先的图像批量水印与快速辑录工具。
-          照片与水印全部在本机处理，不上传任何数据；由 MogroWang Studio 开发。
-        </p>
         <div class="row">
           <div class="text">
             <span class="label">版本</span>
-            <p class="desc">v{{ APP_VERSION }} · 本地优先处理，不上传照片</p>
+            <p class="desc">v{{ APP_VERSION }}</p>
           </div>
           <div class="btns">
             <template v-if="updateState === 'available' && updateInfo">
@@ -362,12 +352,6 @@ async function relaunchOobe(): Promise<void> {
 .note {
   font-size: 11.5px;
   color: var(--text-3);
-}
-.about-lead {
-  font-size: 12.5px;
-  line-height: 1.7;
-  color: var(--text-2);
-  padding: 6px 0 10px;
 }
 .update-hint {
   display: inline-flex;

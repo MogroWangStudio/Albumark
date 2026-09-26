@@ -247,7 +247,6 @@ onBeforeUnmount(() => ro?.disconnect())
   <div class="curve">
     <div class="head">
       <span class="label">曲线</span>
-      <span class="hint">拖动调整 · 空白处加点 · 双击去点</span>
       <span class="flex" />
       <button class="reset" title="复位曲线" @click="reset"><RotateCcw :size="12" /></button>
     </div>

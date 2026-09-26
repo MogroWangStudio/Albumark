@@ -52,9 +52,6 @@ const imgH = computed(() => {
       :exif="images.active?.exif"
       :base-name="images.active?.baseName"
     />
-    <p class="note">
-      开启「单独水印」后，这张照片使用独立的图层副本，对它的编辑不再影响其他照片，也不再应用全局水印；关闭即恢复。编辑上下文会跟随选中的照片自动切换。
-    </p>
   </div>
 </template>
 
@@ -77,12 +74,5 @@ const imgH = computed(() => {
   text-align: right;
   font-size: 12px;
   color: var(--text-2);
-}
-.note {
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-  font-size: 11.5px;
-  color: var(--text-3);
 }
 </style>

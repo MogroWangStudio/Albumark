@@ -135,7 +135,6 @@ function resetCropDraft(): void {
       >
         <RotateCcw :size="13" />重置
       </AppButton>
-      <span class="hint">拖动角点或边调整范围，框内拖动移动位置</span>
     </div>
     <div class="row end">
       <AppButton variant="ghost" size="sm" @click="adjust.exitCrop()">
@@ -145,9 +144,6 @@ function resetCropDraft(): void {
         <Check :size="13" />完成
       </AppButton>
     </div>
-    <p class="note">
-      裁剪、翻转与拉直随这张照片保存，预览与导出所见即所得。按 Esc 或「取消」放弃未确认的调整。
-    </p>
   </div>
 </template>
 
@@ -231,12 +227,5 @@ function resetCropDraft(): void {
   font-size: 11.5px;
   color: var(--text-3);
   line-height: 1.4;
-}
-.note {
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-  font-size: 11.5px;
-  color: var(--text-3);
 }
 </style>
