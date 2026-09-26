@@ -1,13 +1,12 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
-import { readExif } from '@/core/exif'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
 import * as fs from '@/core/fs'
 import { appDataDir, executableDir, isTauri, pickDirectory } from '@/core/platform'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
-import { useImagesStore } from './images'
+import { processItem, useImagesStore } from './images'
 import { useSettingsStore } from './settings'
 
 /** 单张照片的入库方式：复制原文件进项目，或只记录源文件路径 */
@@ -300,73 +299,52 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return true
   }
 
-  async function loadRefsToItems(refs: PrjImageRef[], prjPath: string): Promise<ImageItem[]> {
-    const out: ImageItem[] = []
-    for (const r of refs) {
-      const item: ImageItem = {
-        id: r.id,
-        name: r.name,
-        baseName: r.name.replace(/\.[^.]+$/, ''),
-        blob: null,
-        thumbUrl: '',
-        width: 0,
-        height: 0,
-        code: r.code,
-        sourcePath: r.sourcePath,
-        storedAs: r.storedAs,
-        kind: r.kind,
+  /** 读取单个图片文件，解码出尺寸、缩略图与 EXIF，返回可直接 patchItem 的增量 */
+  async function hydrateOne(r: PrjImageRef, prjPath: string): Promise<Partial<ImageItem>> {
+    let bytes: Uint8Array | null = null
+    if (r.storedAs) {
+      try {
+        bytes = await fs.readFile(await fs.joinPath(prjPath, 'images', r.storedAs))
+      } catch {
+        bytes = null
       }
-      let bytes: Uint8Array | null = null
-      if (r.storedAs) {
-        try {
-          bytes = await fs.readFile(await fs.joinPath(prjPath, 'images', r.storedAs))
-        } catch {
-          bytes = null
-        }
-      } else if (r.sourcePath) {
-        try {
-          bytes = await fs.readFile(r.sourcePath)
-        } catch {
-          bytes = null
-        }
+    } else if (r.sourcePath) {
+      try {
+        bytes = await fs.readFile(r.sourcePath)
+      } catch {
+        bytes = null
       }
-      if (bytes) {
-        item.blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'image/jpeg' })
-      } else {
-        item.missing = true
-      }
-      out.push(item)
     }
-    // 并发补齐尺寸、缩略图与 EXIF
-    await Promise.all(out.map((i) => decodeItem(i)))
-    return out
+    if (!bytes) return { missing: true }
+    const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'image/jpeg' })
+    const patch = await processItem(makeItem(r, blob))
+    return { ...patch, blob, missing: false }
   }
 
-  async function decodeItem(item: ImageItem): Promise<void> {
-    if (!item.blob) return
-    try {
-      const bmp = await createImageBitmap(item.blob)
-      item.width = bmp.width
-      item.height = bmp.height
-      bmp.close()
-      item.exif = await readExif(item.blob)
-      const long = Math.max(item.width, item.height) || 1
-      const s = Math.min(1, 240 / long)
-      const oc = new OffscreenCanvas(
-        Math.max(1, Math.round(item.width * s)),
-        Math.max(1, Math.round(item.height * s)),
-      )
-      const ctx = oc.getContext('2d')
-      if (ctx && item.blob) {
-        const tb = await createImageBitmap(item.blob)
-        ctx.drawImage(tb, 0, 0, oc.width, oc.height)
-        tb.close()
-        const thumb = await oc.convertToBlob({ type: 'image/jpeg', quality: 0.82 })
-        item.thumbUrl = URL.createObjectURL(thumb)
+  /**
+   * 后台渐进补齐图片数据：首张（进入后的当前照片）优先，让编辑页立刻可看；
+   * 其余按受限并发处理（安卓慢存储上并发过高反而更慢）。
+   * 切换项目后旧任务作废，不再写 store。
+   */
+  async function hydrateItems(refs: PrjImageRef[], prjPath: string): Promise<void> {
+    const seq = ++hydrateSeq
+    const rest = refs.slice(1)
+    let cursor = 0
+    const worker = async (): Promise<void> => {
+      while (cursor < rest.length) {
+        const r = rest[cursor++]
+        // 单张失败不中断队列：保留占位（与旧 decodeItem 的静默兜底一致）
+        const patch = await hydrateOne(r, prjPath).catch(() => ({ missing: true }))
+        if (seq !== hydrateSeq) return
+        images.patchItem(r.id, patch)
       }
-    } catch {
-      /* 解码失败，保留占位 */
     }
+    if (refs.length) {
+      const first = await hydrateOne(refs[0], prjPath).catch(() => ({ missing: true }))
+      if (seq !== hydrateSeq) return
+      images.patchItem(refs[0].id, first)
+    }
+    await Promise.all(Array.from({ length: Math.min(3, rest.length) }, worker))
   }
 
   async function openProject(meta: ProjectMeta): Promise<void> {
@@ -378,10 +356,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         toast('这个文件夹不是有效的辑印项目', 'error')
         return
       }
-      const items = await loadRefsToItems(data.images, meta.path)
-      images.setItems(items)
+      // 占位条目先进入项目，文件读取与解码转后台渐进补齐——安卓慢存储上不再整包等待
+      images.setItems(data.images.map((r) => makeItem(r, null)))
       manifest.value = data
       current.value = meta
+      void hydrateItems(data.images, meta.path)
     } catch (err) {
       // 安卓 / 慢存储上读文件可能偶发失败：给出提示而不是静默失败，让用户能重试
       toast(`打开项目失败：${err instanceof Error ? err.message : '文件读取异常，请重试'}`, 'error')
@@ -405,6 +384,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function closeProject(): void {
+    hydrateSeq++
     current.value = null
     manifest.value = null
     images.clear()
@@ -428,6 +408,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   /* ---------- 图片进出项目 ---------- */
 
   let saveTimer: number | null = null
+  /** 渐进填充的会话序号：切换/关闭项目后旧后台任务作废 */
+  let hydrateSeq = 0
   function scheduleSave(): void {
     if (!fsAvailable || !manifest.value || !current.value?.path) return
     if (saveTimer) window.clearTimeout(saveTimer)
@@ -493,7 +475,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const item = makeItem(ref, file)
       manifest.value?.images.push(ref)
       images.adopt(item)
-      void decodeItem(item).then(() => images.patchItem(item.id, { ...item }))
+      void processItem(item).then((patch) => images.patchItem(item.id, patch))
       scheduleSave()
     }
   }
@@ -522,7 +504,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         )
         manifest.value?.images.push(ref)
         images.adopt(item)
-        void decodeItem(item).then(() => images.patchItem(item.id, { ...item }))
+        void processItem(item).then((patch) => images.patchItem(item.id, patch))
         scheduleSave()
       } catch {
         toast(`无法读取：${path}`, 'error')
@@ -573,8 +555,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         kind: ref.kind,
         missing: false,
       }
-      await decodeItem(item)
-      images.patchItem(id, item)
+      const patch = await processItem(item)
+      images.patchItem(id, { ...item, ...patch })
       scheduleSave()
       toast('已重新链接到源文件', 'success')
     } catch {
