@@ -291,7 +291,10 @@ const marqueeStyle = computed(() => {
         <CheckSquare :size="12" />{{ images.multiSelect ? '完成' : '选择' }}
       </button>
     </div>
-    <div v-if="marquee" class="marquee" :style="marqueeStyle" aria-hidden="true" />
+    <!-- 框选矩形挂到 body：.strip 的 backdrop-filter 会劫持 fixed 定位的包含块 -->
+    <Teleport to="body">
+      <div v-if="marquee" class="marquee" :style="marqueeStyle" aria-hidden="true" />
+    </Teleport>
     <AppDialog :open="!!confirmState" title="移除照片" :width="400" @close="confirmState = null">
       <p class="confirm-text">{{ confirmText }}</p>
       <div class="confirm-btns">

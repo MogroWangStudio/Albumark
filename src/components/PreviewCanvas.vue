@@ -512,8 +512,9 @@ function drawBase(): void {
 /** 水印叠加层：主线程矢量绘制，拖动时只重绘这一层，不再经过 Worker。 */
 function drawOverlay(): void {
   const canvas = cvOverlay.value
-  const bmp = resultBmp
-  if (!canvas || !bmp) return
+  // 映射始终基于 resultMap：正常路径为 Worker 输出位图，拉直粗渲时为
+  // 「旋转包围盒 × 低清尺寸」——保证叠加层与底图共用同一坐标系不错位
+  if (!canvas || !resultMap.w || !resultMap.h) return
   const dpr = Math.min(view.dpr || 1, perf.value.dprCap)
   const cw = Math.max(1, Math.round(view.w * dpr))
   const ch = Math.max(1, Math.round(view.h * dpr))
@@ -521,10 +522,10 @@ function drawOverlay(): void {
   if (canvas.height !== ch) canvas.height = ch
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  const fit = Math.min((avail.w * dpr) / bmp.width, (avail.h * dpr) / bmp.height)
+  const fit = Math.min((avail.w * dpr) / resultMap.w, (avail.h * dpr) / resultMap.h)
   const scale = fit * zoom.value
-  const ox = avail.x * dpr + (avail.w * dpr - bmp.width * scale) / 2 + pan.x * dpr
-  const oy = avail.y * dpr + (avail.h * dpr - bmp.height * scale) / 2 + pan.y * dpr
+  const ox = avail.x * dpr + (avail.w * dpr - resultMap.w * scale) / 2 + pan.x * dpr
+  const oy = avail.y * dpr + (avail.h * dpr - resultMap.h * scale) / 2 + pan.y * dpr
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, cw, ch)
   ctx.translate(ox, oy)
@@ -534,10 +535,10 @@ function drawOverlay(): void {
   const draft = adjust.cropMode ? adjust.cropDraft : null
   if (draft) {
     // 水印画进裁剪框坐标系：预览位置与应用裁剪后完全一致
-    const sx = draft.x * bmp.width
-    const sy = draft.y * bmp.height
-    const sw = Math.max(1, draft.w * bmp.width)
-    const sh = Math.max(1, draft.h * bmp.height)
+    const sx = draft.x * resultMap.w
+    const sy = draft.y * resultMap.h
+    const sw = Math.max(1, draft.w * resultMap.w)
+    const sh = Math.max(1, draft.h * resultMap.h)
     ctx.save()
     ctx.beginPath()
     ctx.rect(sx, sy, sw, sh)
@@ -546,7 +547,7 @@ function drawOverlay(): void {
     drawLayers(ctx, sw, sh, layers, assetBmps)
     ctx.restore()
   } else {
-    drawLayers(ctx, bmp.width, bmp.height, layers, assetBmps)
+    drawLayers(ctx, resultMap.w, resultMap.h, layers, assetBmps)
   }
 
   if (draft) {
@@ -565,13 +566,13 @@ function drawOverlay(): void {
     if (snap.x !== undefined) {
       ctx.beginPath()
       ctx.moveTo(snap.x, 0)
-      ctx.lineTo(snap.x, bmp.height)
+      ctx.lineTo(snap.x, resultMap.h)
       ctx.stroke()
     }
     if (snap.y !== undefined) {
       ctx.beginPath()
       ctx.moveTo(0, snap.y)
-      ctx.lineTo(bmp.width, snap.y)
+      ctx.lineTo(resultMap.w, snap.y)
       ctx.stroke()
     }
     ctx.restore()
@@ -580,7 +581,7 @@ function drawOverlay(): void {
   // 选中图层的锚点十字（边框层覆盖全画布、无定位锚点）
   const sel = wm.selected
   if (sel && sel.type !== 'border') {
-    const a = anchorPoint(sel.anchor, bmp.width, bmp.height)
+    const a = anchorPoint(sel.anchor, resultMap.w, resultMap.h)
     ctx.save()
     ctx.strokeStyle = 'rgba(255, 167, 47, 0.75)'
     ctx.lineWidth = 1 / scale
