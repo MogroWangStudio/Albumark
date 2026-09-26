@@ -169,7 +169,12 @@ watch(tplOpen, async (open) => {
 function applyTpl(mode: 'replace' | 'append'): void {
   const t = tplPending.value
   if (!t) return
-  wm.applyToTarget(t.layers, t.assets as never[], mode)
+  try {
+    wm.applyToTarget(t.layers, t.assets as never[], mode)
+  } catch {
+    toast('应用模板失败，请重试', 'error')
+    return
+  }
   toast(mode === 'replace' ? `已覆盖为模板「${t.name}」` : `已追加模板「${t.name}」`, 'success')
   tplOpen.value = false
 }

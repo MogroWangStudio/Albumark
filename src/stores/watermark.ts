@@ -14,6 +14,11 @@ import type {
 import { migrateLayer, migrateOffsetsToPx } from '@/types/watermark'
 import type { SerializedAsset } from '@/types/watermark'
 
+/** 图层与资产是纯 JSON 数据；structuredClone 会拒绝 Vue 的响应式 Proxy（模板对象来自 store），故用 JSON 深拷贝 */
+function deepClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value))
+}
+
 export interface WatermarkAsset {
   id: string
   name: string
@@ -283,7 +288,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
         assets.value[a.id] = { ...a, blob: null }
       }
     }
-    layers.value = layersData.map((l) => migrateLayer(structuredClone(l)))
+    layers.value = layersData.map((l) => migrateLayer(deepClone(l)))
     selectedId.value = layers.value[0]?.id ?? null
   }
 
@@ -301,7 +306,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
         assets.value[a.id] = { ...a, blob: null }
       }
     }
-    const incoming = layersData.map((l) => migrateLayer(structuredClone(l)))
+    const incoming = layersData.map((l) => migrateLayer(deepClone(l)))
     if (mode === 'replace' && editId.value) {
       perImage.value = { ...perImage.value, [editId.value]: incoming }
     } else if (mode === 'replace') {
@@ -320,7 +325,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     for (const a of Object.values(assets.value)) {
       if (used.has(a.id)) list.push({ id: a.id, name: a.name, dataUrl: a.dataUrl, aspect: a.aspect })
     }
-    return { layers: structuredClone(raw), assets: list }
+    return { layers: deepClone(raw), assets: list }
   }
 
   // 持久化全局水印配置（素材以 dataUrl 内嵌，超限则放弃；独立水印随会话）
