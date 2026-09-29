@@ -20,6 +20,8 @@ export interface ExportPayload {
   quality: number
   longEdge: number
   pattern: string
+  /** 输出格式：JPG（有损，质量生效）或 PNG（无损） */
+  format: 'jpg' | 'png'
 }
 
 function pad(n: number, width: number): string {
@@ -31,6 +33,7 @@ export function buildFilename(
   item: ImageItem,
   index: number,
   total: number,
+  format: 'jpg' | 'png',
 ): string {
   const now = new Date()
   const ds = `${now.getFullYear()}${pad(now.getMonth() + 1, 2)}${pad(now.getDate(), 2)}`
@@ -41,7 +44,7 @@ export function buildFilename(
   name = resolveTokens(name, item.exif, item.baseName)
   name = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').trim()
   if (!name) name = item.baseName
-  return `${name}.jpg`
+  return `${name}${format === 'png' ? '.png' : '.jpg'}`
 }
 
 /**
@@ -84,7 +87,7 @@ export async function runExport(
             ? { ...l, content: resolveTokens(l.content, item.exif, item.baseName) }
             : l,
         )
-        const { bytes } = await client.renderJpeg(
+        const { bytes } = await client.renderImage(
           item.blob,
           payload.assets,
           layers,
@@ -92,10 +95,11 @@ export async function runExport(
           payload.longEdge,
           payload.quality / 100,
           payload.crops[item.id],
+          payload.format,
         )
-        let name = buildFilename(payload.pattern, item, i, items.length)
+        let name = buildFilename(payload.pattern, item, i, items.length, payload.format)
         let n = 2
-        while (used.has(name)) name = name.replace(/\.jpg$/, `-${n++}.jpg`)
+        while (used.has(name)) name = name.replace(/\.(jpg|png)$/, `-${n++}$&`)
         used.add(name)
         out.set(name, bytes)
       } catch (err) {

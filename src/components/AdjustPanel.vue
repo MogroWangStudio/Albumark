@@ -27,10 +27,13 @@ import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import {
   ADJUST_DEFS,
+  DENOISE_DEFAULT,
+  DENOISE_METHODS,
   HSL_BANDS,
   isHslNeutral,
   isNeutral,
   neutralHsl,
+  sameAdjustments,
   type Adjustments,
 } from '@/types/adjust'
 
@@ -63,11 +66,7 @@ const target = computed<Adjustments>(() =>
 )
 
 function sameAdjust(a: Adjustments, b: Adjustments): boolean {
-  return (
-    ADJUST_DEFS.every(({ key }) => a[key] === b[key]) &&
-    JSON.stringify(a.curve ?? []) === JSON.stringify(b.curve ?? []) &&
-    JSON.stringify(a.hsl ?? null) === JSON.stringify(b.hsl ?? null)
-  )
+  return sameAdjustments(a, b)
 }
 
 const matchesGlobal = computed(() => {
@@ -111,6 +110,58 @@ function resetHsl(): void {
   } else {
     delete adjust.values.hsl
   }
+}
+
+/* ---------- 晕影：强度 / 半径 / 羽化 / 形状 ---------- */
+
+const vigOpen = ref(false)
+
+const vigDirty = computed(
+  () =>
+    target.value.vignette !== 0 ||
+    (target.value.vignetteRadius ?? 50) !== 50 ||
+    (target.value.vignetteFeather ?? 50) !== 50 ||
+    (target.value.vignetteShape ?? 'ellipse') !== 'ellipse',
+)
+
+const vigRadiusModel = computed({
+  get: () => target.value.vignetteRadius ?? 50,
+  set: (v: number) => (target.value.vignetteRadius = v),
+})
+const vigFeatherModel = computed({
+  get: () => target.value.vignetteFeather ?? 50,
+  set: (v: number) => (target.value.vignetteFeather = v),
+})
+const vigShapeModel = computed({
+  get: () => target.value.vignetteShape ?? 'ellipse',
+  set: (v: unknown) => (target.value.vignetteShape = v as 'ellipse' | 'circle'),
+})
+
+function resetVignette(): void {
+  target.value.vignette = 0
+  delete target.value.vignetteRadius
+  delete target.value.vignetteFeather
+  delete target.value.vignetteShape
+}
+
+/* ---------- 降噪：强度 + 算法 ---------- */
+
+const dnOpen = ref(false)
+
+const dnDirty = computed(() => (target.value.denoise ?? 0) > 0)
+
+const denoiseModel = computed({
+  get: () => target.value.denoise ?? 0,
+  set: (v: number) => (target.value.denoise = v),
+})
+const denoiseMethodModel = computed({
+  get: () => target.value.denoiseMethod ?? DENOISE_DEFAULT,
+  set: (v: unknown) => (target.value.denoiseMethod = v as Adjustments['denoiseMethod']),
+})
+
+function resetDenoise(): void {
+  delete target.value.denoise
+  delete target.value.denoiseMethod
 }
 </script>
 
@@ -193,6 +244,80 @@ function resetHsl(): void {
             @reset="hslSet(selectedBand, 'l', 0)"
           />
         </div>
+      </template>
+    </section>
+    <section class="hsl">
+      <header class="hsl-head" @click="vigOpen = !vigOpen">
+        <Circle :size="13" />
+        <span>晕影</span>
+        <span class="flex" />
+        <button v-if="vigDirty" class="mini" title="全部归零" @click.stop="resetVignette">
+          <RotateCcw :size="11" />
+        </button>
+        <ChevronDown :size="13" class="chev" :class="{ open: vigOpen }" />
+      </header>
+      <template v-if="vigOpen">
+        <AppSlider
+          v-model="target.vignette"
+          :min="0"
+          :max="100"
+          label="强度"
+          :default="0"
+          @reset="target.vignette = 0"
+        />
+        <AppSlider v-model="vigRadiusModel" :min="0" :max="100" label="半径" :default="50" />
+        <AppSlider v-model="vigFeatherModel" :min="0" :max="100" label="羽化" :default="50" />
+        <div class="row-inline">
+          <span class="fl2">形状</span>
+          <AppSegment
+            small
+            :model-value="vigShapeModel"
+            :options="[
+              { value: 'ellipse', label: '椭圆' },
+              { value: 'circle', label: '圆形' },
+            ]"
+            @update:model-value="vigShapeModel = $event"
+          />
+        </div>
+      </template>
+    </section>
+    <section class="hsl">
+      <header class="hsl-head" @click="dnOpen = !dnOpen">
+        <Sparkles :size="13" />
+        <span>降噪</span>
+        <span class="flex" />
+        <button v-if="dnDirty" class="mini" title="关闭降噪" @click.stop="resetDenoise">
+          <RotateCcw :size="11" />
+        </button>
+        <ChevronDown :size="13" class="chev" :class="{ open: dnOpen }" />
+      </header>
+      <template v-if="dnOpen">
+        <AppSlider
+          v-model="denoiseModel"
+          :min="0"
+          :max="100"
+          label="强度"
+          :default="0"
+          @reset="denoiseModel = 0"
+        />
+        <template v-if="(target.denoise ?? 0) > 0">
+          <div class="row-inline">
+            <span class="fl2">算法</span>
+            <AppSegment
+              small
+              :model-value="denoiseMethodModel"
+              :options="DENOISE_METHODS"
+              @update:model-value="denoiseMethodModel = $event"
+            />
+          </div>
+          <p class="dn-hint">
+            {{ (target.denoiseMethod ?? 'edge') === 'median'
+              ? '中值：去除孤点噪斑与椒盐噪，边缘最硬。'
+              : (target.denoiseMethod ?? 'edge') === 'smooth'
+                ? '平滑：快速均匀柔化，力度最强。'
+                : '边缘保持：联合双边滤波，去噪同时保住细节边缘。' }}
+          </p>
+        </template>
       </template>
     </section>
     <div class="foot">
@@ -328,5 +453,21 @@ function resetHsl(): void {
   width: 9px;
   height: 9px;
   border-radius: 50%;
+}
+.row-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 2px;
+}
+.row-inline .fl2 {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.dn-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.5;
 }
 </style>

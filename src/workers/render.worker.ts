@@ -14,9 +14,9 @@ export interface RenderJob {
   crop?: Crop
   /** 长边上限（像素），0 表示原图尺寸 */
   maxSize: number
-  /** JPEG 质量 0-1 */
+  /** JPEG 质量 0-1（PNG 编码忽略） */
   quality: number
-  want: 'bitmap' | 'jpeg'
+  want: 'bitmap' | 'jpeg' | 'png'
 }
 
 type PostMessage = (message: unknown, transfer?: Transferable[]) => void
@@ -94,6 +94,7 @@ async function handle(job: RenderJob): Promise<void> {
     a.clarity !== 0 ||
     a.sharpen !== 0 ||
     a.grain !== 0 ||
+    (a.denoise ?? 0) > 0 ||
     !isHslNeutral(a.hsl) ||
     (a.curve && a.curve.length >= 4)
   ) {
@@ -153,7 +154,8 @@ async function handle(job: RenderJob): Promise<void> {
     const out = await createImageBitmap(framed)
     post({ id: job.id, bitmap: out, srcBack: job.bitmap }, [out, job.bitmap])
   } else {
-    const blob = await framed.convertToBlob({ type: 'image/jpeg', quality: job.quality })
+    const type = job.want === 'png' ? 'image/png' : 'image/jpeg'
+    const blob = await framed.convertToBlob({ type, quality: job.quality })
     const bytes = await blob.arrayBuffer()
     post({ id: job.id, bytes, width: fw, height: fh, srcBack: job.bitmap }, [bytes, job.bitmap])
   }

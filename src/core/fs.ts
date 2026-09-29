@@ -175,6 +175,28 @@ export async function trashPath(path: string): Promise<void> {
   })
 }
 
+/**
+ * 安卓逐张导出：把成批文件写入公共 Documents 下的 Albumark/<sub>/，
+ * 返回展示路径（Documents/Albumark/<sub>）。公开 Documents 目录里，
+ * Android 11+ 允许应用写入「自己创建」的文件；Android 10 依赖 manifest 的
+ * legacy 存储标记；Android 9 及以下由已声明的存储权限覆盖。
+ */
+export async function writeFilesToPublicFolder(
+  sub: string,
+  files: { name: string; bytes: ArrayBuffer }[],
+): Promise<string> {
+  const m = await capacitor()
+  for (const f of files) {
+    await m.Filesystem.writeFile({
+      path: `Albumark/${sub}/${f.name}`,
+      directory: m.Directory.Documents,
+      data: bytesToBase64(new Uint8Array(f.bytes)),
+      recursive: true,
+    })
+  }
+  return `Documents/Albumark/${sub}`
+}
+
 /* ---------- JSON 清单读写 ---------- */
 
 export async function readJsonFile(path: string): Promise<unknown | null> {

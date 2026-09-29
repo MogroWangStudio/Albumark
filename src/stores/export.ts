@@ -1,7 +1,8 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { buildZip, runExport } from '@/core/exporter'
-import { isTauri, pickDirectory, revealInFolder, saveZip, writeFilesToDir } from '@/core/platform'
+import { writeFilesToPublicFolder } from '@/core/fs'
+import { isCapacitor, isTauri, pickDirectory, revealInFolder, saveZip, writeFilesToDir } from '@/core/platform'
 import type { Crop } from '@/types/adjust'
 import { useAdjustStore } from './adjust'
 import { useImagesStore } from './images'
@@ -16,6 +17,7 @@ export const useExportStore = defineStore('export', () => {
   const quality = ref(90)
   const longEdge = ref(0) // 0 = 原始尺寸
   const pattern = ref('{name}')
+  const format = ref<'jpg' | 'png'>('jpg')
   const mode = ref<'zip' | 'folder'>('zip')
 
   const phase = ref<'idle' | 'running' | 'done'>('idle')
@@ -32,15 +34,23 @@ export const useExportStore = defineStore('export', () => {
     errors.value = []
     resultPath.value = null
 
-    if (mode.value === 'folder' && !isTauri) {
+    if (mode.value === 'folder' && !isTauri && !isCapacitor) {
       toast('浏览器版本仅支持导出 ZIP，已自动切换', 'error')
       mode.value = 'zip'
     }
 
+    // 桌面自选目录；安卓无目录选择器，逐张写入公共 Documents 的 Albumark/<时间戳>/
     let dir: string | null = null
+    let sub = ''
     if (mode.value === 'folder') {
-      dir = await pickDirectory()
-      if (!dir) return
+      if (isTauri) {
+        dir = await pickDirectory()
+        if (!dir) return
+      } else {
+        const now = new Date()
+        const p = (n: number) => String(n).padStart(2, '0')
+        sub = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}_${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`
+      }
     }
 
     phase.value = 'running'
@@ -68,6 +78,7 @@ export const useExportStore = defineStore('export', () => {
           quality: quality.value,
           longEdge: longEdge.value,
           pattern: pattern.value,
+          format: format.value,
         },
         Math.max(1, (navigator.hardwareConcurrency || 4) - 1),
         (d, t, name) => {
@@ -86,10 +97,15 @@ export const useExportStore = defineStore('export', () => {
         return
       }
 
-      if (mode.value === 'folder' && dir) {
+      if (mode.value === 'folder') {
         const list = [...outputs.entries()].map(([name, bytes]) => ({ name, bytes }))
-        await writeFilesToDir(dir, list)
-        resultPath.value = dir
+        if (isTauri && dir) {
+          await writeFilesToDir(dir, list)
+          resultPath.value = dir
+        } else {
+          // 安卓：逐张写入公共 Documents/Albumark/<时间戳>/
+          resultPath.value = await writeFilesToPublicFolder(sub, list)
+        }
       } else {
         const now = new Date()
         const p = (n: number) => String(n).padStart(2, '0')
@@ -118,6 +134,7 @@ export const useExportStore = defineStore('export', () => {
     quality,
     longEdge,
     pattern,
+    format,
     mode,
     phase,
     done,

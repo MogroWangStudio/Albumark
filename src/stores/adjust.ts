@@ -1,6 +1,6 @@
 import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { isPlainFullCrop, NEUTRAL, type AdjustKey, type Adjustments, type Crop } from '@/types/adjust'
+import { isPlainFullCrop, NEUTRAL, type Adjustments, type Crop, type SliderKey } from '@/types/adjust'
 import { useImagesStore } from '@/stores/images'
 
 const PERSIST_KEY = 'albumark.adjust.v1'
@@ -25,7 +25,7 @@ export const useAdjustStore = defineStore('adjust', () => {
   /** 单独调节的照片：id → 独立参数（存在即为开启），随会话结束不持久化 */
   const perImage = ref<Record<string, Adjustments>>({})
 
-  function set(key: Exclude<AdjustKey, 'curve' | 'hsl'>, v: number): void {
+  function set(key: SliderKey, v: number): void {
     values[key] = v
   }
 
@@ -33,6 +33,11 @@ export const useAdjustStore = defineStore('adjust', () => {
     Object.assign(values, NEUTRAL)
     delete values.curve
     delete values.hsl
+    delete values.denoise
+    delete values.denoiseMethod
+    delete values.vignetteRadius
+    delete values.vignetteFeather
+    delete values.vignetteShape
   }
 
   function isIndividual(id: string | null): boolean {

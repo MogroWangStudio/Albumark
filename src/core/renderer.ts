@@ -73,19 +73,29 @@ export class RenderClient {
     return { bitmap: res.bitmap, srcBack: res.srcBack }
   }
 
-  /** 导出渲染：解码源图并输出 JPEG 字节。 */
-  async renderJpeg(
+  /** 编码渲染：解码源图并输出 JPEG / PNG 字节。 */
+  async renderImage(
     blob: Blob,
     assets: AssetPayload[],
     layers: WatermarkLayer[],
     adjustments: Adjustments,
     maxSize: number,
     quality: number,
-    crop?: Crop,
+    crop: Crop | undefined,
+    format: 'jpg' | 'png',
   ): Promise<{ bytes: ArrayBuffer; width: number; height: number }> {
     const src = await createImageBitmap(blob)
     const res = await this.request(
-      { bitmap: src, assets, layers, adjustments, crop, maxSize, quality, want: 'jpeg' },
+      {
+        bitmap: src,
+        assets,
+        layers,
+        adjustments,
+        crop,
+        maxSize,
+        quality,
+        want: format === 'png' ? 'png' : 'jpeg',
+      },
       [src],
     )
     if (!res.bytes) throw new Error('导出渲染失败')

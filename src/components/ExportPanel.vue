@@ -5,7 +5,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import { TOKENS } from '@/core/tokens'
-import { isTauri } from '@/core/platform'
+import { isCapacitor, isTauri } from '@/core/platform'
 import { useExportStore } from '@/stores/export'
 import { useImagesStore } from '@/stores/images'
 
@@ -15,6 +15,8 @@ const images = useImagesStore()
 const running = computed(() => ex.phase === 'running')
 const finished = computed(() => ex.phase === 'done')
 const exportable = computed(() => images.items.some((i) => i.blob))
+/** 文件夹逐张写入：桌面自选目录，安卓写入公共 Documents；浏览器不支持 */
+const canFolder = isTauri || isCapacitor
 
 const LONG_EDGE_PRESETS = ['0', '2560', '1920', '1280']
 
@@ -38,6 +40,11 @@ function onCustomLongEdge(e: Event): void {
 const modeModel = computed({
   get: () => ex.mode,
   set: (v: unknown) => (ex.mode = v as 'zip' | 'folder'),
+})
+
+const formatModel = computed({
+  get: () => ex.format,
+  set: (v: unknown) => (ex.format = v as 'jpg' | 'png'),
 })
 
 /* ---------- 文件名模板：点按令牌插入光标处 ---------- */
@@ -70,7 +77,26 @@ async function start(): Promise<void> {
       <h1>导出</h1>
     </div>
     <template v-if="!running && !finished">
-      <AppSlider v-model="ex.quality" :min="50" :max="100" label="JPEG 质量" :format="(v) => `${v}%`" @reset="ex.quality = 90" />
+      <div class="field">
+        <span class="fl">图像格式</span>
+        <AppSegment
+          v-model="formatModel"
+          small
+          :options="[
+            { value: 'jpg', label: 'JPG（体积小）' },
+            { value: 'png', label: 'PNG（无损）' },
+          ]"
+        />
+      </div>
+      <AppSlider
+        v-if="ex.format === 'jpg'"
+        v-model="ex.quality"
+        :min="50"
+        :max="100"
+        label="图像质量"
+        :format="(v) => `${v}%`"
+        @reset="ex.quality = 90"
+      />
       <div class="field">
         <span class="fl">图像长边像素</span>
         <div class="long-edge">
@@ -112,9 +138,12 @@ async function start(): Promise<void> {
           small
           :options="[
             { value: 'zip', label: 'ZIP 压缩包' },
-            { value: 'folder', label: '文件夹（桌面端）', disabled: !isTauri },
+            { value: 'folder', label: '文件夹（逐张写入）', disabled: !canFolder },
           ]"
         />
+        <p v-if="modeModel === 'folder'" class="mode-hint">
+          {{ isTauri ? '选择一个文件夹，照片逐张写入其中。' : '照片逐张写入公共 Documents/Albumark/ 下的按时间命名的文件夹。' }}
+        </p>
       </div>
       <AppButton variant="primary" class="start" :disabled="!exportable" @click="start">
         <Package :size="15" />开始导出
@@ -141,11 +170,12 @@ async function start(): Promise<void> {
             >，{{ ex.errors.length }} 张失败</template
           >。
         </p>
+        <p v-if="ex.resultPath" class="dest mono">{{ ex.resultPath }}</p>
         <ul v-if="ex.errors.length" class="errors">
           <li v-for="e in ex.errors" :key="e">{{ e }}</li>
         </ul>
         <div class="actions">
-          <AppButton v-if="ex.resultPath" @click="ex.openResult()">
+          <AppButton v-if="ex.resultPath && isTauri" @click="ex.openResult()">
             <FolderOpen :size="15" />打开所在文件夹
           </AppButton>
           <AppButton variant="primary" @click="ex.reset()">完成</AppButton>
@@ -175,6 +205,20 @@ async function start(): Promise<void> {
 .fl {
   font-size: 12px;
   color: var(--text-2);
+}
+.mode-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+.dest {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .text-input {
   height: var(--control-h);

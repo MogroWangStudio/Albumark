@@ -1,5 +1,5 @@
 import type { Adjustments } from '@/types/adjust'
-import { isCurveNeutral, isHslNeutral } from '@/types/adjust'
+import { DENOISE_DEFAULT, isCurveNeutral, isHslNeutral, VIGNETTE_DEFAULTS } from '@/types/adjust'
 
 /** HSL 色带中心（度），与 HSL_BANDS 一致：红 橙 黄 绿 青 蓝 紫 洋红 */
 const HUE_CENTERS = [0, 30, 60, 120, 180, 240, 270, 300]
@@ -140,7 +140,7 @@ function toRGBFloat(data: Uint8ClampedArray): Float32Array {
 
 /**
  * 单遍像素调节管线：曝光 → 亮度 → 对比度 → 阴影/高光 → 色温/色调 →
- * 自然饱和度/饱和度 → HSL 分色 → 去雾 → 清晰度 → 锐化 → 晕影 → 曲线 → 颗粒。
+ * 自然饱和度/饱和度 → HSL 分色 → 去雾 → 晕影 → 曲线 → 降噪 → 清晰度 → 锐化 → 颗粒。
  * 直接操作 RGBA 数据，供 Web Worker 调用；滑杆参数取 -100 ~ 100，曲线为 0–1 控制点。
  */
 export function applyAdjustments(
@@ -158,6 +158,11 @@ export function applyAdjustments(
   const temperature = (a.temperature / 100) * 32
   const tint = (a.tint / 100) * 26
   const vignette = a.vignette / 100
+  // 晕影：半径 = 压暗起始位置（角落距离的百分比），羽化 = 过渡宽度
+  const vStart = 0.25 + (Math.min(100, Math.max(0, a.vignetteRadius ?? VIGNETTE_DEFAULTS.radius)) / 100) * 0.5
+  const vWidth = Math.max(0.1 + (Math.min(100, Math.max(0, a.vignetteFeather ?? VIGNETTE_DEFAULTS.feather)) / 100) * 0.8, 1e-3)
+  const vInvW = 1 / vWidth
+  const vCircle = (a.vignetteShape ?? VIGNETTE_DEFAULTS.shape) === 'circle'
   const dehaze = a.dehaze / 100
   const clarity = a.clarity / 100
   const sharpen = a.sharpen / 100
@@ -174,9 +179,12 @@ export function applyAdjustments(
   const cx = w / 2
   const cy = h / 2
   const mid = 127.5
+  const vInvDenom = 1 / Math.max(cx, cy)
 
   for (let y = 0, i = 0; y < h; y++) {
-    const ny = vignette > 0 ? (y - cy) / cy : 0
+    const dy = y - cy
+    const ny = vignette > 0 ? dy / cy : 0
+    const dy2 = vignette > 0 && vCircle ? dy * dy : 0
     for (let x = 0; x < w; x++, i += 4) {
       let r = data[i]
       let g = data[i + 1]
@@ -328,9 +336,12 @@ export function applyAdjustments(
         b = (b - lift) * gain + lift * 0.18
       }
       if (vignette > 0) {
-        const nx = (x - cx) / cx
-        const d2 = nx * nx + ny * ny
-        let t = (d2 - 0.5) / 1.5
+        // 距离归一到角落 = 1：椭圆随画幅，正圆按长边一半为半径
+        const dxp = x - cx
+        const dn = vCircle
+          ? Math.sqrt(dxp * dxp + dy2) * vInvDenom
+          : Math.sqrt((dxp / cx) * (dxp / cx) + ny * ny) * 0.70710678
+        let t = (dn - vStart) * vInvW
         t = t < 0 ? 0 : t > 1 ? 1 : t
         const falloff = 1 - vignette * t * t * (3 - 2 * t)
         r *= falloff
@@ -348,6 +359,10 @@ export function applyAdjustments(
       data[i + 2] = b < 0 ? 0 : b > 255 ? 255 : b
     }
   }
+
+  // 降噪：在细节增强（清晰度/锐化）之前进行，避免增强放大噪点
+  const dnK = (a.denoise ?? 0) / 100
+  if (dnK > 0) denoiseImage(data, w, h, dnK, a.denoiseMethod ?? DENOISE_DEFAULT)
 
   // 清晰度：大半径局部对比度；锐化：小半径细节强化。均用 unsharp 结构，只在非零时付出模糊代价
   if (clarity !== 0 || sharpen !== 0) {
@@ -398,4 +413,140 @@ export function applyAdjustments(
 
 function clamp255(v: number): number {
   return v < 0 ? 0 : v > 255 ? 255 : v
+}
+
+/* ---------- 降噪 ---------- */
+
+type DenoiseMethod = 'smooth' | 'edge' | 'median'
+
+/**
+ * 降噪调度：强度 k ∈ 0–1。
+ * - 平滑：两遍盒模糊近似高斯，半径随强度增大，按强度与原图混合
+ * - 边缘保持：联合双边滤波的可分离近似（色度以亮度为参考，保色不产生彩斑）
+ * - 中值：3×3 逐通道中值，对孤点噪斑 / 椒盐噪最有效，按强度与原图混合
+ */
+function denoiseImage(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  k: number,
+  method: DenoiseMethod,
+): void {
+  if (method === 'median') medianDenoise(data, w, h, k)
+  else if (method === 'edge') bilateralDenoise(data, w, h, k)
+  else smoothDenoise(data, w, h, k)
+}
+
+/** 平滑：两遍盒模糊近似高斯（半径 1–3 随强度），lerp 回原图 */
+function smoothDenoise(data: Uint8ClampedArray, w: number, h: number, k: number): void {
+  const r = k >= 0.66 ? 3 : k >= 0.33 ? 2 : 1
+  const blur = boxBlurRGB(boxBlurRGB(toRGBFloat(data), w, h, r), w, h, r)
+  for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+    data[i] = clamp255(data[i] + (blur[j] - data[i]) * k)
+    data[i + 1] = clamp255(data[i + 1] + (blur[j + 1] - data[i + 1]) * k)
+    data[i + 2] = clamp255(data[i + 2] + (blur[j + 2] - data[i + 2]) * k)
+  }
+}
+
+/**
+ * 边缘保持：联合双边滤波的可分离近似。空间高斯 σ=1.6、半径 3，
+ * 值域权重以亮度差查表（σ 随强度 5→35），色度跟随亮度权重 —— 保边且不产生彩斑。
+ */
+function bilateralDenoise(data: Uint8ClampedArray, w: number, h: number, k: number): void {
+  const r = 3
+  const sigmaR = 5 + k * 30
+  const rangeLut = new Float32Array(256)
+  for (let v = 0; v < 256; v++) rangeLut[v] = Math.exp(-(v * v) / (2 * sigmaR * sigmaR))
+  const spatial = [0.172, 0.458, 0.823, 1, 0.823, 0.458, 0.172] // exp(-d²/2), σ=1.6，归一化在权重和里完成
+  const n = w * h
+  const src = toRGBFloat(data)
+  const luma = new Float32Array(n)
+  for (let i = 0, j = 0; i < n; i++, j += 3) {
+    luma[i] = 0.2126 * src[j] + 0.7152 * src[j + 1] + 0.0722 * src[j + 2]
+  }
+  const mid = new Float32Array(src.length)
+  const out = new Float32Array(src.length)
+  // 水平 → 垂直两遍；值域参考统一用原图亮度（联合双边）
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x
+      const lc = luma[idx]
+      let wa = 0
+      let r0 = 0
+      let g0 = 0
+      let b0 = 0
+      for (let d = -r; d <= r; d++) {
+        const xx = Math.min(w - 1, Math.max(0, x + d))
+        const j = (y * w + xx) * 3
+        const wt = spatial[d + 3] * rangeLut[Math.abs(luma[y * w + xx] - lc) | 0]
+        wa += wt
+        r0 += src[j] * wt
+        g0 += src[j + 1] * wt
+        b0 += src[j + 2] * wt
+      }
+      const j = idx * 3
+      mid[j] = r0 / wa
+      mid[j + 1] = g0 / wa
+      mid[j + 2] = b0 / wa
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) {
+      const idx = y * w + x
+      const lc = luma[idx]
+      let wa = 0
+      let r0 = 0
+      let g0 = 0
+      let b0 = 0
+      for (let d = -r; d <= r; d++) {
+        const yy = Math.min(h - 1, Math.max(0, y + d))
+        const j = (yy * w + x) * 3
+        const wt = spatial[d + 3] * rangeLut[Math.abs(luma[yy * w + x] - lc) | 0]
+        wa += wt
+        r0 += mid[j] * wt
+        g0 += mid[j + 1] * wt
+        b0 += mid[j + 2] * wt
+      }
+      const j = idx * 3
+      out[j] = r0 / wa
+      out[j + 1] = g0 / wa
+      out[j + 2] = b0 / wa
+    }
+  }
+  for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+    data[i] = clamp255(data[i] + (out[j] - data[i]) * k)
+    data[i + 1] = clamp255(data[i + 1] + (out[j + 1] - data[i + 1]) * k)
+    data[i + 2] = clamp255(data[i + 2] + (out[j + 2] - data[i + 2]) * k)
+  }
+}
+
+/** 中值：3×3 逐通道中值滤波（插入排序取中位），lerp 回原图 */
+function medianDenoise(data: Uint8ClampedArray, w: number, h: number, k: number): void {
+  const src = data.slice()
+  const win = new Array<number>(9)
+  for (let y = 0, i = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, i += 4) {
+      for (let c = 0; c < 3; c++) {
+        let n = 0
+        for (let dy = -1; dy <= 1; dy++) {
+          const yy = Math.min(h - 1, Math.max(0, y + dy))
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = Math.min(w - 1, Math.max(0, x + dx))
+            win[n++] = src[(yy * w + xx) * 4 + c]
+          }
+        }
+        for (let a = 1; a < 9; a++) {
+          const v = win[a]
+          let b = a - 1
+          while (b >= 0 && win[b] > v) {
+            win[b + 1] = win[b]
+            b--
+          }
+          win[b + 1] = v
+        }
+        const med = win[4]
+        data[i + c] = clamp255(src[i + c] + (med - src[i + c]) * k)
+      }
+    }
+  }
 }

@@ -26,7 +26,29 @@ export interface Adjustments {
   curve?: number[]
   /** HSL 分色调整：8 色带各自的色相 / 饱和度 / 亮度偏移（-100~100）；undefined = 全部中性 */
   hsl?: HslShift
+  /** 降噪强度（0-100）；undefined / 0 = 关闭 */
+  denoise?: number
+  /** 降噪算法；缺省为「边缘保持」 */
+  denoiseMethod?: DenoiseMethod
+  /** 晕影起始半径（0-100，相对角落距离的百分比）；缺省 50 */
+  vignetteRadius?: number
+  /** 晕影羽化过渡宽度（0-100）；缺省 50 */
+  vignetteFeather?: number
+  /** 晕影形状：椭圆随画幅 / 正圆；缺省椭圆 */
+  vignetteShape?: 'ellipse' | 'circle'
 }
+
+/** 降噪算法：平滑（快速模糊）/ 边缘保持（联合双边）/ 中值（去孤点噪斑） */
+export type DenoiseMethod = 'smooth' | 'edge' | 'median'
+
+export const DENOISE_METHODS: { value: DenoiseMethod; label: string }[] = [
+  { value: 'smooth', label: '平滑' },
+  { value: 'edge', label: '边缘保持' },
+  { value: 'median', label: '中值' },
+]
+export const DENOISE_DEFAULT: DenoiseMethod = 'edge'
+/** 晕影参数缺省值：与旧版固定曲线的观感一致 */
+export const VIGNETTE_DEFAULTS = { radius: 50, feather: 50, shape: 'ellipse' as const }
 
 /** 8 色带 [红, 橙, 黄, 绿, 青, 蓝, 紫, 洋红] 的分色偏移 */
 export interface HslShift {
@@ -75,7 +97,13 @@ export function isHslNeutral(hsl?: HslShift): boolean {
   return !hsl.h.some((v) => v !== 0) && !hsl.s.some((v) => v !== 0) && !hsl.l.some((v) => v !== 0)
 }
 
-export const ADJUST_DEFS: { key: Exclude<AdjustKey, 'curve' | 'hsl'>; label: string }[] = [
+/** 统一滑杆列表的数值键：排除曲线 / HSL 与带子选项的可选参数字段 */
+export type SliderKey = Exclude<
+  AdjustKey,
+  'curve' | 'hsl' | 'denoise' | 'denoiseMethod' | 'vignetteRadius' | 'vignetteFeather' | 'vignetteShape'
+>
+
+export const ADJUST_DEFS: { key: SliderKey; label: string }[] = [
   { key: 'exposure', label: '曝光' },
   { key: 'brightness', label: '亮度' },
   { key: 'contrast', label: '对比度' },
@@ -89,19 +117,33 @@ export const ADJUST_DEFS: { key: Exclude<AdjustKey, 'curve' | 'hsl'>; label: str
   { key: 'clarity', label: '清晰度' },
   { key: 'sharpen', label: '锐化' },
   { key: 'grain', label: '颗粒' },
-  { key: 'vignette', label: '晕影' },
 ]
 
 export function isCurveNeutral(curve?: number[]): boolean {
   return !curve || curve.length < 4
 }
 
-export function isNeutral(a: Adjustments): boolean {
+/** 两份调节参数是否完全一致（可选字段按各自缺省值参与比较） */
+export function sameAdjustments(a: Adjustments, b: Adjustments): boolean {
+  if (!ADJUST_DEFS.every(({ key }) => a[key] === b[key])) return false
+  if (a.vignette !== b.vignette) return false
+  if ((a.vignetteRadius ?? VIGNETTE_DEFAULTS.radius) !== (b.vignetteRadius ?? VIGNETTE_DEFAULTS.radius))
+    return false
+  if ((a.vignetteFeather ?? VIGNETTE_DEFAULTS.feather) !== (b.vignetteFeather ?? VIGNETTE_DEFAULTS.feather))
+    return false
+  if ((a.vignetteShape ?? VIGNETTE_DEFAULTS.shape) !== (b.vignetteShape ?? VIGNETTE_DEFAULTS.shape))
+    return false
+  if ((a.denoise ?? 0) !== (b.denoise ?? 0)) return false
+  if ((a.denoise ?? 0) > 0 && (a.denoiseMethod ?? DENOISE_DEFAULT) !== (b.denoiseMethod ?? DENOISE_DEFAULT))
+    return false
   return (
-    ADJUST_DEFS.every(({ key }) => a[key] === 0) &&
-    isCurveNeutral(a.curve) &&
-    isHslNeutral(a.hsl)
+    JSON.stringify(a.curve ?? []) === JSON.stringify(b.curve ?? []) &&
+    JSON.stringify(a.hsl ?? null) === JSON.stringify(b.hsl ?? null)
   )
+}
+
+export function isNeutral(a: Adjustments): boolean {
+  return sameAdjustments(a, NEUTRAL)
 }
 
 /* ---------- 裁剪 ---------- */
