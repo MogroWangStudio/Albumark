@@ -216,6 +216,11 @@ function measureContext(): CanvasRenderingContext2D {
   return mctx
 }
 
+/** 当前主题的强调色：随主题切换（画布上的参考线 / 锚点都用它） */
+function accentCss(): string {
+  return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#ffa72f'
+}
+
 function resolvedLayer(l: WatermarkLayer): WatermarkLayer {
   if (l.type !== 'text') return l
   const a = active.value
@@ -490,8 +495,8 @@ function drawBase(): void {
   ctx.imageSmoothingQuality = 'high'
   ctx.translate(ox, oy)
   ctx.scale(scale, scale)
-  // 投影让照片贴在纯白/纯黑底上仍有层次
-  const light = document.documentElement.dataset.theme === 'light'
+  // 投影让照片贴在底色上仍有层次（明暗随主题 mode）
+  const light = document.documentElement.dataset.mode === 'light'
   ctx.save()
   ctx.shadowColor = light ? 'rgba(0, 0, 0, 0.2)' : 'rgba(0, 0, 0, 0.55)'
   ctx.shadowBlur = 22 / scale
@@ -560,7 +565,8 @@ function drawOverlay(): void {
   const snap = snapLines.value
   if (snap) {
     ctx.save()
-    ctx.strokeStyle = 'rgba(255, 167, 47, 0.9)'
+    ctx.strokeStyle = accentCss()
+    ctx.globalAlpha = 0.9
     ctx.lineWidth = 1 / scale
     ctx.setLineDash([6 / scale, 4 / scale])
     if (snap.x !== undefined) {
@@ -583,7 +589,8 @@ function drawOverlay(): void {
   if (sel && sel.type !== 'border') {
     const a = anchorPoint(sel.anchor, resultMap.w, resultMap.h)
     ctx.save()
-    ctx.strokeStyle = 'rgba(255, 167, 47, 0.75)'
+    ctx.strokeStyle = accentCss()
+    ctx.globalAlpha = 0.75
     ctx.lineWidth = 1 / scale
     const r = 7 / scale
     ctx.beginPath()

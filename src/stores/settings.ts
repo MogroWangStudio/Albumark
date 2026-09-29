@@ -3,8 +3,72 @@ import { defineStore } from 'pinia'
 import { registerPlugin } from '@capacitor/core'
 import { isCapacitor, isTauri } from '@/core/platform'
 
-export type ThemeMode = 'auto' | 'dark' | 'light'
+export type ThemeMode = 'auto' | 'dark' | 'light' | 'darkroom' | 'cyanotype' | 'paper' | 'gallery'
 export type PreviewQuality = 'high' | 'balanced' | 'eco'
+
+export interface ThemeDef {
+  id: ThemeMode
+  label: string
+  /** 一句话来历，悬停展示 */
+  hint: string
+  /** 解析后的明暗：画布投影、安卓状态栏等 JS 判断用 */
+  mode: 'light' | 'dark'
+  /** 设置页色卡：界面底 / 照片区 / 强调色 */
+  swatch: { bg: string; canvas: string; accent: string }
+}
+
+/** 全部主题：auto/dark/light 之外，四款取自摄影与印相工艺 */
+export const THEMES: ThemeDef[] = [
+  {
+    id: 'auto',
+    label: '跟随系统',
+    hint: '浅色 / 深色随系统切换',
+    mode: 'dark',
+    swatch: { bg: '#ffffff', canvas: '#141210', accent: '#ffa72f' },
+  },
+  {
+    id: 'light',
+    label: '浅色',
+    hint: '纯白底，照片是唯一焦点',
+    mode: 'light',
+    swatch: { bg: '#ffffff', canvas: '#efedea', accent: '#ffa72f' },
+  },
+  {
+    id: 'dark',
+    label: '深色',
+    hint: '纯黑底，照片更突出',
+    mode: 'dark',
+    swatch: { bg: '#000000', canvas: '#161310', accent: '#ffa72f' },
+  },
+  {
+    id: 'darkroom',
+    label: '暗房',
+    hint: '放大机旁的相纸台：暖黑墙面、安全灯余烬',
+    mode: 'dark',
+    swatch: { bg: '#17120e', canvas: '#0d0a07', accent: '#e06b3a' },
+  },
+  {
+    id: 'cyanotype',
+    label: '蓝晒',
+    hint: '普鲁士蓝上晒出的白影',
+    mode: 'dark',
+    swatch: { bg: '#0d1b28', canvas: '#081420', accent: '#5fa8cc' },
+  },
+  {
+    id: 'paper',
+    label: '纸墨',
+    hint: '宣纸、墨字、一枚朱砂印',
+    mode: 'light',
+    swatch: { bg: '#f5f0e6', canvas: '#ebe5d7', accent: '#c2412a' },
+  },
+  {
+    id: 'gallery',
+    label: '画廊',
+    hint: '展墙、卡纸与黄铜牌',
+    mode: 'light',
+    swatch: { bg: '#efebe3', canvas: '#e5e0d5', accent: '#86641f' },
+  },
+]
 
 export interface AppSettings {
   /** 外观主题：auto 跟随系统 */
@@ -87,9 +151,16 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /** auto 跟随系统解析出的明暗；个性主题取注册表里的固定 mode */
+  function resolveMode(): 'light' | 'dark' {
+    if (theme.value === 'auto') return systemDark.matches ? 'dark' : 'light'
+    return THEMES.find((t) => t.id === theme.value)?.mode ?? 'dark'
+  }
+
   function applyTheme(): void {
     const eff = theme.value === 'auto' ? (systemDark.matches ? 'dark' : 'light') : theme.value
     document.documentElement.dataset.theme = eff
+    document.documentElement.dataset.mode = resolveMode()
   }
 
   /** 自定义显示字体：写覆盖 --font，引用默认栈作后备；空值恢复默认 */
@@ -102,7 +173,8 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function syncSystemBars(): Promise<void> {
     if (!isCapacitor) return
-    const style = theme.value === 'auto' ? 'DEFAULT' : theme.value === 'dark' ? 'DARK' : 'LIGHT'
+    // auto 交给系统原生跟随；手动主题按解析出的明暗设图标色
+    const style = theme.value === 'auto' ? 'DEFAULT' : resolveMode() === 'dark' ? 'DARK' : 'LIGHT'
     try {
       await SystemBars.setStyle({ style })
     } catch {

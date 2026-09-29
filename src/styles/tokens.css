@@ -1,7 +1,10 @@
 /* 辑印 Albumark · 设计令牌
-   唯一强调色取自品牌 Logo（#FFA72F）；层级由字号、字重与间距表达，不靠彩色堆砌。
-   界面底色：浅色纯白、深色纯黑，让照片成为唯一的视觉焦点。
-   主题：默认深色；手动主题由设置写入 <html data-theme="light|dark">，auto 模式由 JS 跟随系统。 */
+   品牌强调色取自 Logo（#FFA72F），个性主题各自携带强调色。
+   层级由字号、字重与间距表达，不靠彩色堆砌。
+   默认深色纯黑；主题由设置写入 <html data-theme="…"> 并同步 data-mode="light|dark"
+   供 JS 判断明暗（画布投影、安卓状态栏等），auto 模式由 JS 跟随系统。
+   个性主题取自摄影与印相工艺：暗房（安全灯下的相纸台）、蓝晒（普鲁士蓝印相）、
+   纸墨（宣纸与朱砂）、画廊（展墙与黄铜牌）。 */
 
 :root {
   color-scheme: dark;
@@ -83,6 +86,114 @@
   --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.12);
   --shadow-3: 0 18px 56px rgba(0, 0, 0, 0.16);
   --shadow-panel: 0 6px 22px rgba(0, 0, 0, 0.1);
+}
+
+/* 暗房：放大机旁的相纸台。墙面暖黑，安全灯是余烬色的一点红。 */
+:root[data-theme='darkroom'] {
+  color-scheme: dark;
+  --bg: #17120e;
+  --canvas: #0d0a07;
+  --surface: rgba(45, 34, 25, 0.82);
+  --surface-solid: #251c15;
+  --panel: #1a1410;
+  --raised: #332720;
+  --hover: rgba(255, 214, 170, 0.06);
+  --active: rgba(255, 214, 170, 0.1);
+  --text: #f1e7da;
+  --text-2: #b3a491;
+  --text-3: #837463;
+  --line: rgba(241, 222, 198, 0.09);
+  --line-strong: rgba(241, 222, 198, 0.18);
+  --accent: #e06b3a;
+  --accent-strong: #c65a2c;
+  --accent-contrast: #2b1204;
+  --accent-soft: rgba(224, 107, 58, 0.16);
+  --danger: #e05870;
+  --ok: #9dbb72;
+  --shadow-2: 0 8px 28px rgba(10, 5, 2, 0.55);
+  --shadow-3: 0 18px 56px rgba(10, 5, 2, 0.65);
+  --shadow-panel: 0 6px 22px rgba(10, 5, 2, 0.45);
+}
+
+/* 蓝晒：普鲁士蓝上晒出的白影。深蓝底、青白强调。 */
+:root[data-theme='cyanotype'] {
+  color-scheme: dark;
+  --bg: #0d1b28;
+  --canvas: #081420;
+  --surface: rgba(23, 42, 60, 0.82);
+  --surface-solid: #152637;
+  --panel: #0f1e2c;
+  --raised: #1d3044;
+  --hover: rgba(148, 198, 232, 0.07);
+  --active: rgba(148, 198, 232, 0.11);
+  --text: #dde9f3;
+  --text-2: #94aec2;
+  --text-3: #5e7c93;
+  --line: rgba(160, 205, 235, 0.1);
+  --line-strong: rgba(160, 205, 235, 0.2);
+  --accent: #5fa8cc;
+  --accent-strong: #4890b4;
+  --accent-contrast: #06202e;
+  --accent-soft: rgba(95, 168, 204, 0.16);
+  --danger: #e06e78;
+  --ok: #7fc9a2;
+  --shadow-2: 0 8px 28px rgba(2, 8, 14, 0.55);
+  --shadow-3: 0 18px 56px rgba(2, 8, 14, 0.65);
+  --shadow-panel: 0 6px 22px rgba(2, 8, 14, 0.45);
+}
+
+/* 纸墨：宣纸、墨字、一枚朱砂印。暖米纸底、朱红强调。 */
+:root[data-theme='paper'] {
+  color-scheme: light;
+  --bg: #f5f0e6;
+  --canvas: #ebe5d7;
+  --surface: rgba(252, 249, 241, 0.85);
+  --surface-solid: #fbf8f0;
+  --panel: #f9f5eb;
+  --raised: #fffdf6;
+  --hover: rgba(72, 58, 36, 0.05);
+  --active: rgba(72, 58, 36, 0.09);
+  --text: #2e281f;
+  --text-2: #766b5a;
+  --text-3: #a3977f;
+  --line: rgba(72, 58, 36, 0.13);
+  --line-strong: rgba(72, 58, 36, 0.24);
+  --accent: #c2412a;
+  --accent-strong: #a53520;
+  --accent-contrast: #fff6ec;
+  --accent-soft: rgba(194, 65, 42, 0.12);
+  --danger: #ac3a4e;
+  --ok: #5f7d3a;
+  --shadow-2: 0 8px 28px rgba(72, 52, 24, 0.16);
+  --shadow-3: 0 18px 56px rgba(72, 52, 24, 0.2);
+  --shadow-panel: 0 6px 22px rgba(72, 52, 24, 0.12);
+}
+
+/* 画廊：展墙、卡纸与黄铜牌。暖白墙底、青铜强调。 */
+:root[data-theme='gallery'] {
+  color-scheme: light;
+  --bg: #efebe3;
+  --canvas: #e5e0d5;
+  --surface: rgba(250, 248, 244, 0.85);
+  --surface-solid: #faf8f3;
+  --panel: #f6f3ec;
+  --raised: #fffefb;
+  --hover: rgba(56, 46, 30, 0.05);
+  --active: rgba(56, 46, 30, 0.09);
+  --text: #221d15;
+  --text-2: #6e6555;
+  --text-3: #9a9080;
+  --line: rgba(60, 50, 32, 0.12);
+  --line-strong: rgba(60, 50, 32, 0.22);
+  --accent: #86641f;
+  --accent-strong: #6d5118;
+  --accent-contrast: #fffdf2;
+  --accent-soft: rgba(134, 100, 31, 0.14);
+  --danger: #b3402e;
+  --ok: #567d46;
+  --shadow-2: 0 8px 28px rgba(58, 46, 26, 0.14);
+  --shadow-3: 0 18px 56px rgba(58, 46, 26, 0.18);
+  --shadow-panel: 0 6px 22px rgba(58, 46, 26, 0.11);
 }
 
 @media (prefers-reduced-transparency: reduce) {

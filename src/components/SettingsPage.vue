@@ -9,7 +9,7 @@ import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platfo
 import { openReleasePage, checkForUpdate, type UpdateInfo } from '@/core/updater'
 import { APP_VERSION } from '@/core/version'
 import { FONT_CATEGORY_LABELS, useFontsStore, type FontCategory } from '@/stores/fonts'
-import { useSettingsStore, type PreviewQuality, type ThemeMode } from '@/stores/settings'
+import { THEMES, useSettingsStore, type PreviewQuality, type ThemeDef, type ThemeMode } from '@/stores/settings'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const emit = defineEmits<{ back: [] }>()
@@ -22,6 +22,18 @@ const themeModel = computed({
   get: () => settings.theme,
   set: (v: unknown) => (settings.theme = v as ThemeMode),
 })
+
+/** 跟随系统的色卡对半分亮暗，其余直接用主题自己的三色 */
+function swatchStyle(t: ThemeDef): Record<string, string> {
+  if (t.id === 'auto') {
+    return {
+      '--sw-bg': 'linear-gradient(115deg, #ffffff 0 50%, #101010 50% 100%)',
+      '--sw-canvas': 'linear-gradient(115deg, #ececea 0 50%, #24211d 50% 100%)',
+      '--sw-accent': t.swatch.accent,
+    }
+  }
+  return { '--sw-bg': t.swatch.bg, '--sw-canvas': t.swatch.canvas, '--sw-accent': t.swatch.accent }
+}
 
 const qualityModel = computed({
   get: () => settings.previewQuality,
@@ -98,18 +110,26 @@ async function relaunchOobe(): Promise<void> {
     <div class="body">
       <section class="group">
         <h2>外观</h2>
-        <div class="row">
+        <div class="row col">
           <div class="text">
             <span class="label">主题</span>
           </div>
-          <AppSegment
-            v-model="themeModel"
-            :options="[
-              { value: 'auto', label: '跟随系统' },
-              { value: 'dark', label: '深色' },
-              { value: 'light', label: '浅色' },
-            ]"
-          />
+          <div class="themes" role="radiogroup" aria-label="主题">
+            <button
+              v-for="t in THEMES"
+              :key="t.id"
+              class="theme"
+              role="radio"
+              :aria-checked="settings.theme === t.id"
+              :title="t.hint"
+              @click="themeModel = t.id"
+            >
+              <span class="swatch" :class="{ auto: t.id === 'auto' }" :style="swatchStyle(t)">
+                <span class="ph"><span class="dot" /></span>
+              </span>
+              <span class="t-label">{{ t.label }}</span>
+            </button>
+          </div>
         </div>
         <div class="row col">
           <div class="text">
@@ -352,6 +372,68 @@ async function relaunchOobe(): Promise<void> {
 .note {
   font-size: 11.5px;
   color: var(--text-3);
+}
+/* ---------- 主题色卡：一小块「相纸台」示意，无渐变堆砌 ---------- */
+.themes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 12px;
+}
+.theme {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.swatch {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 10;
+  border-radius: 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--sw-bg);
+  overflow: hidden;
+  transition: border-color var(--dur-hover) var(--ease-soft), transform var(--dur-hover) var(--ease-soft);
+}
+.theme:hover .swatch {
+  border-color: var(--accent);
+}
+.swatch .ph {
+  position: absolute;
+  inset: 20% 18% 28%;
+  border-radius: 3px;
+  background: var(--sw-canvas);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+.swatch .dot {
+  position: absolute;
+  right: 7%;
+  bottom: 9%;
+  width: 15%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--sw-accent);
+}
+/* 跟随系统：相纸对半分亮暗 */
+.swatch.auto .ph {
+  background: linear-gradient(115deg, #ececea 0 50%, #24211d 50% 100%);
+}
+.theme.on .swatch {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.t-label {
+  font-size: 12px;
+  color: var(--text-2);
+  text-align: center;
+  transition: color var(--dur-hover) var(--ease-soft);
+}
+.theme.on .t-label {
+  color: var(--accent);
+  font-weight: 600;
 }
 .update-hint {
   display: inline-flex;

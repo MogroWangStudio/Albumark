@@ -755,7 +755,7 @@ onBeforeUnmount(() => {
   z-index: 90;
   border: 2px solid var(--accent);
   border-radius: 16px;
-  background: rgba(255, 167, 47, 0.06);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
   pointer-events: none;
 }
 

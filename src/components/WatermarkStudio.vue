@@ -152,18 +152,21 @@ function redraw(): void {
   const { photoX, photoY } = composed
 
   // 选中图层：描边框 + 锚点十字，画在照片区域坐标系（边框层全画布，不画锚点）
+  // 强调色随主题取自令牌
   const sel = wm.selected
   if (sel && sel.type !== 'border') {
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#ffa72f'
     ctx.save()
     ctx.translate(photoX, photoY)
     const box = measureLayer(sel, SAMPLE_W, SAMPLE_H, measureContext())
-    ctx.strokeStyle = 'rgba(255, 167, 47, 0.95)'
+    ctx.strokeStyle = accent
+    ctx.globalAlpha = 0.95
     ctx.lineWidth = 1.5 / fit
     ctx.setLineDash([5 / fit, 4 / fit])
     ctx.strokeRect(box.cx - box.w / 2, box.cy - box.h / 2, box.w, box.h)
     const a = anchorPoint(sel.anchor, SAMPLE_W, SAMPLE_H)
     ctx.setLineDash([])
-    ctx.strokeStyle = 'rgba(255, 167, 47, 0.75)'
+    ctx.globalAlpha = 0.75
     ctx.lineWidth = 1 / fit
     const r = 7 / fit
     ctx.beginPath()
