@@ -710,8 +710,12 @@ function rubberband(overshoot: number, dimension: number, constant = 0.55): numb
   return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot))
 }
 
+/** 放大平移时图片边缘与面板/顶栏/底栏保留的呼吸边距 */
+const PAN_MARGIN = 12
+
 function clampPanAxis(v: number, disp: number, viewport: number, soft: boolean): number {
-  const max = Math.max(0, (disp * zoom.value - viewport) / 2)
+  // 边界从可用区域各边内收 PAN_MARGIN：放大后图片不贴操作面板与屏幕边
+  const max = Math.max(0, (disp * zoom.value - viewport) / 2 - PAN_MARGIN)
   if (max === 0) return 0
   if (Math.abs(v) <= max) return v
   if (!soft) return Math.sign(v) * max
@@ -1395,10 +1399,14 @@ watch(
   },
 )
 
-// 编辑中切换照片：把框带到新照片（已裁剪用其裁剪，否则整图）
+// 编辑中切换照片：先把草稿存给旧照片（自动保存，与切面板同一语义），
+// 再把框带到新照片（已裁剪用其裁剪，否则整图）
 watch(
   [() => adjust.cropMode, () => active.value?.id],
-  ([on]) => {
+  ([on], [prevOn, prevId]) => {
+    if (prevOn && prevId && prevId !== active.value?.id) {
+      adjust.commitCropDraft(prevId)
+    }
     if (!on) return
     const a = active.value
     adjust.cropDraft = { ...(a ? (adjust.cropOf(a.id) ?? FULL_CROP) : FULL_CROP) }

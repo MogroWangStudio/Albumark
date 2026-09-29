@@ -1,6 +1,7 @@
 import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { NEUTRAL, type AdjustKey, type Adjustments, type Crop } from '@/types/adjust'
+import { isPlainFullCrop, NEUTRAL, type AdjustKey, type Adjustments, type Crop } from '@/types/adjust'
+import { useImagesStore } from '@/stores/images'
 
 const PERSIST_KEY = 'albumark.adjust.v1'
 
@@ -86,10 +87,23 @@ export const useAdjustStore = defineStore('adjust', () => {
   /** 裁剪比例预设值（CROP_RATIOS 的 value） */
   const cropRatio = ref('free')
 
-  /** 离开裁剪页 = 放弃未确认的调整 */
+  /** 离开裁剪页：裁剪可复原，无需确认——草稿自动应用到当前照片 */
   function exitCrop(): void {
     panel.value = 'adjust'
   }
+
+  /** 把草稿落为某张照片的裁剪：纯整图等同清除，其余原样写入 */
+  function commitCropDraft(id: string | null): void {
+    const d = cropDraft.value
+    if (!id || !d) return
+    if (isPlainFullCrop(d)) clearCrop(id)
+    else setCrop(id, d)
+  }
+
+  // 任何离开裁剪页的路径（点面板页签 / Esc）都自动保存草稿
+  watch(panel, (now, prev) => {
+    if (prev === 'crop' && now !== 'crop') commitCropDraft(useImagesStore().activeId)
+  })
 
   function cropOf(id: string | null): Crop | undefined {
     return id ? crops.value[id] : undefined
@@ -124,6 +138,7 @@ export const useAdjustStore = defineStore('adjust', () => {
     cropOf,
     setCrop,
     clearCrop,
+    commitCropDraft,
     exitCrop,
   }
 })

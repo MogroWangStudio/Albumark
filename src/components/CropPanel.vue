@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Check, FlipHorizontal2, FlipVertical2, RotateCcw, X } from 'lucide-vue-next'
+import { FlipHorizontal2, FlipVertical2, RotateCcw } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
@@ -18,8 +18,6 @@ import {
 
 const adjust = useAdjustStore()
 const images = useImagesStore()
-
-const activeId = computed(() => images.active?.id ?? null)
 
 /** 裁剪后输出的像素尺寸（含拉直 / 翻转），显示在标题行 */
 const draftState = computed(() => {
@@ -68,17 +66,7 @@ function toggleFlip(axis: 'h' | 'v'): void {
   adjust.cropDraft = next
 }
 
-/** 应用当前裁剪框并回到调节页；无实际变化（纯整图）时等同清除 */
-function finishCrop(): void {
-  const id = activeId.value
-  const d = adjust.cropDraft
-  if (id && d) {
-    if (isPlainFullCrop(d)) adjust.clearCrop(id)
-    else adjust.setCrop(id, d)
-  }
-  adjust.exitCrop()
-}
-
+/** 重置裁剪框为整图；离开裁剪页时草稿自动应用（整图即清除） */
 function resetCropDraft(): void {
   adjust.cropDraft = { x: 0, y: 0, w: 1, h: 1, rot: 0, flipH: false, flipV: false }
   adjust.cropRatio = 'free'
@@ -127,6 +115,7 @@ function resetCropDraft(): void {
       />
     </div>
     <div class="row">
+      <span class="hint">切到其他页时自动应用，可随时回来重新调整。</span>
       <AppButton
         variant="ghost"
         size="sm"
@@ -134,14 +123,6 @@ function resetCropDraft(): void {
         @click="resetCropDraft"
       >
         <RotateCcw :size="13" />重置
-      </AppButton>
-    </div>
-    <div class="row end">
-      <AppButton variant="ghost" size="sm" @click="adjust.exitCrop()">
-        <X :size="13" />取消
-      </AppButton>
-      <AppButton variant="primary" size="sm" @click="finishCrop">
-        <Check :size="13" />完成
       </AppButton>
     </div>
   </div>
@@ -218,9 +199,6 @@ function resetCropDraft(): void {
   justify-content: space-between;
   gap: 8px;
   margin-top: 12px;
-}
-.row.end {
-  justify-content: flex-end;
 }
 .hint {
   flex: 1;

@@ -29,6 +29,7 @@ import ToastHost from '@/components/ui/ToastHost.vue'
 import { isCapacitor, isTauri, pickImagePaths } from '@/core/platform'
 import { projectMomentum, springTo, type SpringHandle } from '@/core/spring'
 import { baseName } from '@/core/fs'
+import { toast } from '@/stores/toast'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useTemplatesStore } from '@/stores/templates'
@@ -45,8 +46,6 @@ const view = ref<'main' | 'studio' | 'settings'>('main')
 const urlOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dragDepth = ref(0)
-/** 启动画面：品牌标记淡入后整层淡出，onMounted 后由定时器收起 */
-const booting = ref(true)
 /** 悬浮操作面板：进入项目自动展开，工作区页面自动收起 */
 const panelOpen = ref(true)
 /** 面板吸附边：可按住顶栏拖动，松手吸附左缘或右缘 */
@@ -62,13 +61,6 @@ watch(
     if (v) panelOpen.value = true
   },
 )
-
-const PANELS = {
-  watermark: WatermarkPanel,
-  adjust: AdjustPanel,
-  crop: CropPanel,
-  export: ExportPanel,
-} as const
 
 /* ---------- 导入：先收集待导入清单，经导入预览窗确认后入库 ---------- */
 
@@ -400,12 +392,15 @@ onMounted(async () => {
   window.addEventListener('pagehide', flushWorkspace)
   document.addEventListener('visibilitychange', onVisChange)
   narrowQuery?.addEventListener('change', onNarrowChange)
-  window.setTimeout(() => (booting.value = false), 560)
 })
 
 let capBack: PluginListenerHandle | null = null
 
-/** 安卓原生返回：逐级收起浮层与页面，最后 flush 数据再退出 */
+/** 主界面首次返回的提示时限：在此之内再按一次才真正退出 */
+const BACK_EXIT_WINDOW = 2600
+let lastBackAt = 0
+
+/** 安卓原生返回：逐级收起浮层与页面，主界面需两次返回才退出（退出前 flush 数据） */
 async function onAndroidBack(): Promise<void> {
   if (ctxState.value) {
     ctxState.value = null
@@ -427,9 +422,15 @@ async function onAndroidBack(): Promise<void> {
     panelOpen.value = false
     return
   }
-  await ws.flushSave()
-  const { App } = await import('@capacitor/app')
-  await App.exitApp()
+  const now = Date.now()
+  if (now - lastBackAt < BACK_EXIT_WINDOW) {
+    await ws.flushSave()
+    const { App } = await import('@capacitor/app')
+    await App.exitApp()
+    return
+  }
+  lastBackAt = now
+  toast('再按一次返回键退出')
 }
 
 /** 防抖保存的兜底：切后台/页面隐藏时立即写出，防止 400ms 窗口内被系统杀掉丢数据 */
@@ -506,43 +507,44 @@ onBeforeUnmount(() => {
       @settings="view = 'settings'"
     />
 
-    <Transition name="view">
-      <WatermarkStudio v-if="view === 'studio'" key="studio" @back="view = 'main'" />
-      <SettingsPage v-else-if="view === 'settings'" key="settings" @back="view = 'main'" />
-      <div v-else key="main" class="view-main">
-        <div ref="wsEl" class="workspace">
-          <main class="stage">
-            <Transition name="page" mode="out-in">
-              <WorkspacePage v-if="!inProject" key="ws" />
-              <div v-else key="stage" class="stage-fill">
-                <Transition name="fade" mode="out-in">
-                  <PreviewCanvas
-                    v-if="hasImages"
-                    key="preview"
-                    ref="previewRef"
-                    :panel-inset="panelInset"
-                    :panel-side="panelSide"
-                    :panel-bottom-inset="panelBottomInset"
-                    @ctx="onPreviewCtx"
-                  />
-                  <ImportOverlay
-                    v-else
-                    key="import"
-                    :panel-inset="panelInset"
-                    :panel-side="panelSide"
-                    :panel-bottom-inset="panelBottomInset"
-                    @pick="openPicker"
-                    @open-url="urlOpen = true"
-                  />
-                </Transition>
-              </div>
-            </Transition>
-          </main>
+    <!-- 顶层页：v-if + 纯 CSS 入场动画（挂载即播放、渲染管线推进，
+         不依赖 rAF 回调——JS 驱动的过渡在 WebView 渲染停滞时会永久冻结） -->
+    <WatermarkStudio v-if="view === 'studio'" class="view-page" @back="view = 'main'" />
+    <SettingsPage v-else-if="view === 'settings'" class="view-page" @back="view = 'main'" />
+    <div v-else class="view-main">
+      <div ref="wsEl" class="workspace">
+        <main class="stage">
+          <!-- 工作区 ⇄ 项目：两页常驻 v-show，切换零延迟且不会残留旧页 DOM -->
+          <WorkspacePage v-show="!inProject" class="page-page" />
+          <div v-show="inProject" class="stage-fill page-page">
+            <!-- 预览与导入引导常驻 v-show：JS 过渡冻结会让新页永不挂载 -->
+            <PreviewCanvas
+              v-show="hasImages"
+              key="preview"
+              ref="previewRef"
+              class="page-page"
+              :panel-inset="panelInset"
+              :panel-side="panelSide"
+              :panel-bottom-inset="panelBottomInset"
+              @ctx="onPreviewCtx"
+            />
+            <ImportOverlay
+              v-show="!hasImages"
+              key="import"
+              class="page-page"
+              :panel-inset="panelInset"
+              :panel-side="panelSide"
+              :panel-bottom-inset="panelBottomInset"
+              @pick="openPicker"
+              @open-url="urlOpen = true"
+            />
+          </div>
+        </main>
 
           <!-- 悬浮操作面板：吸附左/右缘，顶栏可按住拖动；工作区页面自动收起 -->
           <aside v-if="inProject" class="inspector-wrap" :class="`side-${panelSide}`" :style="wrapStyle">
-            <Transition :name="panelSide === 'left' ? 'panel-left' : 'panel-right'" appear>
-              <section v-show="panelOpen" class="inspector" :class="{ dragging }">
+            <!-- 收起/展开用纯 CSS 过渡：由渲染管线推进，WebView 渲染停滞时也不会卡住状态 -->
+            <section class="inspector" :class="{ dragging, closed: !panelOpen }">
                 <div
                   class="inspector-head"
                   @pointerdown="onPanelDragDown"
@@ -565,32 +567,29 @@ onBeforeUnmount(() => {
                   </button>
                 </div>
                 <div class="inspector-body">
-                  <Transition name="pane" mode="out-in">
-                    <KeepAlive>
-                      <component :is="PANELS[adjust.panel]" :key="adjust.panel" />
-                    </KeepAlive>
-                  </Transition>
+                  <!-- 四页常驻 v-show 切换：零延迟、不依赖 rAF（过渡动画在
+                       rAF 停滞的 WebView 里会冻结并残留旧面板 DOM，造成选中状态错乱） -->
+                  <WatermarkPanel v-show="adjust.panel === 'watermark'" class="pane-page" />
+                  <AdjustPanel v-show="adjust.panel === 'adjust'" class="pane-page" />
+                  <CropPanel v-show="adjust.panel === 'crop'" class="pane-page" />
+                  <ExportPanel v-show="adjust.panel === 'export'" class="pane-page" />
                 </div>
               </section>
-            </Transition>
           </aside>
-          <Transition name="fade">
-            <button
-              v-if="inProject && !panelOpen"
-              class="panel-tab"
-              :class="`side-${panelSide}`"
-              title="展开面板"
-              @click="panelOpen = true"
-            >
-              <ChevronLeft v-if="panelSide === 'right'" :size="15" />
-              <ChevronRight v-else :size="15" />
-            </button>
-          </Transition>
+          <button
+            v-show="inProject && !panelOpen"
+            class="panel-tab"
+            :class="`side-${panelSide}`"
+            title="展开面板"
+            @click="panelOpen = true"
+          >
+            <ChevronLeft v-if="panelSide === 'right'" :size="15" />
+            <ChevronRight v-else :size="15" />
+          </button>
         </div>
 
         <LibraryStrip v-if="inProject && hasImages" @photo-ctx="onPhotoCtx" />
-      </div>
-    </Transition>
+    </div>
 
     <UrlImportDialog :open="urlOpen" @close="urlOpen = false" />
     <ImportPreviewDialog
@@ -617,11 +616,10 @@ onBeforeUnmount(() => {
 
     <div v-if="dragDepth > 0" class="drop-ring" aria-hidden="true" />
 
-    <Transition name="boot">
-      <div v-if="booting" class="boot" aria-hidden="true">
-        <LogoMark class="boot-logo" />
-      </div>
-    </Transition>
+    <!-- 启动画面：纯 CSS 收尾（定时收起若遇上 rAF 停滞会让过渡永远卡住、盖住整个应用） -->
+    <div class="boot" aria-hidden="true">
+      <LogoMark class="boot-logo" />
+    </div>
   </div>
 </template>
 
@@ -761,7 +759,7 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-/* 启动画面：品牌标记淡入就位后整层快速淡出，露出主界面 */
+/* 启动画面：品牌标记淡入就位后整层淡出收尾（纯 CSS，可见性恢复也能走完） */
 .boot {
   position: fixed;
   inset: 0;
@@ -769,6 +767,8 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   background: var(--bg);
+  pointer-events: none;
+  animation: boot-out 240ms ease 560ms forwards;
 }
 .boot-logo {
   width: 72px;
@@ -785,88 +785,92 @@ onBeforeUnmount(() => {
     transform: scale(1);
   }
 }
-.boot-leave-active {
-  transition: opacity 240ms ease;
+@keyframes boot-out {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
 }
-.boot-leave-to {
-  opacity: 0;
+@media (prefers-reduced-motion: reduce) {
+  .boot {
+    animation-duration: 1ms;
+  }
 }
 
-/* 页面切换（工作区 ⇄ 项目）：柔和的非线性淡入缩放 */
-.page-enter-active {
-  transition: opacity 320ms var(--ease-soft), transform 320ms var(--ease-soft);
+/* 页面与顶层视图切换：纯 CSS 一次性入场（重新显示时由浏览器重放），
+   动画冻结只影响首帧视觉，不影响切换正确性 */
+.page-page {
+  animation: page-in 320ms var(--ease-soft);
 }
-.page-leave-active {
-  transition: opacity 220ms var(--ease), transform 220ms var(--ease);
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: scale(0.988) translateY(8px);
+  }
 }
-.page-enter-from {
-  opacity: 0;
-  transform: scale(0.988) translateY(8px);
+.view-page {
+  animation: view-in 300ms var(--ease-soft);
 }
-.page-leave-to {
-  opacity: 0;
-  transform: scale(1.008) translateY(-4px);
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: scale(0.99) translateY(10px);
+  }
 }
-/* 顶层页面切换（主视图 ⇄ 水印工作室/设置）：同一套非线性曲线，进出路径互为镜像 */
-.view-enter-active {
-  transition: opacity 300ms var(--ease-soft), transform 300ms var(--ease-soft);
+@media (prefers-reduced-motion: reduce) {
+  .page-page,
+  .view-page {
+    animation: none;
+  }
 }
-.view-leave-active {
-  transition: opacity 200ms var(--ease), transform 200ms var(--ease);
-}
-.view-enter-from {
-  opacity: 0;
-  transform: scale(0.99) translateY(10px);
-}
-.view-leave-to {
-  opacity: 0;
-  transform: scale(1.008) translateY(-6px);
-}
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity var(--dur) var(--ease-soft);
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-/* 悬浮面板：从吸附缘滑入滑出，同一路径可逆 */
-.panel-right-enter-active {
+/* 悬浮面板：从吸附缘滑入滑出（纯 CSS 过渡，同一路径可逆） */
+.inspector {
   transition: transform 360ms var(--ease-soft), opacity 360ms var(--ease-soft);
 }
-.panel-right-leave-active {
-  transition: transform 260ms var(--ease), opacity 260ms var(--ease);
-}
-.panel-right-enter-from,
-.panel-right-leave-to {
+.inspector.closed {
   transform: translateX(calc(100% + 16px));
   opacity: 0.35;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    transform 260ms var(--ease),
+    opacity 260ms var(--ease),
+    visibility 0s 260ms;
 }
-.panel-left-enter-active {
-  transition: transform 360ms var(--ease-soft), opacity 360ms var(--ease-soft);
-}
-.panel-left-leave-active {
-  transition: transform 260ms var(--ease), opacity 260ms var(--ease);
-}
-.panel-left-enter-from,
-.panel-left-leave-to {
+.inspector-wrap.side-left .inspector.closed {
   transform: translateX(calc(-100% - 16px));
-  opacity: 0.35;
 }
-/* 面板内功能切换：轻微纵向推移的交叉淡入 */
-.pane-enter-active {
-  transition: opacity 200ms var(--ease-soft), transform 200ms var(--ease-soft);
+/* 面板内功能切换：v-show 重新显示时重放一次入场动画；
+   动画冻结只影响视觉首帧，不影响切换正确性 */
+.pane-page {
+  animation: pane-in 200ms var(--ease-soft);
 }
-.pane-leave-active {
-  transition: opacity 130ms var(--ease), transform 130ms var(--ease);
+@keyframes pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
 }
-.pane-enter-from {
-  opacity: 0;
-  transform: translateY(8px);
+/* 展开把手：重新显示时淡入 */
+.panel-tab {
+  animation: tab-in var(--dur) var(--ease-soft);
 }
-.pane-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
+@keyframes tab-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pane-page,
+  .panel-tab,
+  .page-page,
+  .view-page {
+    animation: none;
+  }
+  .inspector,
+  .inspector.closed {
+    transition: none;
+  }
 }
 
 @media (max-width: 900px) {
@@ -879,10 +883,8 @@ onBeforeUnmount(() => {
     height: min(46vh, 430px);
     transform: none !important;
   }
-  .panel-right-enter-from,
-  .panel-right-leave-to,
-  .panel-left-enter-from,
-  .panel-left-leave-to {
+  .inspector.closed,
+  .inspector-wrap.side-left .inspector.closed {
     transform: translateY(calc(100% + 12px));
   }
   .panel-tab {
