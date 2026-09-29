@@ -114,7 +114,7 @@ const frameSize = computed(() => {
   let r = 0
   let t = 0
   let b = 0
-  for (const layer of wm.layers) {
+  for (const layer of wm.editTarget()) {
     if (layer.type === 'border' && layer.visible) {
       l += layer.left
       r += layer.right
@@ -197,8 +197,9 @@ function scheduleRedraw(): void {
 }
 
 async function syncAssets(): Promise<void> {
+  const list = wm.editTarget()
   const needed = new Set(
-    wm.layers.filter((l) => l.type === 'image').map((l) => (l as { assetId: string }).assetId),
+    list.filter((l) => l.type === 'image').map((l) => (l as { assetId: string }).assetId),
   )
   for (const key of [...assetBmps.keys()]) {
     if (!needed.has(key)) {
@@ -208,7 +209,7 @@ async function syncAssets(): Promise<void> {
   }
   const missing = [...needed].filter((id) => !assetBmps.has(id))
   if (!missing.length) return
-  const payloads = await wm.assetPayloads(wm.layers)
+  const payloads = await wm.assetPayloads(list)
   for (const p of payloads) {
     if (!assetBmps.has(p.id)) {
       try {
@@ -376,7 +377,7 @@ function onPointerDown(e: PointerEvent): void {
   if (pointers.size > 2) return
 
   const p = toImagePx(e.clientX, e.clientY)
-  const list = wm.layers
+  const list = wm.editTarget()
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     if (l.type === 'border' || !l.visible) continue
@@ -432,7 +433,7 @@ function onPointerMove(e: PointerEvent): void {
 
   if (gesture.type === 'layer') {
     const gid = gesture.id
-    const layer = wm.layers.find((l) => l.id === gid)
+    const layer = wm.editTarget().find((l) => l.id === gid)
     if (!layer || layer.type === 'border') return
     const dpx = ((e.clientX - gesture.startClient.x) * vmap.dpr) / vmap.scale
     const dpy = ((e.clientY - gesture.startClient.y) * vmap.dpr) / vmap.scale
@@ -572,8 +573,9 @@ function onLeave(): void {
 function onCursorMove(e: PointerEvent): void {
   if (!sampleBmp || !vmap.scale) return
   const p = toImagePx(e.clientX, e.clientY)
-  for (let i = wm.layers.length - 1; i >= 0; i--) {
-    const l = wm.layers[i]
+  const list = wm.editTarget()
+  for (let i = list.length - 1; i >= 0; i--) {
+    const l = list[i]
     if (l.type === 'border' || !l.visible) continue
     if (hitTest(measureLayer(l, SAMPLE_W, SAMPLE_H, measureContext()), p.x, p.y)) {
       grabbing.value = true
@@ -586,8 +588,8 @@ function onCursorMove(e: PointerEvent): void {
 let ro: ResizeObserver | null = null
 
 onMounted(async () => {
-  // 工作室编辑的是全局水印模板，脱离照片级编辑上下文
-  wm.setEditContext(null)
+  // 工作室在沙箱草稿上编辑：离开时草稿丢弃，不影响项目照片的水印
+  wm.enterStudio()
   sampleBmp = await makeSampleBitmap()
   ro = new ResizeObserver(() => redraw())
   if (boxEl.value) ro.observe(boxEl.value)
@@ -595,6 +597,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  wm.exitStudio()
   ro?.disconnect()
   stopViewAnim()
   sampleBmp?.close()
@@ -604,7 +607,7 @@ onBeforeUnmount(() => {
 })
 
 // 图层任何变化（含应用预设替换数组、拖动偏移）都即时重绘
-watch([() => wm.layers, () => wm.selectedId], scheduleRedraw, { deep: true })
+watch([() => wm.editTarget(), () => wm.selectedId], scheduleRedraw, { deep: true })
 
 // 编辑器从隐藏转为可见时画布尺寸从 0 就绪，重绘一帧
 watch(mode, async (m) => {

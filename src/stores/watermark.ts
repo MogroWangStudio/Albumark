@@ -98,14 +98,32 @@ export const useWatermarkStore = defineStore('watermark', () => {
    * 其余情况为 null（编辑全局水印）。工作室恒为 null。
    */
   const editId = ref<string | null>(null)
+  /** 水印工作室沙箱：工作室内的编辑只落在草稿上，退回编辑界面即丢弃，不影响照片水印 */
+  const studioActive = ref(false)
+  const studioLayers = ref<WatermarkLayer[]>([])
+
+  /** 进入工作室：快照一份全局水印作为草稿，工作室的全部编辑都只作用于草稿 */
+  function enterStudio(): void {
+    studioLayers.value = plainLayers()
+    studioActive.value = true
+    setEditContext(null)
+  }
+
+  /** 离开工作室：丢弃草稿，编辑上下文回到全局 */
+  function exitStudio(): void {
+    studioActive.value = false
+    studioLayers.value = []
+    setEditContext(null)
+  }
 
   /** 当前生效的水印图层：预览 / 导出用（独立优先，否则全局） */
   function effectiveLayers(id: string | null): WatermarkLayer[] {
     return (id ? perImage.value[id] : undefined) ?? layers.value
   }
 
-  /** 当前正在编辑的图层列表：全部增删改都落在这一份上 */
+  /** 当前正在编辑的图层列表：工作室编辑草稿，面板按上下文编辑独立副本或全局 */
   function editTarget(): WatermarkLayer[] {
+    if (studioActive.value) return studioLayers.value
     return (editId.value ? perImage.value[editId.value] : undefined) ?? layers.value
   }
 
@@ -255,9 +273,10 @@ export const useWatermarkStore = defineStore('watermark', () => {
     update(selectedId.value, patch)
   }
 
-  /** 深拷贝为纯数据：响应式 Proxy 无法传给 Worker（结构化克隆限制）。 */
+  /** 深拷贝为纯数据：响应式 Proxy 无法传给 Worker（结构化克隆限制）。工作室时取草稿 */
   function plainLayers(): WatermarkLayer[] {
-    return toRaw(layers.value).map((l) => structuredClone(toRaw(l)))
+    const list = studioActive.value ? studioLayers.value : layers.value
+    return toRaw(list).map((l) => structuredClone(toRaw(l)))
   }
 
   /** 全部照片独立水印的纯数据快照，供导出 Worker 使用 */
@@ -288,6 +307,12 @@ export const useWatermarkStore = defineStore('watermark', () => {
         assets.value[a.id] = { ...a, blob: null }
       }
     }
+    if (studioActive.value) {
+      // 工作室内应用模板只写草稿，不触碰照片正在使用的全局水印
+      studioLayers.value = layersData.map((l) => migrateLayer(deepClone(l)))
+      selectedId.value = studioLayers.value[0]?.id ?? null
+      return
+    }
     layers.value = layersData.map((l) => migrateLayer(deepClone(l)))
     selectedId.value = layers.value[0]?.id ?? null
   }
@@ -307,7 +332,10 @@ export const useWatermarkStore = defineStore('watermark', () => {
       }
     }
     const incoming = layersData.map((l) => migrateLayer(deepClone(l)))
-    if (mode === 'replace' && editId.value) {
+    if (mode === 'replace' && studioActive.value) {
+      // 工作室沙箱：覆盖 / 追加都只作用于草稿
+      studioLayers.value = incoming
+    } else if (mode === 'replace' && editId.value) {
       perImage.value = { ...perImage.value, [editId.value]: incoming }
     } else if (mode === 'replace') {
       layers.value = incoming
@@ -315,7 +343,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
       editTarget().push(...incoming)
     }
     selectedId.value = incoming[0]?.id ?? null
-    schedulePersist()
+    if (!studioActive.value) schedulePersist()
   }
 
   function serialize(): { layers: WatermarkLayer[]; assets: SerializedAsset[] } {
@@ -335,6 +363,8 @@ export const useWatermarkStore = defineStore('watermark', () => {
     persistTimer = window.setTimeout(persist, 500)
   }
   function persist(): void {
+    // 工作室草稿不写入全局水印配置
+    if (studioActive.value) return
     try {
       const data = serialize()
       window.localStorage.setItem(PERSIST_KEY, JSON.stringify(data))
@@ -376,6 +406,9 @@ export const useWatermarkStore = defineStore('watermark', () => {
     assets,
     perImage,
     editId,
+    studioActive,
+    enterStudio,
+    exitStudio,
     selected,
     effectiveLayers,
     editTarget,

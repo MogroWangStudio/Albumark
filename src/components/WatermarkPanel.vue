@@ -22,6 +22,14 @@ watch(
   { immediate: true },
 )
 
+// 离开水印工作室后恢复编辑上下文（工作室期间恒为全局草稿）
+watch(
+  () => wm.studioActive,
+  (active) => {
+    if (!active) wm.setEditContext(activeId.value)
+  },
+)
+
 /** 像素距离基于当前照片的生效尺寸（裁剪 / 拉直后的长边） */
 const imgW = computed(() => {
   const a = images.active
