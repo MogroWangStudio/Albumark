@@ -139,6 +139,26 @@ export type AnchorPreset =
   | 'bottom-center'
   | 'bottom-right'
 
+/** 旧版内置模板误用中文令牌（{机型} 等）；令牌键实为英文，读入时一次性改写 */
+const CN_TOKEN_KEYS: Record<string, string> = {
+  机型: 'Model',
+  镜头: 'Lens',
+  光圈: 'Aperture',
+  快门: 'Shutter',
+  感光度: 'ISO',
+  焦距: 'FocalLength',
+  拍摄日期: 'DateTime',
+  作者: 'Artist',
+  文件名: 'FileName',
+}
+
+function migrateTokens(text: string): string {
+  return text.replace(
+    /\{(机型|镜头|光圈|快门|感光度|焦距|拍摄日期|作者|文件名)\}/g,
+    (_, cn: string) => `{${CN_TOKEN_KEYS[cn]}}`,
+  )
+}
+
 /** 旧版百分比坐标 → 锚点 + 偏移 的迁移；文字框锚点缺省跟随定位锚点。 */
 export function migrateLayer<T extends WatermarkLayer>(l: T): T {
   // 边框层没有锚点 / 偏移几何，原样保留
@@ -158,9 +178,14 @@ export function migrateLayer<T extends WatermarkLayer>(l: T): T {
     delete rest.y
     out = { ...rest, anchor, offsetX: x - col * 50, offsetY: y - row * 50 } as T
   }
-  // 文字框缺省对齐定位锚点：贴边文字向图内展开，默认框中心会压在角落定位点上越界
-  if (out.type === 'text' && !out.boxAnchor) {
-    return { ...out, boxAnchor: out.anchor }
+  if (out.type === 'text') {
+    const patch: Partial<TextLayer> = {}
+    // 文字框缺省对齐定位锚点：贴边文字向图内展开，默认框中心会压在角落定位点上越界
+    if (!out.boxAnchor) patch.boxAnchor = out.anchor
+    // 中文令牌改写为英文键，存量图层与旧模板一并修复
+    const content = migrateTokens(out.content)
+    if (content !== out.content) patch.content = content
+    if (patch.boxAnchor || patch.content !== undefined) return { ...out, ...patch } as T
   }
   return out
 }
