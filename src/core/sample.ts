@@ -1,5 +1,5 @@
 import { drawLayers, type AssetMap } from './draw'
-import { resolveTokens } from './tokens'
+import { resolveTokens, SAMPLE_EXIF } from './tokens'
 import type { SerializedAsset, WatermarkLayer } from '@/types/watermark'
 
 /** 样张尺寸：工作室预览与模板缩略图共用同一构图 */
@@ -182,7 +182,7 @@ export async function renderTemplateThumb(
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, cw, ch)
   const resolved = layers.map((l) =>
-    l.type === 'text' ? { ...l, content: resolveTokens(l.content, undefined, '样张') } : l,
+    l.type === 'text' ? { ...l, content: resolveTokens(l.content, SAMPLE_EXIF, '样张') } : l,
   )
   // 先算含边框的最终画布尺寸，再按容器适应
   let extL = 0

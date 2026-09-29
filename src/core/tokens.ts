@@ -56,6 +56,22 @@ export function resolveTokens(text: string, exif?: ExifSummary, fileName?: strin
   return text.replace(/\{(\w+)\}/g, (raw, key: string) => resolveToken(key, exif, fileName) ?? raw)
 }
 
+/**
+ * 工作室样张的示例 EXIF：样张没有真实元数据，令牌按示例值解析，
+ * 让模板预览呈现接近成品的观感（各值与 TOKENS 的 sample 一致）。
+ */
+export const SAMPLE_EXIF: ExifSummary = {
+  make: 'Apple',
+  model: 'iPhone 17 Pro',
+  lens: '24mm f/1.6',
+  fNumber: 1.6,
+  exposureTime: 1 / 120,
+  iso: 100,
+  focalLength: 24,
+  dateTime: '2026-09-18 10:24',
+  artist: 'MogroWang',
+}
+
 /** 找出内容中用到、但当前照片解析不出值的令牌（用于常驻缺失警告）。 */
 export function missingTokens(
   text: string,

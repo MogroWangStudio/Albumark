@@ -48,7 +48,8 @@ function builtinTemplates(): WatermarkTemplate[] {
   })
   const exifBar = makeTextLayer({
     name: 'EXIF 参数条',
-    content: '{机型}　{镜头}\n{焦距}　{光圈}　{快门}　{感光度}',
+    // 令牌键为英文（见 core/tokens.ts TOKENS），中文写法无法解析
+    content: '{Model}　{Lens}\n{FocalLength}　{Aperture}　{Shutter}　{ISO}',
     anchor: 'bottom-left',
     offsetX: 40,
     offsetY: -40,

@@ -7,7 +7,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { type AssetMap } from '@/core/draw'
 import { makeSampleBitmap, paintComposed, SAMPLE_H, SAMPLE_W } from '@/core/sample'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
-import { resolveTokens } from '@/core/tokens'
+import { resolveTokens, SAMPLE_EXIF } from '@/core/tokens'
 import { toast } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplatesStore } from '@/stores/templates'
@@ -103,8 +103,9 @@ function measureContext(): CanvasRenderingContext2D {
 }
 
 function resolvedLayers(): WatermarkLayer[] {
+  // 样张没有真实元数据：令牌按示例值解析，模板预览接近成品观感
   return wm.plainLayers().map((l) =>
-    l.type === 'text' ? { ...l, content: resolveTokens(l.content, undefined, '样张') } : l,
+    l.type === 'text' ? { ...l, content: resolveTokens(l.content, SAMPLE_EXIF, '样张') } : l,
   )
 }
 
@@ -670,7 +671,7 @@ watch(mode, async (m) => {
         />
       </div>
       <aside class="editor material">
-        <LayerEditor :img-w="frameSize.w" :img-h="frameSize.h" :show-templates="false" />
+        <LayerEditor :img-w="frameSize.w" :img-h="frameSize.h" :exif="SAMPLE_EXIF" base-name="样张" :show-templates="false" />
       </aside>
     </div>
   </div>
