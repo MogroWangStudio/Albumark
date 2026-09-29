@@ -152,8 +152,9 @@ export function applyAdjustments(
   const exposure = Math.pow(2, (a.exposure / 100) * 1.2)
   const brightness = (a.brightness / 100) * 40
   const contrast = Math.pow(2, a.contrast / 100)
-  const shadows = (a.shadows / 100) * 90
-  const highlights = (a.highlights / 100) * 90
+  // 阴影/高光：亮度轴上的最大偏移（0-1），非 RGB 加量
+  const shadows = (a.shadows / 100) * 0.5
+  const highlights = (a.highlights / 100) * 0.5
   const temperature = (a.temperature / 100) * 32
   const tint = (a.tint / 100) * 26
   const vignette = a.vignette / 100
@@ -197,18 +198,38 @@ export function applyAdjustments(
         b = (b - mid) * contrast + mid
       }
 
-      const l = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
-      if (shadows !== 0) {
-        const wgt = (1 - l) * (1 - l)
-        r += shadows * wgt
-        g += shadows * wgt
-        b += shadows * wgt
-      }
-      if (highlights !== 0) {
-        const wgt = l * l
-        r += highlights * wgt
-        g += highlights * wgt
-        b += highlights * wgt
+      // 阴影/高光：以亮度为轴做等比增益——RGB 同乘 l2/l，只改明暗不拉灰色相；
+      // 纯黑附近等比失效（0 乘不出来），混入少量加色让黑位可被抬起
+      if (shadows !== 0 || highlights !== 0) {
+        const l = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+        let l2 = l
+        if (shadows !== 0) l2 += shadows * (1 - l) * (1 - l) * (1 - l)
+        if (highlights !== 0) l2 += highlights * l * l * l
+        if (l2 <= 0) {
+          r = 0
+          g = 0
+          b = 0
+        } else if (l2 >= 1) {
+          r = 255
+          g = 255
+          b = 255
+        } else if (l > 1e-4) {
+          const f = l2 / l
+          r *= f
+          g *= f
+          b *= f
+          if (shadows > 0 && l < 0.06) {
+            const add = (l2 - l) * 255 * 0.55 * (1 - l / 0.06)
+            r += add
+            g += add
+            b += add
+          }
+        } else {
+          const add = (l2 - l) * 255 * 0.55
+          r = add
+          g = add
+          b = add
+        }
       }
       if (temperature !== 0) {
         r += temperature
@@ -254,15 +275,18 @@ export function applyAdjustments(
           }
           const next = seg === 7 ? 0 : seg + 1
           const span = (seg === 7 ? 360 : HUE_CENTERS[next]) - HUE_CENTERS[seg]
-          const t = (hue - HUE_CENTERS[seg]) / span
+          // smoothstep 权重：色带中心附近全量生效，向相邻带平滑过渡，
+          // 线性插值会把偏离中心的像素衰减到几乎不可见
+          const tRaw = (hue - HUE_CENTERS[seg]) / span
+          const t = tRaw * tRaw * (3 - 2 * tRaw)
           const w0 = 1 - t
           const w1 = t
-          const dh = (w0 * hs.h[seg] + w1 * hs.h[next]) * 0.45
+          const dh = (w0 * hs.h[seg] + w1 * hs.h[next]) * 0.75
           const ds = (w0 * hs.s[seg] + w1 * hs.s[next]) / 100
           const dl = (w0 * hs.l[seg] + w1 * hs.l[next]) / 100
           const h2 = (hue + dh + 360) % 360
           const s2 = S > 1 ? 1 : S * (1 + (ds < -1 ? -1 : ds > 1 ? 1 : ds))
-          const L2 = L + dl * 0.4
+          const L2 = L + dl * 0.55
           // HSL → RGB
           const c = (1 - Math.abs(2 * (L2 < 0 ? 0 : L2 > 1 ? 1 : L2) - 1)) * (s2 < 0 ? 0 : s2 > 1 ? 1 : s2)
           const hp = h2 / 60
@@ -349,13 +373,18 @@ export function applyAdjustments(
     }
   }
 
-  // 颗粒：亮度加权的伪随机噪点（坐标 hash，逐帧稳定）
+  // 颗粒：亮度加权的胶片噪点。坐标先经 murmur 风格整型混淆再取值——
+  // 直接对线性组合取模会把乘积式的低字节结构暴露成重复的对角纹路（接缝感）；
+  // 32 位输出拆两个半字相加得三角分布，比均匀噪声更接近胶片颗粒
   if (grain > 0) {
-    const strength = grain * 44
+    const strength = grain * 58
     for (let y = 0, i = 0; y < h; y++) {
       for (let x = 0; x < w; x++, i += 4) {
-        const hash = ((x * 374761393 + y * 668265263) ^ (x * y * 1274126177)) >>> 0
-        const n = ((hash % 1024) / 1023 - 0.5) * strength
+        let h32 = (Math.imul(x, 0x27d4eb2d) ^ Math.imul(y + 0x9e3779b9, 0x85ebca6b)) | 0
+        h32 = Math.imul(h32 ^ (h32 >>> 15), 0x2c1b3c6d)
+        h32 = Math.imul(h32 ^ (h32 >>> 12), 0x297a2d39)
+        h32 = (h32 ^ (h32 >>> 15)) | 0
+        const n = (((h32 >>> 16) + (h32 & 0xffff)) / 131071 - 0.5) * strength
         const l = (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) / 255
         // 暗部颗粒更弱，亮部更明显
         const wgt = 0.45 + l * 0.75
