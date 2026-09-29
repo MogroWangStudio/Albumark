@@ -135,43 +135,21 @@ function onValMove(e: PointerEvent): void {
 
 function onValUp(e: PointerEvent): void {
   if (!scrub) return
+  const tapped = !scrub.active
   scrub = null
   scrubbing.value = false
   ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
+  // 触屏点按数字：直接进入键入（桌面仍为双击键入）
+  if (tapped && e.type === 'pointerup' && e.pointerType === 'touch') startEdit()
 }
 
-/* ---------- 触屏防误触：点按轨道不跳值，拖动后才生效 ---------- */
-
-let touch: { id: number; startX: number; moved: boolean } | null = null
-
+/* ---------- 触屏：轨道完全不可操作（安卓适配） ----------
+   按下即拦截原生 range 的点按跳值与拖动，数值只经数字控件调整——
+   横向拖动数字微调、点按数字键入；轨道 touch-action: pan-y，
+   手指放在轨道上纵向滑动仍可滚动面板 */
 function onTouchDown(e: PointerEvent): void {
   if (e.pointerType !== 'touch' || props.disabled) return
-  // 阻止原生 range 的「点按即跳到该处」；拖动意图确认后由我们按手指位置取值
   e.preventDefault()
-  touch = { id: e.pointerId, startX: e.clientX, moved: false }
-  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-}
-
-function onTouchMove(e: PointerEvent): void {
-  if (!touch || e.pointerId !== touch.id) return
-  if (!touch.moved) {
-    if (Math.abs(e.clientX - touch.startX) < 6) return
-    touch.moved = true
-  }
-  const el = e.currentTarget as HTMLInputElement
-  const r = el.getBoundingClientRect()
-  const t = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
-  let v = props.min + t * (props.max - props.min)
-  if (props.step > 0) {
-    v = Math.round((v - props.min) / props.step) * props.step + props.min
-    v = Number(v.toFixed(4))
-  }
-  if (v !== props.modelValue) emit('update:modelValue', v)
-}
-
-function onTouchUp(e: PointerEvent): void {
-  if (!touch || e.pointerId !== touch.id) return
-  touch = null
 }
 </script>
 
@@ -221,11 +199,9 @@ function onTouchUp(e: PointerEvent): void {
       :value="modelValue"
       :disabled="disabled"
       :style="fillStyle"
+      :aria-label="label || undefined"
       @input="onInput"
       @pointerdown.capture="onTouchDown"
-      @pointermove.capture="onTouchMove"
-      @pointerup.capture="onTouchUp"
-      @pointercancel.capture="onTouchUp"
     />
   </div>
 </template>
