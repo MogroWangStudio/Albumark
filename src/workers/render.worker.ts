@@ -37,7 +37,10 @@ function measureCtx(): OffscreenCanvasRenderingContext2D {
 }
 
 self.addEventListener('message', (e: MessageEvent<{ job: RenderJob }>) => {
-  void handle(e.data.job)
+  void handle(e.data.job).catch((err) => {
+    // 任务失败必须回报，否则主线程的 pending 永远挂起、渲染静默冻结
+    post({ id: e.data.job.id, err: err instanceof Error ? err.message : String(err) })
+  })
 })
 
 async function handle(job: RenderJob): Promise<void> {

@@ -90,8 +90,15 @@ function hslVal(band: number, ch: 'h' | 's' | 'l'): number {
 }
 
 function hslSet(band: number, ch: 'h' | 's' | 'l', v: number): void {
-  const base = target.value.hsl ? { ...target.value.hsl } : neutralHsl()
-  base[ch] = [...base[ch]]
+  // 三通道一律重建纯数组：从旧对象展开会把未编辑通道的响应式 Proxy 一起带进
+  // values.hsl，Worker 的 structuredClone 拒绝 Proxy —— 第二次调整起渲染静默失败
+  const cur = target.value.hsl
+  const base = neutralHsl()
+  if (cur) {
+    base.h = [...cur.h]
+    base.s = [...cur.s]
+    base.l = [...cur.l]
+  }
   base[ch][band] = v
   target.value.hsl = base
 }

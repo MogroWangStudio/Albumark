@@ -8,6 +8,7 @@ interface RenderReply {
   width?: number
   height?: number
   srcBack: ImageBitmap
+  err?: string
 }
 
 type Pending = { resolve: (v: RenderReply) => void; reject: (e: unknown) => void }
@@ -33,11 +34,12 @@ export class RenderClient {
     this.worker.addEventListener(
       'message',
       (e: MessageEvent<{ id: number } & RenderReply>) => {
-        const { id, ...rest } = e.data
+        const { id, err, ...rest } = e.data
         const p = this.pending.get(id)
         if (p) {
           this.pending.delete(id)
-          p.resolve(rest as RenderReply)
+          if (err !== undefined) p.reject(new Error(`渲染失败：${err}`))
+          else p.resolve(rest as RenderReply)
         }
       },
     )
@@ -48,10 +50,34 @@ export class RenderClient {
     })
   }
 
+  /** 无回应看门狗：worker 被系统回收 / 线程卡死时，任务永不回报会让渲染
+   *  静默冻结。超时即拒绝并移除 pending，后续调整照常重试。 */
+  private static readonly WATCHDOG_MS = 15_000
+
   private request(job: Omit<RenderJob, 'id'>, transfer: Transferable[]): Promise<RenderReply> {
     const id = ++this.seq
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      let settled = false
+      const watchdog = setTimeout(() => {
+        if (settled) return
+        settled = true
+        this.pending.delete(id)
+        reject(new Error('渲染超时（worker 无回应）'))
+      }, RenderClient.WATCHDOG_MS)
+      this.pending.set(id, {
+        resolve: (v) => {
+          if (settled) return
+          settled = true
+          clearTimeout(watchdog)
+          resolve(v)
+        },
+        reject: (e) => {
+          if (settled) return
+          settled = true
+          clearTimeout(watchdog)
+          reject(e)
+        },
+      })
       this.worker.postMessage({ job: { ...job, id } }, transfer)
     })
   }

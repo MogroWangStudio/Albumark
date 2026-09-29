@@ -354,7 +354,13 @@ async function renderBase(draft: boolean): Promise<void> {
       maxLong,
       crop,
     )
-    if (seq !== baseSeq) return
+    if (seq !== baseSeq) {
+      // 已被更新的请求取代：本次输出作废，归还的源位图与输出位图都要释放，
+      // 否则既泄漏内存，丢失的 srcBack 还会迫使下一次渲染重新解码
+      res.bitmap.close()
+      res.srcBack.close()
+      return
+    }
     srcBitmap = res.srcBack
     srcId = a.id
     if (resultBmp) resultBmp.close()

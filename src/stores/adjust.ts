@@ -16,7 +16,12 @@ function load(): Adjustments {
 }
 
 function plain(a: Adjustments): Adjustments {
-  return { ...toRaw(a) }
+  const out = { ...toRaw(a) }
+  // 结构化可选字段深拍平：任何写入路径带进的响应式 Proxy 都会让 Worker 的
+  // structuredClone 抛 DataCloneError、渲染静默失败（hsl 曾踩过此坑）
+  if (out.hsl) out.hsl = { h: [...out.hsl.h], s: [...out.hsl.s], l: [...out.hsl.l] }
+  if (out.curve) out.curve = [...out.curve]
+  return out
 }
 
 export const useAdjustStore = defineStore('adjust', () => {
