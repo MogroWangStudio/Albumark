@@ -101,8 +101,6 @@ const SCRUB_RANGE = 300
 
 const scrubbing = ref(false)
 let scrub: { startX: number; startVal: number; active: boolean } | null = null
-/** 最近一次按下的指针类型：触屏上的双触也会合成 dblclick，用它挡掉键入 */
-let lastPointerType = ''
 
 /** 拖满 SCRUB_RANGE px 走完整个范围，比轨道宽度更缓，便于细调；按 step 取整 */
 function applyScrub(dx: number): void {
@@ -118,7 +116,6 @@ function applyScrub(dx: number): void {
 
 function onValDown(e: PointerEvent): void {
   if (props.disabled || e.button !== 0) return
-  lastPointerType = e.pointerType
   ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   scrub = { startX: e.clientX, startVal: props.modelValue, active: false }
 }
@@ -138,25 +135,99 @@ function onValMove(e: PointerEvent): void {
 
 function onValUp(e: PointerEvent): void {
   if (!scrub) return
+  const tapped = !scrub.active
   scrub = null
   scrubbing.value = false
   ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
-  // 触屏点按不进入键入：安卓端数值只允许拖动调整，键入保留给桌面双击
+  // 触屏点按数字：直接进入键入（桌面仍为双击键入）
+  if (tapped && e.type === 'pointerup' && e.pointerType === 'touch') startEdit()
 }
 
-/** 双击数值键入；触屏上的点按 / 双触一律不算（lastPointerType 由 pointerdown 记录） */
-function onValDblClick(): void {
-  if (lastPointerType === 'touch') return
-  startEdit()
+/* ---------- 触屏轨道：可拖不可点 ----------
+   拦掉原生「按下即跳值」，值只能由拖动改变：
+   - 按在拇指上：从当前值 1:1 跟手（尊重抓取偏移，不跳变）
+   - 按在轨道其他位置拖动：拇指吸附到手指位置跟随（先移动才吸附，轻点不跳）
+   - 轻点（无位移）：什么都不发生
+   鼠标不拦截，桌面点按跳值的习惯保持不变；轨道 touch-action: pan-y，
+   手指纵向滑动仍可滚动面板（滚动启动会派发 pointercancel，拖动安全中断） */
+const TRACK_HOTSPOT = 26 // 拇指（22px）外的抓取余量
+
+const trackActive = ref(false)
+let track: {
+  startX: number
+  startVal: number
+  grabbed: boolean
+  active: boolean
+  rect: DOMRect
+  /** 轨道 content box 左缘内缩（触屏样式 padding-inline，非触屏为 0） */
+  pad: number
+} | null = null
+
+/** 手指位置映射到值（轨道 content box 内线性插值） */
+function valueAt(clientX: number, t: { rect: DOMRect; pad: number }): number {
+  const inner = Math.max(1, t.rect.width - t.pad * 2)
+  const frac = Math.min(1, Math.max(0, (clientX - t.rect.left - t.pad) / inner))
+  return props.min + frac * (props.max - props.min)
 }
 
-/* ---------- 触屏：轨道完全不可操作（安卓适配） ----------
-   按下即拦截原生 range 的点按跳值与拖动，数值只经数字控件调整——
-   横向拖动数字微调、点按数字键入；轨道 touch-action: pan-y，
-   手指放在轨道上纵向滑动仍可滚动面板 */
-function onTouchDown(e: PointerEvent): void {
+function quantize(v: number): number {
+  let n = Math.min(props.max, Math.max(props.min, v))
+  if (props.step > 0) {
+    n = Math.round((n - props.min) / props.step) * props.step + props.min
+    n = Number(n.toFixed(4))
+  }
+  return n
+}
+
+function onTrackDown(e: PointerEvent): void {
   if (e.pointerType !== 'touch' || props.disabled) return
   e.preventDefault()
+  const el = e.currentTarget as HTMLInputElement
+  try {
+    el.setPointerCapture(e.pointerId)
+  } catch {
+    /* 指针已失效时捕获失败：拖动在指针停留时仍可跟随 */
+  }
+  const rect = el.getBoundingClientRect()
+  const pad = parseFloat(getComputedStyle(el).paddingLeft) || 0
+  const frac = (props.modelValue - props.min) / (props.max - props.min || 1)
+  const thumbX = rect.left + pad + frac * (rect.width - pad * 2)
+  track = {
+    startX: e.clientX,
+    startVal: props.modelValue,
+    grabbed: Math.abs(e.clientX - thumbX) <= TRACK_HOTSPOT,
+    active: false,
+    rect,
+    pad,
+  }
+}
+
+function onTrackMove(e: PointerEvent): void {
+  const t = track
+  if (!t) return
+  // 约 6px 的滞回：确认拖动意图才起效，轻点一律不改变值
+  if (!t.active) {
+    if (Math.abs(e.clientX - t.startX) < 6) return
+    t.active = true
+    trackActive.value = true
+  }
+  let v: number
+  if (t.grabbed) {
+    // 从拇指当前位置按位移连续调整（与轨道等宽的 1:1 灵敏度）
+    const inner = Math.max(1, t.rect.width - t.pad * 2)
+    v = t.startVal + ((e.clientX - t.startX) / inner) * (props.max - props.min)
+  } else {
+    v = valueAt(e.clientX, t)
+  }
+  v = quantize(v)
+  if (v !== props.modelValue) emit('update:modelValue', v)
+}
+
+function onTrackUp(e: PointerEvent): void {
+  if (!track) return
+  track = null
+  trackActive.value = false
+  ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
 }
 </script>
 
@@ -195,7 +266,7 @@ function onTouchDown(e: PointerEvent): void {
         @pointermove="onValMove"
         @pointerup="onValUp"
         @pointercancel="onValUp"
-        @dblclick.stop="onValDblClick"
+        @dblclick.stop="startEdit"
       >{{ display }}</span>
     </div>
     <input
@@ -205,10 +276,14 @@ function onTouchDown(e: PointerEvent): void {
       :step="step"
       :value="modelValue"
       :disabled="disabled"
+      :class="{ dragging: trackActive }"
       :style="fillStyle"
       :aria-label="label || undefined"
       @input="onInput"
-      @pointerdown.capture="onTouchDown"
+      @pointerdown="onTrackDown"
+      @pointermove="onTrackMove"
+      @pointerup="onTrackUp"
+      @pointercancel="onTrackUp"
     />
   </div>
 </template>
@@ -327,7 +402,8 @@ input[type='range']::-webkit-slider-thumb {
 input[type='range']:hover::-webkit-slider-thumb {
   transform: scale(1.08);
 }
-input[type='range']:active::-webkit-slider-thumb {
+input[type='range']:active::-webkit-slider-thumb,
+input[type='range'].dragging::-webkit-slider-thumb {
   transform: scale(1.22);
   box-shadow:
     0 1px 3px rgba(0, 0, 0, 0.45),
@@ -382,7 +458,8 @@ input[type='range']::-moz-range-thumb {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
   transition: transform var(--dur-hover) var(--ease-soft);
 }
-input[type='range']:active::-moz-range-thumb {
+input[type='range']:active::-moz-range-thumb,
+input[type='range'].dragging::-moz-range-thumb {
   transform: scale(1.22);
 }
 </style>
