@@ -9,9 +9,9 @@ android {
     signingConfigs {
         release {
             storeFile rootProject.file('keystore/albumark-release.jks')
-            storePassword new File(rootProject.file('keystore/PASSWORD.txt')).text.trim()
+            storePassword rootProject.file('keystore/PASSWORD.txt').text.trim()
             keyAlias 'albumark'
-            keyPassword new File(rootProject.file('keystore/PASSWORD.txt')).text.trim()
+            keyPassword rootProject.file('keystore/PASSWORD.txt').text.trim()
         }
     }
     defaultConfig {
