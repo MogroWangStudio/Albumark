@@ -196,7 +196,9 @@ export function croppedSize(w0: number, h0: number, c?: Crop): { w: number; h: n
 
 /**
  * 旋转 θ 后完全落在原内容内的最大轴对齐矩形（拉直的保守内接框）。
- * 经典几何：短边受两条对角线约束时长边受限；否则按投影公式求解。
+ * 经典几何（rotatedRectWithMaxArea）：短边受两条对角线约束时按半约束求解，
+ * 否则按投影公式（全约束）求解；返回 (宽, 高) 始终对应原内容的方向——
+ * 竖图的内接矩形保持竖向，拉直不会突然转为横向。
  */
 export function rotatedInnerRect(w0: number, h0: number, deg: number): { w: number; h: number } {
   if (w0 <= 0 || h0 <= 0) return { w: 0, h: 0 }
@@ -209,21 +211,17 @@ export function rotatedInnerRect(w0: number, h0: number, deg: number): { w: numb
   let wr: number
   let hr: number
   if (sideShort <= 2 * sinA * cosA * sideLong || Math.abs(sinA - cosA) < 1e-10) {
+    // 半约束：原内容的一条边被两个角点触到
     const x = 0.5 * sideShort
-    if (widthIsLonger) {
-      wr = x / sinA
-      hr = x / cosA
-    } else {
-      wr = x / cosA
-      hr = x / sinA
-    }
+    wr = widthIsLonger ? x / sinA : x / cosA
+    hr = widthIsLonger ? x / cosA : x / sinA
   } else {
+    // 全约束：内接矩形触到原内容的三条边
     const cos2a = cosA * cosA - sinA * sinA
-    wr = (sideLong * cosA - sideShort * sinA) / cos2a
-    hr = (sideShort * cosA - sideLong * sinA) / cos2a
+    wr = (w0 * cosA - h0 * sinA) / cos2a
+    hr = (h0 * cosA - w0 * sinA) / cos2a
   }
-  const long = { w: wr, h: hr }
-  return widthIsLonger ? long : { w: long.h, h: long.w }
+  return { w: wr, h: hr }
 }
 
 /** 比例预设：ratio 为像素宽高比（w/h），null = 自由 */
