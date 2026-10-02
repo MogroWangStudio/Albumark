@@ -165,3 +165,39 @@ jobs:
           name: Albumark-${{ env.VERSION }}-android-apk
           path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+  release:
+    name: 发布 GitHub Release
+    # 打 v* 标签时聚合三端产物发布 Release（应用内更新的下载源）
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows-x64-portable, macos-arm64, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 整理产物（统一命名，安卓 APK 已由仓库密钥签名）
+        run: |
+          mkdir -p dist
+          EXE=$(find artifacts -name '*.exe' | head -n 1)
+          DMG=$(find artifacts -name '*.dmg' | head -n 1)
+          APK=$(find artifacts -name '*.apk' | head -n 1)
+          [ -n "$EXE" ] || { echo "缺少 Windows 产物" >&2; exit 1; }
+          [ -n "$DMG" ] || { echo "缺少 macOS 产物" >&2; exit 1; }
+          [ -n "$APK" ] || { echo "缺少 Android 产物" >&2; exit 1; }
+          cp "$EXE" "dist/Albumark_${VERSION}_windows-x64-portable.exe"
+          cp "$DMG" "dist/Albumark_${VERSION}_macos-arm64.dmg"
+          cp "$APK" "dist/Albumark_${VERSION}_android.apk"
+
+      - name: 创建 Release 并上传
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v${VERSION}" dist/* --title "v${VERSION}" --generate-notes

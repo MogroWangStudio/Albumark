@@ -6,7 +6,13 @@ import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platform'
-import { openReleasePage, checkForUpdate, type UpdateInfo } from '@/core/updater'
+import {
+  checkForUpdate,
+  downloadAndInstall,
+  openReleasePage,
+  type UpdateInfo,
+} from '@/core/updater'
+import { toast } from '@/stores/toast'
 import { APP_VERSION } from '@/core/version'
 import { FONT_CATEGORY_LABELS, useFontsStore, type FontCategory } from '@/stores/fonts'
 import {
@@ -84,11 +90,13 @@ function onFontFocus(): void {
   void fonts.ensureFonts()
 }
 
-/* ---------- 检查更新 ---------- */
+/* ---------- 检查更新与自动更新 ---------- */
 
-type UpdateState = 'idle' | 'checking' | 'latest' | 'available' | 'error'
+type UpdateState = 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'error'
 const updateState = ref<UpdateState>('idle')
 const updateInfo = ref<UpdateInfo | null>(null)
+/** 下载进度：null = 总大小未知，只显示进行中 */
+const updateProgress = ref<number | null>(null)
 
 async function checkUpdate(): Promise<void> {
   updateState.value = 'checking'
@@ -101,6 +109,28 @@ async function checkUpdate(): Promise<void> {
     updateState.value = 'error'
   }
 }
+
+async function installUpdate(): Promise<void> {
+  if (!updateInfo.value || updateState.value === 'downloading') return
+  updateState.value = 'downloading'
+  updateProgress.value = null
+  try {
+    const out = await downloadAndInstall(updateInfo.value, (pct) => {
+      updateProgress.value = pct
+    })
+    toast(out.message, 'success')
+    if (out.kind === 'manual') updateState.value = 'latest'
+  } catch (err) {
+    toast(`更新失败：${err instanceof Error ? err.message : '请稍后重试，或前往下载页手动获取'}`, 'error')
+    updateState.value = 'available'
+  }
+}
+
+const progressText = computed(() =>
+  updateProgress.value === null ? '下载中…' : `下载 ${updateProgress.value}%`,
+)
+
+const isDownloading = computed(() => updateState.value === 'downloading')
 
 /* ---------- 数据位置（仅桌面） ---------- */
 
@@ -313,8 +343,14 @@ async function relaunchOobe(): Promise<void> {
           <div class="btns">
             <template v-if="updateState === 'available' && updateInfo">
               <span class="update-hint"><Check :size="13" />新版本 v{{ updateInfo.version }}</span>
-              <AppButton size="sm" variant="primary" @click="openReleasePage(updateInfo.url)">
-                <Download :size="13" />前往下载
+              <AppButton
+                size="sm"
+                variant="primary"
+                :disabled="isDownloading"
+                @click="installUpdate"
+              >
+                <LoaderCircle v-if="isDownloading" :size="13" class="spin" />
+                <Download v-else :size="13" />{{ isDownloading ? progressText : '立即更新' }}
               </AppButton>
             </template>
             <template v-else>

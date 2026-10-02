@@ -14,6 +14,14 @@ fn exe_dir() -> Result<String, String> {
         .ok_or_else(|| "无法定位程序目录".to_string())
 }
 
+/// 当前可执行文件完整路径：便携版自更新脚本需要知道要替换的旧文件。
+#[tauri::command]
+fn exe_path() -> Result<String, String> {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|_| "无法定位程序文件".to_string())
+}
+
 #[tauri::command]
 fn app_data_root(app: tauri::AppHandle) -> Result<String, String> {
     app.path()
@@ -34,7 +42,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![exe_dir, app_data_root, move_to_trash])
+        .invoke_handler(tauri::generate_handler![exe_dir, exe_path, app_data_root, move_to_trash])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

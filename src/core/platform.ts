@@ -20,6 +20,17 @@ export async function executableDir(): Promise<string> {
   }
 }
 
+/** 当前可执行文件完整路径：便携版自更新替换脚本需要定位旧文件。 */
+export async function exePath(): Promise<string> {
+  if (!isTauri) return ''
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<string>('exe_path')
+  } catch {
+    return ''
+  }
+}
+
 /** 系统应用数据目录（%APPDATA% 等），exe_dir 取不到时的兜底。 */
 export async function appDataDir(): Promise<string> {
   if (!isTauri) return ''
