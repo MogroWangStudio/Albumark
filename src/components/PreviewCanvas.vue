@@ -11,6 +11,7 @@ import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useSettingsStore } from '@/stores/settings'
 import { useWatermarkStore } from '@/stores/watermark'
+import { useWorkspaceStore } from '@/stores/workspace'
 
 const props = withDefaults(
   defineProps<{
@@ -30,6 +31,7 @@ const images = useImagesStore()
 const wm = useWatermarkStore()
 const adjust = useAdjustStore()
 const settings = useSettingsStore()
+const ws = useWorkspaceStore()
 
 const MAX_ZOOM = 12
 const DBL_TAP_ZOOM = 2.5
@@ -77,6 +79,8 @@ let srcBitmap: ImageBitmap | null = null
 let srcId: string | null = null
 /** 合成结果位图缓存：缩放/平移只重绘，不重新渲染 */
 let resultBmp: ImageBitmap | null = null
+/** resultBmp/resultMap 所属的照片：与 active 不一致时交互手势必须停用 */
+let resultId: string | null = null
 let baseSeq = 0
 let finalTimer: number | null = null
 let settleTimer: number | null = null
@@ -300,17 +304,40 @@ function hasMissingAssets(): boolean {
   return list.some((l) => l.type === 'image' && !assetBmps.has((l as { assetId: string }).assetId))
 }
 
-async function ensureBitmap(): Promise<ImageBitmap | null> {
+/**
+ * 当前照片的源位图（按需解码到 targetLong 长边，不超过原生尺寸）。
+ * 安卓 WebView 上解码一张 50MP 要数秒、RGBA 位图上百 MB，而预览输出长边
+ * 有上限（≤ 精修档位），按目标尺寸解码后位图只有几 MB，Worker 侧的
+ * 缩放与传输也随之变轻。缓存长边够用即复用，放大到更高需求才重解码。
+ */
+async function ensureBitmap(targetLong: number): Promise<ImageBitmap | null> {
   const a = active.value
   if (!a || !a.blob) return null
-  if (srcBitmap && srcId === a.id) return srcBitmap
+  if (
+    srcBitmap &&
+    srcId === a.id &&
+    Math.max(srcBitmap.width, srcBitmap.height) >= Math.max(1, targetLong) - 2
+  ) {
+    return srcBitmap
+  }
   if (srcBitmap) {
     srcBitmap.close()
     srcBitmap = null
     srcId = null
   }
   try {
-    srcBitmap = await createImageBitmap(a.blob)
+    const long = Math.max(a.width, a.height) || 0
+    const k = long > targetLong ? targetLong / long : 1
+    srcBitmap = await createImageBitmap(
+      a.blob,
+      k < 1
+        ? {
+            imageOrientation: 'from-image',
+            resizeWidth: Math.max(1, Math.round(a.width * k)),
+            resizeHeight: Math.max(1, Math.round(a.height * k)),
+          }
+        : { imageOrientation: 'from-image' },
+    )
     srcId = a.id
     return srcBitmap
   } catch {
@@ -318,11 +345,26 @@ async function ensureBitmap(): Promise<ImageBitmap | null> {
   }
 }
 
+/** 清空底图与映射：画面保留旧照片内容会误导交互（尤其裁剪按旧画面取框） */
+function clearResult(): void {
+  resultBmp?.close()
+  resultBmp = null
+  resultId = null
+  resultMap.w = 0
+  resultMap.h = 0
+  resultMap.scale = 1
+  resultMap.ox = 0
+  resultMap.oy = 0
+  selRect.value = null
+  for (const c of [cvBase.value, cvOverlay.value]) {
+    const ctx = c?.getContext('2d')
+    if (ctx) ctx.clearRect(0, 0, c!.width, c!.height)
+  }
+}
+
 async function renderBase(draft: boolean): Promise<void> {
   const a = active.value
   if (!a || !cvBase.value) return
-  const bmp = await ensureBitmap()
-  if (!bmp) return
   const seq = ++baseSeq
   const viewLong = Math.max(view.w, view.h) * view.dpr || 800
   // 即时刷新用「不低于当前显示分辨率」的档位：替换位图时尺寸不变，避免画面忽糊忽清地闪烁
@@ -330,6 +372,13 @@ async function renderBase(draft: boolean): Promise<void> {
   const maxLong = draft
     ? Math.max(perf.value.draft, currentLong)
     : Math.min(perf.value.final, viewLong)
+  const bmp = await ensureBitmap(maxLong)
+  if (!bmp) {
+    // 照片文件未装载（后台渐进补齐中）或解码失败：清掉旧画面，
+    // 新照片渲染出来之前不允许按旧画面取裁剪框 / 拖图层
+    clearResult()
+    return
+  }
   srcBitmap = null // 即将转移给 Worker
   try {
     // 裁剪编辑中渲染「变换后全图」（框外要可见），确认后按矩形取样；
@@ -365,6 +414,7 @@ async function renderBase(draft: boolean): Promise<void> {
     srcId = a.id
     if (resultBmp) resultBmp.close()
     resultBmp = res.bitmap
+    resultId = a.id
     drawBase()
     drawOverlay()
   } catch (err) {
@@ -382,7 +432,8 @@ let cropPreviewId: string | null = null
 
 async function ensureCropPreview(): Promise<ImageBitmap | null> {
   const a = active.value
-  if (!a?.blob) return null
+  // 尺寸未知（照片还没装载）时不解码，等装载后由渲染流程补
+  if (!a?.blob || !a.width || !a.height) return null
   if (cropPreviewBmp && cropPreviewId === a.id) return cropPreviewBmp
   releaseCropPreview()
   try {
@@ -1094,8 +1145,12 @@ function onPointerDown(e: PointerEvent): void {
   }
   if (pointers.size > 2) return
 
+  // 渲染结果尚未对应当前照片（新照片解码中）：只允许平移视图，
+  // 裁剪 / 图层手势会把旧画面的几何与坐标写到新照片上
+  const stale = resultId !== (active.value?.id ?? null)
+
   // 裁剪模式：手柄/框内交给裁剪手势，其余区域仍可平移视图
-  if (adjust.cropMode && adjust.cropDraft) {
+  if (adjust.cropMode && adjust.cropDraft && !stale) {
     if (e.button === 1) {
       gesture = { type: 'pan', startPan: { x: pan.x, y: pan.y }, startClient: { x: e.clientX, y: e.clientY } }
       return
@@ -1117,7 +1172,7 @@ function onPointerDown(e: PointerEvent): void {
   }
 
   const p = toImagePx(e.clientX, e.clientY)
-  const list = resolvedLayers()
+  const list = stale ? [] : resolvedLayers()
   // 中键只负责平移预览，不选中 / 不拖动图层
   if (e.button === 1) {
     wm.selectedId = null
@@ -1330,7 +1385,12 @@ function scheduleHiRes(): void {
   settleTimer = window.setTimeout(() => {
     settleTimer = null
     if (!resultBmp || !active.value) return
-    const desired = Math.round(Math.max(view.w, view.h) * zoom.value * (view.dpr || 1))
+    // 期望分辨率同样受精修档位封顶：放大到大倍率时若按缩放值计算，
+    // 每次停顿都会触发一次输出完全相同的全管线渲染（安卓上一次要数秒）
+    const desired = Math.min(
+      perf.value.final,
+      Math.round(Math.max(view.w, view.h) * zoom.value * (view.dpr || 1)),
+    )
     const current = Math.max(resultBmp.width, resultBmp.height)
     if (desired > current + 100) {
       rendering.value = true
@@ -1385,10 +1445,14 @@ watch(
   { deep: true },
 )
 
-// 切换照片时回到适应视图
+// 切换照片时回到适应视图；照片还没装载（打开项目后的渐进补齐未轮到）
+// 就按需读取这一张，预览不必等整批队列，装载完成后 watch 自动渲染
 watch(
   () => active.value?.id,
-  () => resetView(),
+  (id) => {
+    resetView()
+    void ws.ensureImageLoaded(id)
+  },
 )
 
 /* ---------- 裁剪模式 ---------- */

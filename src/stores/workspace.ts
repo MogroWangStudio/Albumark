@@ -300,7 +300,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   /** 读取单个图片文件，解码出尺寸、缩略图与 EXIF，返回可直接 patchItem 的增量 */
-  async function hydrateOne(r: PrjImageRef, prjPath: string): Promise<Partial<ImageItem>> {
+  async function hydrateOne(
+    r: Pick<PrjImageRef, 'storedAs' | 'sourcePath'>,
+    prjPath: string,
+  ): Promise<Partial<ImageItem>> {
     let bytes: Uint8Array | null = null
     if (r.storedAs) {
       try {
@@ -317,7 +320,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
     if (!bytes) return { missing: true }
     const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'image/jpeg' })
-    const patch = await processItem(makeItem(r, blob))
+    // processItem 只读 blob：不需要完整条目
+    const patch = await processItem({
+      id: '',
+      name: '',
+      baseName: '',
+      blob,
+      thumbUrl: '',
+      width: 0,
+      height: 0,
+    })
     return { ...patch, blob, missing: false }
   }
 
@@ -345,6 +357,23 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       images.patchItem(refs[0].id, first)
     }
     await Promise.all(Array.from({ length: Math.min(3, rest.length) }, worker))
+  }
+
+  /* 切到尚未装载的照片时按需读取原文件：后台渐进补齐还没轮到它时，
+     预览不必等整批队列，读这一张就能先渲染 */
+  const loadingIds = new Set<string>()
+  async function ensureImageLoaded(id: string | null | undefined): Promise<void> {
+    if (!id || !current.value?.path) return
+    const item = images.items.find((i) => i.id === id)
+    if (!item || item.blob || item.missing || loadingIds.has(id)) return
+    loadingIds.add(id)
+    try {
+      const patch = await hydrateOne(item, current.value.path).catch(() => ({ missing: true }))
+      if (!images.items.some((i) => i.id === id)) return
+      images.patchItem(id, patch)
+    } finally {
+      loadingIds.delete(id)
+    }
   }
 
   async function openProject(meta: ProjectMeta): Promise<void> {
@@ -588,6 +617,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openEphemeralProject,
     closeProject,
     removeProject,
+    ensureImageLoaded,
     addFiles,
     addFromPaths,
     removeImage,

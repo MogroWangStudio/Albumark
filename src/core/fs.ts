@@ -37,11 +37,11 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin)
 }
 
-function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64)
-  const out = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
-  return out
+/** 安卓原生侧返回 base64：走引擎内置的 data URL 解码，
+ *  比 atob + 逐字节循环快数倍，且不产生中间二进制大字符串。 */
+async function base64ToBytes(b64: string): Promise<Uint8Array> {
+  const res = await fetch(`data:application/octet-stream;base64,${b64}`)
+  return new Uint8Array(await res.arrayBuffer())
 }
 
 /** 路径拼接：桌面走 Tauri path API（平台分隔符），安卓为 POSIX 相对路径 */
@@ -70,7 +70,7 @@ export async function readFile(path: string): Promise<Uint8Array> {
   const m = await capacitor()
   const res = await m.Filesystem.readFile({ path, directory: m.Directory.Data })
   // 原生返回 base64 字符串；Web 平台返回 Blob
-  if (typeof res.data === 'string') return base64ToBytes(res.data)
+  if (typeof res.data === 'string') return await base64ToBytes(res.data)
   return new Uint8Array(await res.data.arrayBuffer())
 }
 

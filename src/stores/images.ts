@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { readExif } from '@/core/exif'
+import { jpegSize } from '@/core/jpeg'
 import { fetchImageBlob } from '@/core/platform'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
@@ -19,17 +20,34 @@ const PARALLEL = 4
 /**
  * 解码一次得到尺寸 + 缩略图；EXIF 只读元数据段，代价很小。
  * 返回 patch，由调用方经 patchItem 写回，保证走响应式代理触发更新。
+ *
+ * 尺寸优先从 JPEG 头部 SOF 段读取（只扫几 KB），缩略图直接按小尺寸解码——
+ * 不再为读尺寸 / 做缩略图整图解码（安卓 WebView 上一张 50MP 要数秒）。
+ * 头部解析失败才回退整图解码。
  */
 export async function processItem(item: ImageItem): Promise<Partial<ImageItem>> {
   const patch: Partial<ImageItem> = {}
   if (item.blob) {
     try {
-      const bmp = await createImageBitmap(item.blob)
-      patch.width = bmp.width
-      patch.height = bmp.height
+      const head = new Uint8Array(await item.blob.slice(0, 262144).arrayBuffer())
+      const size = jpegSize(head)
+      const long = size ? Math.max(size.w, size.h) : 0
+      const k = long > THUMB_LONG ? THUMB_LONG / long : 1
+      const bmp = await createImageBitmap(
+        item.blob,
+        size && k < 1
+          ? {
+              imageOrientation: 'from-image',
+              resizeWidth: Math.max(1, Math.round(size.w * k)),
+              resizeHeight: Math.max(1, Math.round(size.h * k)),
+            }
+          : undefined,
+      )
       try {
-        const long = Math.max(bmp.width, bmp.height) || 1
-        const s = Math.min(1, THUMB_LONG / long)
+        patch.width = size?.w ?? bmp.width
+        patch.height = size?.h ?? bmp.height
+        // 小尺寸解码时位图已 ≤ 缩略图长边；整图解码兜底时在此缩放
+        const s = Math.min(1, THUMB_LONG / (Math.max(bmp.width, bmp.height) || 1))
         const tw = Math.max(1, Math.round(bmp.width * s))
         const th = Math.max(1, Math.round(bmp.height * s))
         const oc = new OffscreenCanvas(tw, th)
