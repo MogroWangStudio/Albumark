@@ -41,7 +41,7 @@ export async function processItem(item: ImageItem): Promise<Partial<ImageItem>> 
               resizeWidth: Math.max(1, Math.round(size.w * k)),
               resizeHeight: Math.max(1, Math.round(size.h * k)),
             }
-          : undefined,
+          : { imageOrientation: 'from-image' },
       )
       try {
         patch.width = size?.w ?? bmp.width

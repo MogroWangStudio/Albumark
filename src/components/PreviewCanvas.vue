@@ -462,9 +462,12 @@ function releaseCropPreview(): void {
  */
 function drawRotatedDraft(): void {
   const canvas = cvBase.value
+  const a = active.value
   const d = adjust.cropDraft
-  if (!canvas || !d) return
-  if (!cropPreviewBmp) {
+  if (!canvas || !d || !a) return
+  // 低清位图必须属于当前照片：切照片后缓存还挂着旧图时，
+  // 拉直粗渲会把上一张画出来旋转（随后精修又跳回，肉眼可见串图）
+  if (!cropPreviewBmp || cropPreviewId !== a.id) {
     void ensureCropPreview().then((bmp) => {
       if (bmp && adjust.cropDraft) drawRotatedDraft()
     })
