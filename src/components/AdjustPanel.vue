@@ -477,4 +477,24 @@ function resetDenoise(): void {
   color: var(--text-3);
   line-height: 1.5;
 }
+/* 触屏（安卓）适配：折叠头 / 色带 / 小重置按钮的热区放大到易命中的尺寸 */
+@media (pointer: coarse) {
+  .hsl {
+    padding: 8px 12px;
+  }
+  .hsl-head {
+    padding: 6px 0;
+  }
+  .hsl-head .mini {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+  }
+  .band {
+    padding: 6px 12px 6px 22px;
+  }
+  .band::before {
+    left: 9px;
+  }
+}
 </style>

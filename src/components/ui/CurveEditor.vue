@@ -304,4 +304,12 @@ onBeforeUnmount(() => ro?.disconnect())
   touch-action: none;
   cursor: crosshair;
 }
+/* 窄屏（安卓底部抽屉）：正方形曲线画布是调节页最大的纵向占用者，
+   缩小并居中，给下方的 HSL / 晕影 / 降噪让出空间 */
+@media (max-width: 900px) {
+  .board {
+    width: min(100%, 210px);
+    margin-inline: auto;
+  }
+}
 </style>

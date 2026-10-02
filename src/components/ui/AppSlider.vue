@@ -338,6 +338,30 @@ input[type='range']:focus-visible::-webkit-slider-thumb {
     0 1px 3px rgba(0, 0, 0, 0.45),
     0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
 }
+/* 触屏（安卓）适配：轨道两端留出边距，thumb 与数值热区放大——
+   thumb 拖到端点时手指不再顶出面板边缘，滑杆行也更容易命中 */
+@media (pointer: coarse) {
+  input[type='range'] {
+    padding-inline: 10px;
+  }
+  input[type='range']::-webkit-slider-thumb {
+    width: 22px;
+    height: 22px;
+    margin-top: -8px;
+  }
+  input[type='range']::-moz-range-thumb {
+    width: 22px;
+    height: 22px;
+  }
+  .val {
+    padding: 7px 10px;
+  }
+  .mini-reset {
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+  }
+}
 input[type='range']::-moz-range-track {
   height: 6px;
   border-radius: 3px;
