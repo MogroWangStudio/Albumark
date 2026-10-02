@@ -3,6 +3,17 @@ apply plugin: 'com.android.application'
 android {
     namespace = "com.mws.albumark"
     compileSdk = rootProject.ext.compileSdkVersion
+    /* 发布签名：密钥随仓库分发（android/keystore/），本地与 CI 构建同一签名，
+       保证用户可以覆盖安装升级而无需卸载重装。开源仓库下密钥的作用是
+       维持签名链一致，不承担保密职责。 */
+    signingConfigs {
+        release {
+            storeFile rootProject.file('keystore/albumark-release.jks')
+            storePassword new File(rootProject.file('keystore/PASSWORD.txt')).text.trim()
+            keyAlias 'albumark'
+            keyPassword new File(rootProject.file('keystore/PASSWORD.txt')).text.trim()
+        }
+    }
     defaultConfig {
         applicationId "com.mws.albumark"
         minSdkVersion rootProject.ext.minSdkVersion
@@ -20,6 +31,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 }

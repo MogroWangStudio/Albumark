@@ -153,13 +153,15 @@ jobs:
             sleep 10
           done
 
-      - name: 构建 APK（debug 可直接安装，release 未签名）
+      # release 直接由仓库内置密钥签名（见 android/app/build.gradle 的 signingConfigs），
+      # 每次构建同一签名，用户可覆盖安装升级；只产出已签名 APK，不打包 debug 等其他产物
+      - name: 构建已签名 release APK
         run: |
           cd android
-          ./gradlew assembleDebug assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
       - uses: actions/upload-artifact@v4
         with:
           name: Albumark-${{ env.VERSION }}-android-apk
-          path: android/app/build/outputs/apk/**/*.apk
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error

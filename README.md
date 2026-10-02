@@ -204,7 +204,7 @@ npx cap open android   # 在 Android Studio 中构建运行
 
 - **Windows x64 便携版**：单文件 exe（目标机器需系统自带的 WebView2 运行时）
 - **macOS arm64**：`.dmg` 与 `.app`（未签名）
-- **Android**：debug APK 可直接安装；release APK 未签名，需自行配置签名后发布
+- **Android**：已签名 release APK（项目内置密钥统一签名，可覆盖安装升级）
 
 ### macOS 提示「已损坏，无法打开」的修复
 
