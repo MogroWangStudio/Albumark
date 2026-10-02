@@ -148,9 +148,28 @@ function onValUp(e: PointerEvent): void {
    - 按在拇指上：从当前值 1:1 跟手（尊重抓取偏移，不跳变）
    - 按在轨道其他位置拖动：拇指吸附到手指位置跟随（先移动才吸附，轻点不跳）
    - 轻点（无位移）：什么都不发生
-   鼠标不拦截，桌面点按跳值的习惯保持不变；轨道 touch-action: pan-y，
-   手指纵向滑动仍可滚动面板（滚动启动会派发 pointercancel，拖动安全中断） */
+   拦截范围见 shouldGuardTrack：桌面宽窗的鼠标不拦截，点按跳值保持原生；
+   轨道 touch-action: pan-y，手指纵向滑动仍可滚动面板
+   （滚动启动会派发 pointercancel，拖动安全中断） */
 const TRACK_HOTSPOT = 26 // 拇指（22px）外的抓取余量
+
+/** 触屏与移动布局下轨道走「可拖不可点」：轻点不跳值，只允许拖动。
+ *  判定与 CSS 适配（pointer: coarse）、面板抽屉断点（≤900px）同源——
+ *  真机触屏、开发者工具的移动端模拟（触摸注入或仅窄视口）下都生效，
+ *  桌面宽窗的鼠标保持原生点按跳值 */
+const coarseQuery =
+  typeof window !== 'undefined' && window.matchMedia
+    ? window.matchMedia('(pointer: coarse)')
+    : null
+const drawerQuery =
+  typeof window !== 'undefined' && window.matchMedia
+    ? window.matchMedia('(max-width: 900px)')
+    : null
+
+function shouldGuardTrack(e: PointerEvent): boolean {
+  if (e.pointerType === 'touch') return true
+  return !!(coarseQuery?.matches || drawerQuery?.matches)
+}
 
 const trackActive = ref(false)
 let track: {
@@ -180,7 +199,7 @@ function quantize(v: number): number {
 }
 
 function onTrackDown(e: PointerEvent): void {
-  if (e.pointerType !== 'touch' || props.disabled) return
+  if (props.disabled || !shouldGuardTrack(e)) return
   e.preventDefault()
   const el = e.currentTarget as HTMLInputElement
   try {
