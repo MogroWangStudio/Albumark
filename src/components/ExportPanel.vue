@@ -192,7 +192,7 @@ async function start(): Promise<void> {
   border-bottom: 1px solid var(--line);
 }
 .head h1 {
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-zoom, 1));
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -203,18 +203,18 @@ async function start(): Promise<void> {
   margin: 12px 0;
 }
 .fl {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .mode-hint {
   margin: 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
   line-height: 1.5;
 }
 .dest {
   margin: 6px 0 0;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -227,7 +227,7 @@ async function start(): Promise<void> {
   border: 1px solid var(--line-strong);
   background: var(--bg);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
 }
 .text-input:focus-visible {
   outline: none;
@@ -245,7 +245,7 @@ async function start(): Promise<void> {
   border-radius: 8px;
   border: 1px solid var(--line-strong);
   background: var(--bg);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   font-variant-numeric: tabular-nums;
 }
 .long-edge .num-input:focus-visible {
@@ -262,7 +262,7 @@ async function start(): Promise<void> {
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   transition: color var(--dur-hover) var(--ease-soft), border-color var(--dur-hover) var(--ease-soft),
     background var(--dur-hover) var(--ease-soft);
@@ -293,13 +293,13 @@ async function start(): Promise<void> {
 }
 .status {
   margin-top: 10px;
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-zoom, 1));
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 .current {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -311,7 +311,7 @@ async function start(): Promise<void> {
   padding: 0;
   max-height: 120px;
   overflow-y: auto;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--danger);
   display: flex;
   flex-direction: column;

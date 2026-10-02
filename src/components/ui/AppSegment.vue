@@ -33,15 +33,15 @@ const emit = defineEmits<{
   background: var(--hover);
 }
 .seg.small button {
-  height: 24px;
+  height: calc(24px * var(--ui-zoom, 1));
   padding: 0 9px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
 }
 button {
-  height: 26px;
+  height: calc(26px * var(--ui-zoom, 1));
   padding: 0 12px;
   border-radius: 6px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   transition:
     background var(--dur-hover) var(--ease-soft),

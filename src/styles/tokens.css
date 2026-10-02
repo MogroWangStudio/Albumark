@@ -38,6 +38,10 @@
   --font: var(--font-fallback);
   --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 
+  /* 界面字号缩放（设置档位 0.9–1.25）：所有 UI 字号与控件高度乘此系数，
+     由 settings store 写入内联值覆盖 */
+  --ui-zoom: 1;
+
   --r-s: 6px;
   --r-m: 10px;
   --r-l: 14px;
@@ -57,7 +61,7 @@
 
   --blur-material: blur(20px) saturate(160%);
 
-  --control-h: 30px;
+  --control-h: calc(30px * var(--ui-zoom, 1));
 
   /* 安全区：桌面端为 0；安卓由 Capacitor SystemBars 注入 --safe-area-inset-*，
      浏览器/iOS 走 env()，两者取较大值 */

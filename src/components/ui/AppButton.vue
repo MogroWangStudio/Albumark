@@ -41,9 +41,9 @@ withDefaults(
   opacity: 0.45;
 }
 .btn.sm {
-  height: 26px;
+  height: calc(26px * var(--ui-zoom, 1));
   padding: 0 10px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   border-radius: 7px;
 }
 .btn.primary {

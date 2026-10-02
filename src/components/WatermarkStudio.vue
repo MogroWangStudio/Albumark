@@ -696,7 +696,7 @@ watch(mode, async (m) => {
   border-bottom: 1px solid var(--line);
 }
 h1 {
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-zoom, 1));
   font-weight: 600;
 }
 .edit-title {
@@ -713,7 +713,7 @@ h1 {
   border-radius: 999px;
   background: var(--hover);
   color: var(--text-3);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   white-space: nowrap;
 }
 /* 管理页 ⇄ 编辑页的内部切换：轻微纵向推移的交叉淡入 */
@@ -747,7 +747,7 @@ h1 {
   border-radius: 8px;
   border: 1px solid var(--line-strong);
   background: var(--bg);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
 }
 .text-input:focus-visible {
   outline: none;

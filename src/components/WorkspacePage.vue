@@ -337,7 +337,7 @@ onMounted(() => {
   color: var(--text-2);
 }
 .sec-title h1 {
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-zoom, 1));
   font-weight: 600;
   color: var(--text);
 }
@@ -349,7 +349,7 @@ onMounted(() => {
   place-items: center;
   border-radius: 999px;
   background: var(--hover);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
@@ -403,11 +403,11 @@ onMounted(() => {
   gap: 1px;
 }
 .dir-name {
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
   font-weight: 500;
 }
 .dir-path {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -415,7 +415,7 @@ onMounted(() => {
 }
 .dir-count {
   flex: none;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
@@ -427,7 +427,7 @@ onMounted(() => {
   height: 24px;
   padding: 0 9px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
 }
@@ -467,11 +467,11 @@ onMounted(() => {
   align-self: center;
 }
 h1 {
-  font-size: 21px;
+  font-size: calc(21px * var(--ui-zoom, 1));
   letter-spacing: -0.02em;
 }
 .card.grow h1 {
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-zoom, 1));
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -495,7 +495,7 @@ h1 {
   gap: 1px;
 }
 .dir-label {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
 }
 .oobe-dir .dir-path {
@@ -514,7 +514,7 @@ h1 {
   border-radius: 8px;
   border: 1px solid var(--line-strong);
   background: var(--bg);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
 }
 .text-input:focus-visible {
   outline: none;
@@ -553,7 +553,7 @@ h1 {
   margin-bottom: 4px;
 }
 .prj-name {
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
   font-weight: 500;
   max-width: 100%;
   overflow: hidden;
@@ -561,11 +561,11 @@ h1 {
   white-space: nowrap;
 }
 .prj-count {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
 }
 .prj-date {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
   opacity: 0.8;
 }
@@ -595,7 +595,7 @@ h1 {
 .empty {
   color: var(--text-3);
   padding: 14px 2px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   line-height: 1.6;
   text-align: center;
 }
@@ -604,7 +604,7 @@ h1 {
   margin-top: 18px;
 }
 .confirm-text {
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
   color: var(--text-2);
   line-height: 1.6;
 }
@@ -647,7 +647,7 @@ h1 {
 }
 .page-loading p {
   margin: 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .page-spin {

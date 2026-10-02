@@ -885,7 +885,7 @@ function applyCustomFont(): void {
   margin-bottom: 8px;
 }
 .linked-row .fl {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .border-row {
@@ -897,7 +897,7 @@ function applyCustomFont(): void {
 .border-label {
   flex: none;
   width: 16px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .border-width {
@@ -944,15 +944,15 @@ function applyCustomFont(): void {
   display: block;
 }
 .tpl-name {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   font-weight: 500;
 }
 .tpl-meta {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
 }
 .tpl-question {
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
   font-weight: 500;
 }
 .tpl-btns {
@@ -986,7 +986,7 @@ function applyCustomFont(): void {
   border-radius: 8px;
   border: 1px solid var(--line-strong);
   background: var(--bg);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
 }
 .text-input:focus-visible {
   outline: none;
@@ -1009,7 +1009,7 @@ function applyCustomFont(): void {
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   background: var(--accent-soft);
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   line-height: 1.5;
 }
 .warn svg {
@@ -1064,7 +1064,7 @@ function applyCustomFont(): void {
   border-radius: 6px;
   border: 1px solid var(--accent);
   background: var(--bg);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   outline: none;
 }
 .tool {
@@ -1096,7 +1096,7 @@ section {
   padding: 10px 0 14px;
 }
 h3 {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   font-weight: 600;
   color: var(--text-3);
   margin-bottom: 8px;
@@ -1112,7 +1112,7 @@ h3 {
   padding: 2px 8px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   transition: all var(--dur-hover) var(--ease-soft);
 }
@@ -1127,7 +1127,7 @@ h3 {
 }
 .field span,
 .fl {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .select {
@@ -1136,7 +1136,7 @@ h3 {
   border: 1px solid var(--line-strong);
   background: var(--bg);
   padding: 0 8px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
 }
 .select.grow {
   flex: 1;
@@ -1164,7 +1164,7 @@ h3 {
 }
 .group summary {
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   user-select: none;
 }
@@ -1172,7 +1172,7 @@ h3 {
   color: var(--text);
 }
 .anchor-label {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
   text-align: center;
   margin-bottom: 5px;
@@ -1211,13 +1211,13 @@ h3 {
   transform: scale(1.5);
 }
 .hint {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
   margin: -4px 0 8px;
   line-height: 1.5;
 }
 .asset-name {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   margin-bottom: 8px;
   overflow: hidden;

@@ -62,7 +62,7 @@ header {
   padding: 14px 18px 10px;
 }
 h2 {
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-zoom, 1));
 }
 .x {
   display: grid;

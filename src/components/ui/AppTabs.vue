@@ -41,7 +41,7 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 30px;
+  height: calc(30px * var(--ui-zoom, 1));
   padding-inline: 10px;
   border-radius: 999px;
   color: var(--text-3);

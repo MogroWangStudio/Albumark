@@ -70,7 +70,7 @@ const lift = computed(() => (props.panelBottomInset > 0 ? props.panelBottomInset
   opacity: 0.95;
 }
 h1 {
-  font-size: 22px;
+  font-size: calc(22px * var(--ui-zoom, 1));
   letter-spacing: -0.02em;
 }
 p {

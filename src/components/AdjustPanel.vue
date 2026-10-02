@@ -354,14 +354,14 @@ function resetDenoise(): void {
   border-bottom: 1px solid var(--line);
 }
 .head h1 {
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-zoom, 1));
   font-weight: 600;
   letter-spacing: 0;
 }
 .fl {
   flex: 1;
   text-align: right;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .foot {
@@ -378,7 +378,7 @@ function resetDenoise(): void {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
   cursor: pointer;
   user-select: none;
@@ -415,7 +415,7 @@ function resetDenoise(): void {
   padding: 3px 9px 3px 18px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   transition: color var(--dur-hover) var(--ease-soft), border-color var(--dur-hover) var(--ease-soft);
 }
@@ -452,7 +452,7 @@ function resetDenoise(): void {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text);
   margin-bottom: 4px;
 }
@@ -468,12 +468,12 @@ function resetDenoise(): void {
   margin: 8px 0 2px;
 }
 .row-inline .fl2 {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .dn-hint {
   margin: 6px 0 0;
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
   line-height: 1.5;
 }

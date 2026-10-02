@@ -193,14 +193,14 @@ function fmtDate(t?: number): string {
   min-width: 0;
 }
 .tname {
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tinfo {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
@@ -215,7 +215,7 @@ function fmtDate(t?: number): string {
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.45);
   color: #f0ede8;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--ui-zoom, 1));
 }
 .tmore {
   position: absolute;
@@ -239,7 +239,7 @@ function fmtDate(t?: number): string {
   background: rgba(0, 0, 0, 0.55);
 }
 .confirm-text {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   line-height: 1.6;
   margin-bottom: 14px;
@@ -251,7 +251,7 @@ function fmtDate(t?: number): string {
   border-radius: 8px;
   border: 1px solid var(--line-strong);
   background: var(--bg);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   margin-bottom: 14px;
 }
 .text-input:focus-visible {

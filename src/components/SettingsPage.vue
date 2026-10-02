@@ -9,7 +9,15 @@ import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platfo
 import { openReleasePage, checkForUpdate, type UpdateInfo } from '@/core/updater'
 import { APP_VERSION } from '@/core/version'
 import { FONT_CATEGORY_LABELS, useFontsStore, type FontCategory } from '@/stores/fonts'
-import { THEMES, useSettingsStore, type PreviewQuality, type ThemeDef, type ThemeMode } from '@/stores/settings'
+import {
+  BOOT_STYLES,
+  THEMES,
+  useSettingsStore,
+  type BootStyle,
+  type PreviewQuality,
+  type ThemeDef,
+  type ThemeMode,
+} from '@/stores/settings'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const emit = defineEmits<{ back: [] }>()
@@ -23,17 +31,35 @@ const themeModel = computed({
   set: (v: unknown) => (settings.theme = v as ThemeMode),
 })
 
-/** 跟随系统的色卡对半分亮暗，其余直接用主题自己的三色 */
+/** 跟随系统的色卡对半分亮暗，其余直接用主题自己的配色（含文字色） */
 function swatchStyle(t: ThemeDef): Record<string, string> {
   if (t.id === 'auto') {
     return {
       '--sw-bg': 'linear-gradient(115deg, #ffffff 0 50%, #101010 50% 100%)',
       '--sw-canvas': 'linear-gradient(115deg, #ececea 0 50%, #24211d 50% 100%)',
       '--sw-accent': t.swatch.accent,
+      '--sw-text': t.swatch.text,
+      '--sw-text2': t.swatch.text2,
     }
   }
-  return { '--sw-bg': t.swatch.bg, '--sw-canvas': t.swatch.canvas, '--sw-accent': t.swatch.accent }
+  return {
+    '--sw-bg': t.swatch.bg,
+    '--sw-canvas': t.swatch.canvas,
+    '--sw-accent': t.swatch.accent,
+    '--sw-text': t.swatch.text,
+    '--sw-text2': t.swatch.text2,
+  }
 }
+
+const zoomModel = computed({
+  get: () => String(settings.uiZoom),
+  set: (v: unknown) => (settings.uiZoom = Number(v)),
+})
+
+const bootStyleModel = computed({
+  get: () => settings.bootStyle,
+  set: (v: unknown) => (settings.bootStyle = v as BootStyle),
+})
 
 const qualityModel = computed({
   get: () => settings.previewQuality,
@@ -125,11 +151,27 @@ async function relaunchOobe(): Promise<void> {
               @click="themeModel = t.id"
             >
               <span class="swatch" :class="{ auto: t.id === 'auto' }" :style="swatchStyle(t)">
+                <span class="ln" />
+                <span class="ln2" />
                 <span class="ph"><span class="dot" /></span>
               </span>
               <span class="t-label">{{ t.label }}</span>
             </button>
           </div>
+        </div>
+        <div class="row col">
+          <div class="text">
+            <span class="label">界面字号</span>
+          </div>
+          <AppSegment
+            v-model="zoomModel"
+            :options="[
+              { value: '0.9', label: '小' },
+              { value: '1', label: '标准' },
+              { value: '1.1', label: '大' },
+              { value: '1.25', label: '特大' },
+            ]"
+          />
         </div>
         <div class="row col">
           <div class="text">
@@ -157,6 +199,19 @@ async function relaunchOobe(): Promise<void> {
           <p v-else-if="fonts.denied && hasCustomFont" class="note">
             浏览器未授权读取系统字体，列表为常用字体清单。
           </p>
+        </div>
+        <div class="row">
+          <div class="text">
+            <span class="label">启动动画</span>
+            <p class="desc">启动时的品牌动画，关闭后直接进入界面</p>
+          </div>
+          <AppSwitch v-model="settings.bootEnabled" />
+        </div>
+        <div v-if="settings.bootEnabled" class="row col">
+          <div class="text">
+            <span class="label">动画款式</span>
+          </div>
+          <AppSegment v-model="bootStyleModel" :options="BOOT_STYLES" />
         </div>
       </section>
 
@@ -284,7 +339,7 @@ async function relaunchOobe(): Promise<void> {
   user-select: none;
 }
 .head h1 {
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-zoom, 1));
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -311,7 +366,7 @@ async function relaunchOobe(): Promise<void> {
   -webkit-backdrop-filter: var(--blur-material);
 }
 .group h2 {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text-3);
@@ -336,11 +391,11 @@ async function relaunchOobe(): Promise<void> {
   min-width: 0;
 }
 .label {
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
 }
 .desc {
   margin-top: 2px;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
 }
 .desc.mono {
@@ -362,7 +417,7 @@ async function relaunchOobe(): Promise<void> {
   border-radius: 8px;
   border: 1px solid var(--line-strong);
   background: var(--bg);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   color: var(--text);
 }
 .select:focus-visible {
@@ -370,7 +425,7 @@ async function relaunchOobe(): Promise<void> {
   border-color: var(--accent);
 }
 .note {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
 }
 /* ---------- 主题色卡：一小块「相纸台」示意，无渐变堆砌 ---------- */
@@ -388,6 +443,8 @@ async function relaunchOobe(): Promise<void> {
   background: none;
   cursor: pointer;
 }
+/* 主题色卡：微缩「照片条目卡」示意——文字行 + 相纸 + 强调点。
+   文字行用主题自己的文字色，深色主题靠亮色线条即可辨识 */
 .swatch {
   position: relative;
   display: block;
@@ -401,9 +458,26 @@ async function relaunchOobe(): Promise<void> {
 .theme:hover .swatch {
   border-color: var(--accent);
 }
+.swatch .ln,
+.swatch .ln2 {
+  position: absolute;
+  left: 8%;
+  height: 6%;
+  border-radius: 999px;
+  background: var(--sw-text);
+}
+.swatch .ln {
+  top: 12%;
+  width: 34%;
+}
+.swatch .ln2 {
+  top: 24%;
+  width: 20%;
+  background: var(--sw-text2);
+}
 .swatch .ph {
   position: absolute;
-  inset: 20% 18% 28%;
+  inset: 38% 18% 18%;
   border-radius: 3px;
   background: var(--sw-canvas);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
@@ -411,8 +485,8 @@ async function relaunchOobe(): Promise<void> {
 .swatch .dot {
   position: absolute;
   right: 7%;
-  bottom: 9%;
-  width: 15%;
+  bottom: 26%;
+  width: 9%;
   aspect-ratio: 1;
   border-radius: 50%;
   background: var(--sw-accent);
@@ -426,7 +500,7 @@ async function relaunchOobe(): Promise<void> {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .t-label {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
   text-align: center;
   transition: color var(--dur-hover) var(--ease-soft);
@@ -439,7 +513,7 @@ async function relaunchOobe(): Promise<void> {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--ok);
 }
 .update-hint.err {

@@ -373,7 +373,7 @@ const marqueeStyle = computed(() => {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .confirm-text {
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
   line-height: 1.6;
   color: var(--text);
   margin: 4px 0 14px;
@@ -390,7 +390,7 @@ const marqueeStyle = computed(() => {
   position: absolute;
   left: 4px;
   bottom: 3px;
-  font-size: 10px;
+  font-size: calc(10px * var(--ui-zoom, 1));
   line-height: 1;
   padding: 2px 4px;
   border-radius: 4px;
@@ -444,7 +444,7 @@ const marqueeStyle = computed(() => {
   align-items: center;
   gap: 6px;
   padding-top: 4px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-3);
   min-width: 0;
 }
@@ -466,7 +466,7 @@ const marqueeStyle = computed(() => {
   align-items: center;
   gap: 4px;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   padding: 2px 6px;
   border-radius: 5px;
   transition: color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);

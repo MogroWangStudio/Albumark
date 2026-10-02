@@ -270,11 +270,11 @@ onBeforeUnmount(() => ro?.disconnect())
   margin-bottom: 6px;
 }
 .label {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .hint {
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
 }
 .flex {

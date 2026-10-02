@@ -1674,7 +1674,7 @@ onBeforeUnmount(() => {
   background: var(--surface);
   backdrop-filter: var(--blur-material);
   -webkit-backdrop-filter: var(--blur-material);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .render-spin {
@@ -1710,7 +1710,7 @@ onBeforeUnmount(() => {
   background: var(--surface);
   backdrop-filter: var(--blur-material);
   -webkit-backdrop-filter: var(--blur-material);
-  font-size: 11px;
+  font-size: calc(11px * var(--ui-zoom, 1));
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
   transition: color var(--dur-hover) var(--ease-soft), border-color var(--dur-hover) var(--ease-soft),
@@ -1760,7 +1760,7 @@ onBeforeUnmount(() => {
   padding: 6px 10px;
   border-radius: 7px;
   text-align: left;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
   transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);

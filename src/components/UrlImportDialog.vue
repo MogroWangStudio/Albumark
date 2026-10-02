@@ -102,7 +102,7 @@ function close(): void {
   border: 1px solid var(--line-strong);
   background: var(--bg);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   line-height: 1.6;
 }
 .urls:focus-visible {
@@ -118,7 +118,7 @@ function close(): void {
 .ok-hint {
   margin-left: auto;
   color: var(--ok);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
 }
 .results {
   list-style: none;
@@ -136,7 +136,7 @@ function close(): void {
   gap: 8px;
   padding: 5px 8px;
   border-radius: 7px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
 }
 .results li.ok :deep(svg) {
   color: var(--ok);

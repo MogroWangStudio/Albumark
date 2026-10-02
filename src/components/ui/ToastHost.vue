@@ -45,7 +45,7 @@ const icons: Record<Toast['tone'], typeof Info> = {
   border: 1px solid var(--line);
   border-radius: 999px;
   box-shadow: var(--shadow-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
 }
 .toast.info {
   color: var(--text);

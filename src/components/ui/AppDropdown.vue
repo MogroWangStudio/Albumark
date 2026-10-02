@@ -138,7 +138,7 @@ function pick(item: DropdownItem): void {
   padding: 7px 10px;
   border-radius: 7px;
   text-align: left;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
   transition: background var(--dur-hover) var(--ease-soft);
 }
 .dd-item:hover:not(:disabled) {

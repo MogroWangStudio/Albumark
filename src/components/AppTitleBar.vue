@@ -148,7 +148,7 @@ function onClose(): void {
   border-radius: 999px;
   border: 1px solid var(--line);
   color: var(--text-2);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   max-width: 220px;
   transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
 }
@@ -184,7 +184,7 @@ function onClose(): void {
   height: 26px;
   padding: 0 11px;
   border-radius: 999px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   color: var(--text-2);
   transition:
     background var(--dur-hover) var(--ease-soft),

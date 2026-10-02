@@ -323,11 +323,11 @@ function onTrackUp(e: PointerEvent): void {
 }
 label {
   color: var(--text-2);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
 }
 .val {
   margin-left: auto;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   font-variant-numeric: tabular-nums;
   color: var(--text);
   cursor: ew-resize;
@@ -349,7 +349,7 @@ label {
   width: 76px;
   height: 20px;
   padding: 0 5px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   font-variant-numeric: tabular-nums;
   color: var(--text);
   text-align: right;

@@ -32,6 +32,7 @@ import { baseName } from '@/core/fs'
 import { toast } from '@/stores/toast'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
+import { useSettingsStore } from '@/stores/settings'
 import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -41,6 +42,7 @@ const wm = useWatermarkStore()
 const templates = useTemplatesStore()
 const ws = useWorkspaceStore()
 const adjust = useAdjustStore()
+const settings = useSettingsStore()
 
 const view = ref<'main' | 'studio' | 'settings'>('main')
 const urlOpen = ref(false)
@@ -617,10 +619,11 @@ onBeforeUnmount(() => {
     <div v-if="dragDepth > 0" class="drop-ring" aria-hidden="true" />
 
     <!-- 启动画面：纯 CSS 收尾（定时收起若遇上 rAF 停滞会让过渡永远卡住、盖住整个应用）。
-         三段编排：勾勒与填充在 LogoMark 的 intro 模式内，这里接管第三段——
-         形状放大渐隐的同时整层淡出，主界面从底下浮现 -->
-    <div class="boot" aria-hidden="true">
-      <LogoMark intro class="boot-logo" />
+         款式由设置选择：勾勒（默认三段式，编排见 LogoMark 的 intro 模式）/
+         快门（黑幕圆孔收开）/ 显影（药水中浮现）/ 闪光（快门灯闪现）；
+         关闭时直接渲染主界面 -->
+    <div v-if="settings.bootEnabled" class="boot" :class="`anim-${settings.bootStyle}`" aria-hidden="true">
+      <LogoMark :intro="settings.bootStyle === 'default'" class="boot-logo" />
     </div>
   </div>
 </template>
@@ -761,22 +764,33 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-/* 启动画面第三段：形状放大渐隐，整层同步淡出露出主界面（纯 CSS，可见性恢复也能走完）。
-   时间轴与 LogoMark 的 intro 编排衔接：勾勒 0–620ms，填充 500–1200ms，
-   1320ms 起放大消散——界面在层淡出中浮现，logo 在其上继续消散 */
+/* ---------- 启动画面：四款编排，全部纯 CSS（可见性恢复也能走完） ----------
+   共用骨架：.boot 覆盖层 + 居中 logo，收尾统一淡出 + visibility hidden。
+   勾勒（默认）：LogoMark 的 intro 三段式 + 放大消散；快门：黑幕圆孔收开；
+   显影：药水中浮现；闪光：快门灯闪现。时长都在 1.2–1.8s。 */
 .boot {
   position: fixed;
   inset: 0;
   z-index: 120;
   display: grid;
   place-items: center;
-  background: var(--bg);
   pointer-events: none;
-  animation: boot-out 400ms var(--ease) 1360ms forwards;
+  /* 无背景的款式靠自身的 boot-out 收尾；带背景款由背景承担遮盖 */
+  background: var(--bg);
 }
 .boot-logo {
   width: 108px;
   height: auto;
+  position: relative;
+  z-index: 2;
+}
+
+/* 勾勒（默认）：填充完成后放大消散，整层同步淡出露出主界面。
+   时间轴与 LogoMark 的 intro 编排衔接：勾勒 0–620ms，填充 500–1200ms */
+.boot.anim-default {
+  animation: boot-out 400ms var(--ease) 1360ms forwards;
+}
+.boot.anim-default .boot-logo {
   animation: boot-bloom 460ms ease-in 1320ms forwards;
 }
 @keyframes boot-bloom {
@@ -785,6 +799,132 @@ onBeforeUnmount(() => {
     transform: scale(1.45);
   }
 }
+
+/* 快门：幕像快门叶片一样从中心开孔，logo 先就位、幕收开后与界面交接。
+   幕是覆盖层（z 1，在 logo 之下），clip-path 圆孔从满屏收缩为 0；
+   幕色比主题底色偏移一档（混入文字色），浅色 / 深色主题下开孔都清晰可辨 */
+.boot.anim-shutter::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: color-mix(in srgb, var(--bg) 90%, var(--text));
+  animation: shutter-open 520ms cubic-bezier(0.7, 0, 0.3, 1) 680ms forwards;
+}
+.boot.anim-shutter .boot-logo {
+  animation: shutter-logo 2.6s var(--ease-soft) both, boot-bloom 400ms ease-in 820ms forwards;
+}
+@keyframes shutter-logo {
+  from {
+    opacity: 0;
+    transform: scale(0.82);
+  }
+  26% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes shutter-open {
+  from {
+    clip-path: circle(120% at 50% 50%);
+  }
+  to {
+    clip-path: circle(0% at 50% 50%);
+  }
+}
+
+/* 显影：照片在药水里浮现——模糊低对比渐显 + 显影时的轻微晃动 */
+.boot.anim-develop {
+  animation: boot-out 380ms var(--ease) 1420ms forwards;
+}
+.boot.anim-develop .boot-logo {
+  animation:
+    develop-sway 1.15s ease-in-out both,
+    develop-appear 1.15s ease both,
+    boot-bloom 420ms ease-in 1150ms forwards;
+}
+@keyframes develop-appear {
+  from {
+    opacity: 0;
+    filter: blur(9px) contrast(0.45) saturate(0.4);
+  }
+  55% {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 1;
+    filter: blur(0) contrast(1) saturate(1);
+  }
+}
+@keyframes develop-sway {
+  0% {
+    transform: rotate(-1.6deg) translateY(2px);
+  }
+  30% {
+    transform: rotate(1.3deg) translateY(-1px);
+  }
+  55% {
+    transform: rotate(-0.9deg) translateY(1px);
+  }
+  80%,
+  100% {
+    transform: rotate(0) translateY(0);
+  }
+}
+
+/* 闪光：快门灯闪现——白幕一闪而过，logo 剪影随即浮现再交还界面 */
+.boot.anim-flash {
+  background: var(--bg);
+  animation: boot-out 360ms var(--ease) 1240ms forwards;
+}
+.boot.anim-flash::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: #ffffff;
+  opacity: 0;
+  animation: flash-pop 520ms ease-out both;
+}
+.boot.anim-flash .boot-logo {
+  animation: flash-logo 1.1s var(--ease-soft) both, boot-bloom 380ms ease-in 1060ms forwards;
+}
+@keyframes flash-pop {
+  0% {
+    opacity: 0;
+  }
+  14% {
+    opacity: 0.95;
+  }
+  34% {
+    opacity: 0.12;
+  }
+  48% {
+    opacity: 0.62;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes flash-logo {
+  from {
+    opacity: 0;
+    transform: scale(1.12);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 @keyframes boot-out {
   to {
     opacity: 0;
@@ -795,8 +935,16 @@ onBeforeUnmount(() => {
   .boot {
     animation: boot-out 1ms ease 0ms forwards;
   }
-  .boot-logo {
+  .boot .boot-logo,
+  .boot.anim-default .boot-logo,
+  .boot.anim-shutter .boot-logo,
+  .boot.anim-develop .boot-logo,
+  .boot.anim-flash .boot-logo {
     animation: none;
+  }
+  .boot.anim-shutter::after,
+  .boot.anim-flash::after {
+    animation-duration: 1ms;
   }
 }
 

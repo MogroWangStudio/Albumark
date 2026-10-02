@@ -29,7 +29,7 @@ const emit = defineEmits<{
 .switch {
   position: relative;
   width: 34px;
-  height: 20px;
+  height: calc(20px * var(--ui-zoom, 1));
   border-radius: 10px;
   background: var(--line-strong);
   transition: background var(--dur-hover) var(--ease-soft);
@@ -46,7 +46,7 @@ const emit = defineEmits<{
   top: 2px;
   left: 2px;
   width: 16px;
-  height: 16px;
+  height: calc(16px * var(--ui-zoom, 1));
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);

@@ -139,12 +139,12 @@ function resetCropDraft(): void {
   border-bottom: 1px solid var(--line);
 }
 .head h1 {
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-zoom, 1));
   font-weight: 600;
   letter-spacing: 0;
 }
 .size {
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
@@ -202,7 +202,7 @@ function resetCropDraft(): void {
 }
 .hint {
   flex: 1;
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
   line-height: 1.4;
 }

@@ -76,7 +76,7 @@ function confirm(): void {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-zoom, 1));
   color: var(--text-2);
   margin-bottom: 10px;
 }
@@ -96,7 +96,7 @@ function confirm(): void {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
   font-family: var(--font-mono);
 }
@@ -113,14 +113,14 @@ function confirm(): void {
   margin-top: 14px;
 }
 .fl {
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 .copy-only {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
   color: var(--text);
 }
 .btns {

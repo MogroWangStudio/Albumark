@@ -73,14 +73,14 @@ const imgH = computed(() => {
   border-bottom: 1px solid var(--line);
 }
 .head h1 {
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-zoom, 1));
   font-weight: 600;
   letter-spacing: 0;
 }
 .fl {
   flex: 1;
   text-align: right;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
 }
 </style>

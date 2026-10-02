@@ -13,8 +13,8 @@ export interface ThemeDef {
   hint: string
   /** 解析后的明暗：画布投影、安卓状态栏等 JS 判断用 */
   mode: 'light' | 'dark'
-  /** 设置页色卡：界面底 / 照片区 / 强调色 */
-  swatch: { bg: string; canvas: string; accent: string }
+  /** 设置页色卡：界面底 / 照片区 / 强调色 / 文字色（微缩界面示意用） */
+  swatch: { bg: string; canvas: string; accent: string; text: string; text2: string }
 }
 
 /** 全部主题：auto/dark/light 之外，四款取自摄影与印相工艺 */
@@ -24,50 +24,66 @@ export const THEMES: ThemeDef[] = [
     label: '跟随系统',
     hint: '浅色 / 深色随系统切换',
     mode: 'dark',
-    swatch: { bg: '#ffffff', canvas: '#141210', accent: '#ffa72f' },
+    swatch: {
+      bg: '#ffffff',
+      canvas: '#141210',
+      accent: '#ffa72f',
+      text: 'linear-gradient(115deg, #26221e 0 50%, #f0ede8 50% 100%)',
+      text2: 'linear-gradient(115deg, #9c948a 0 50%, #7a746c 50% 100%)',
+    },
   },
   {
     id: 'light',
     label: '浅色',
     hint: '纯白底，照片是唯一焦点',
     mode: 'light',
-    swatch: { bg: '#ffffff', canvas: '#efedea', accent: '#ffa72f' },
+    swatch: { bg: '#ffffff', canvas: '#efedea', accent: '#ffa72f', text: '#26221e', text2: '#9c948a' },
   },
   {
     id: 'dark',
     label: '深色',
     hint: '纯黑底，照片更突出',
     mode: 'dark',
-    swatch: { bg: '#000000', canvas: '#161310', accent: '#ffa72f' },
+    swatch: { bg: '#000000', canvas: '#161310', accent: '#ffa72f', text: '#f0ede8', text2: '#7a746c' },
   },
   {
     id: 'darkroom',
     label: '暗房',
     hint: '放大机旁的相纸台：暖黑墙面、安全灯余烬',
     mode: 'dark',
-    swatch: { bg: '#17120e', canvas: '#0d0a07', accent: '#e06b3a' },
+    swatch: { bg: '#17120e', canvas: '#0d0a07', accent: '#e06b3a', text: '#f1e7da', text2: '#837463' },
   },
   {
     id: 'cyanotype',
     label: '蓝晒',
     hint: '普鲁士蓝上晒出的白影',
     mode: 'dark',
-    swatch: { bg: '#0d1b28', canvas: '#081420', accent: '#5fa8cc' },
+    swatch: { bg: '#0d1b28', canvas: '#081420', accent: '#5fa8cc', text: '#dde9f3', text2: '#5e7c93' },
   },
   {
     id: 'paper',
     label: '纸墨',
     hint: '宣纸、墨字、一枚朱砂印',
     mode: 'light',
-    swatch: { bg: '#f5f0e6', canvas: '#ebe5d7', accent: '#c2412a' },
+    swatch: { bg: '#f5f0e6', canvas: '#ebe5d7', accent: '#c2412a', text: '#2e281f', text2: '#a3977f' },
   },
   {
     id: 'gallery',
     label: '画廊',
     hint: '展墙、卡纸与黄铜牌',
     mode: 'light',
-    swatch: { bg: '#efebe3', canvas: '#e5e0d5', accent: '#86641f' },
+    swatch: { bg: '#efebe3', canvas: '#e5e0d5', accent: '#86641f', text: '#221d15', text2: '#9a9080' },
   },
+]
+
+/** 启动动画款式：勾勒（默认三段式）/ 快门 / 显影 / 闪光 */
+export type BootStyle = 'default' | 'shutter' | 'develop' | 'flash'
+
+export const BOOT_STYLES: { value: BootStyle; label: string }[] = [
+  { value: 'default', label: '勾勒' },
+  { value: 'shutter', label: '快门' },
+  { value: 'develop', label: '显影' },
+  { value: 'flash', label: '闪光' },
 ]
 
 export interface AppSettings {
@@ -75,6 +91,12 @@ export interface AppSettings {
   theme: ThemeMode
   /** 界面显示字体：字体族名；空 = 系统默认栈 */
   fontFamily: string
+  /** 界面字号缩放：0.9 小 / 1 标准 / 1.1 大 / 1.25 特大 */
+  uiZoom: number
+  /** 启动动画：关闭后直接进入主界面 */
+  bootEnabled: boolean
+  /** 启动动画款式 */
+  bootStyle: BootStyle
   /** 导入时提醒缺少 EXIF 元数据 */
   exifNotice: boolean
   /** 预览安全区：图片最小缩放值（1 = 适应窗口，可小于 1 缩得更小） */
@@ -93,6 +115,9 @@ const PERSIST_KEY = 'albumark.settings.v1'
 const DEFAULTS: AppSettings = {
   theme: 'auto',
   fontFamily: '',
+  uiZoom: 1,
+  bootEnabled: true,
+  bootStyle: 'default',
   exifNotice: true,
   minZoom: 1,
   previewQuality: 'high',
@@ -122,6 +147,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const initial = load()
   const theme = ref<ThemeMode>(initial.theme)
   const fontFamily = ref(initial.fontFamily)
+  const uiZoom = ref(initial.uiZoom)
+  const bootEnabled = ref(initial.bootEnabled)
+  const bootStyle = ref<BootStyle>(initial.bootStyle)
   const exifNotice = ref(initial.exifNotice)
   const minZoom = ref(initial.minZoom)
   const previewQuality = ref<PreviewQuality>(initial.previewQuality)
@@ -138,6 +166,9 @@ export const useSettingsStore = defineStore('settings', () => {
         JSON.stringify({
           theme: theme.value,
           fontFamily: fontFamily.value,
+          uiZoom: uiZoom.value,
+          bootEnabled: bootEnabled.value,
+          bootStyle: bootStyle.value,
           exifNotice: exifNotice.value,
           minZoom: minZoom.value,
           previewQuality: previewQuality.value,
@@ -171,6 +202,11 @@ export const useSettingsStore = defineStore('settings', () => {
     else rootStyle.removeProperty('--font')
   }
 
+  /** 界面字号缩放：全局 font-size 与控件高度都乘这个系数（见 --ui-zoom） */
+  function applyZoom(): void {
+    document.documentElement.style.setProperty('--ui-zoom', String(uiZoom.value))
+  }
+
   async function syncSystemBars(): Promise<void> {
     if (!isCapacitor) return
     // auto 交给系统原生跟随；手动主题按解析出的明暗设图标色
@@ -185,6 +221,7 @@ export const useSettingsStore = defineStore('settings', () => {
   watchEffect(() => {
     applyTheme()
     applyFont()
+    applyZoom()
     persist()
     void syncSystemBars()
   })
@@ -196,6 +233,9 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     theme,
     fontFamily,
+    uiZoom,
+    bootEnabled,
+    bootStyle,
     exifNotice,
     minZoom,
     previewQuality,
