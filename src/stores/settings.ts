@@ -4,7 +4,15 @@ import { registerPlugin } from '@capacitor/core'
 import { isCapacitor, isTauri } from '@/core/platform'
 
 export type ThemeMode = 'auto' | 'dark' | 'light' | 'darkroom' | 'cyanotype' | 'paper' | 'gallery'
-export type PreviewQuality = 'high' | 'balanced' | 'eco'
+/**
+ * 预览渲染质量：五档预设 + custom（自定义档位）。
+ * 自定义时 previewQualityValue 为精修长边像素，即时档与叠加层密度随之派生。
+ */
+export type PreviewQuality = 'ultra' | 'high' | 'balanced' | 'eco' | 'minimal' | 'custom'
+
+/** 自定义预览精度的取值范围（精修长边像素） */
+export const PREVIEW_CUSTOM_MIN = 600
+export const PREVIEW_CUSTOM_MAX = 2400
 
 export interface ThemeDef {
   id: ThemeMode
@@ -101,8 +109,10 @@ export interface AppSettings {
   exifNotice: boolean
   /** 预览安全区：图片最小缩放值（1 = 适应窗口，可小于 1 缩得更小） */
   minZoom: number
-  /** 预览渲染质量：影响精修分辨率与 DPR 上限（低端设备可调低省电） */
+  /** 预览渲染质量：预设档位或 custom（配合 previewQualityValue 无极调整） */
   previewQuality: PreviewQuality
+  /** 自定义预览精度：精修长边像素（仅 previewQuality = 'custom' 时生效） */
+  previewQualityValue: number
   /** 水印拖动吸附与参考线 */
   wmSnap: boolean
   /** 软件数据目录（桌面端 OOBE 设置；空 = 便携版 exe 根目录） */
@@ -121,6 +131,7 @@ const DEFAULTS: AppSettings = {
   exifNotice: true,
   minZoom: 1,
   previewQuality: 'high',
+  previewQualityValue: 1200,
   wmSnap: true,
   dataDir: '',
   // 非桌面端没有本地数据目录概念，直接跳过引导
@@ -153,6 +164,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const exifNotice = ref(initial.exifNotice)
   const minZoom = ref(initial.minZoom)
   const previewQuality = ref<PreviewQuality>(initial.previewQuality)
+  const previewQualityValue = ref(initial.previewQualityValue)
   const wmSnap = ref(initial.wmSnap)
   const dataDir = ref(initial.dataDir)
   const oobeDone = ref(initial.oobeDone)
@@ -172,6 +184,7 @@ export const useSettingsStore = defineStore('settings', () => {
           exifNotice: exifNotice.value,
           minZoom: minZoom.value,
           previewQuality: previewQuality.value,
+          previewQualityValue: previewQualityValue.value,
           wmSnap: wmSnap.value,
           dataDir: dataDir.value,
           oobeDone: oobeDone.value,
@@ -239,6 +252,7 @@ export const useSettingsStore = defineStore('settings', () => {
     exifNotice,
     minZoom,
     previewQuality,
+    previewQualityValue,
     wmSnap,
     dataDir,
     oobeDone,

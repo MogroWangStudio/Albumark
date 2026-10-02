@@ -9,7 +9,7 @@ import { renderClient } from '@/core/renderer'
 import { resolveTokens } from '@/core/tokens'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
-import { useSettingsStore } from '@/stores/settings'
+import { PREVIEW_CUSTOM_MAX, PREVIEW_CUSTOM_MIN, useSettingsStore } from '@/stores/settings'
 import { useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -36,11 +36,26 @@ const ws = useWorkspaceStore()
 const MAX_ZOOM = 12
 const DBL_TAP_ZOOM = 2.5
 
-/** 预览质量 → 精修长边上限 / 草稿长边上限 / 叠加层 DPR 上限 */
+/** 预设档位 → 精修长边上限 / 草稿长边上限 / 叠加层 DPR 上限 */
 const PERF: Record<string, { final: number; draft: number; dprCap: number }> = {
+  ultra: { final: 2400, draft: 1080, dprCap: 2 },
   high: { final: 1600, draft: 720, dprCap: 2 },
   balanced: { final: 1200, draft: 560, dprCap: 1.5 },
   eco: { final: 880, draft: 440, dprCap: 1 },
+  minimal: { final: 640, draft: 320, dprCap: 1 },
+}
+
+/** 自定义档位：精度（精修长边）无极可调，即时档与叠加层密度随之派生 */
+function perfFor(q: string, custom: number): { final: number; draft: number; dprCap: number } {
+  if (q === 'custom') {
+    const final = Math.min(PREVIEW_CUSTOM_MAX, Math.max(PREVIEW_CUSTOM_MIN, custom))
+    return {
+      final,
+      draft: Math.max(320, Math.round(final * 0.45)),
+      dprCap: final >= 1600 ? 2 : final >= 1200 ? 1.5 : 1,
+    }
+  }
+  return PERF[q] ?? PERF.high!
 }
 
 const frame = ref<HTMLDivElement | null>(null)
@@ -93,7 +108,7 @@ const assetBmps: AssetMap = new Map()
 const active = computed(() => images.active)
 const hasSelection = computed(() => !!wm.selectedId)
 const minZoom = computed(() => Math.min(1, Math.max(0.3, settings.minZoom)))
-const perf = computed(() => PERF[settings.previewQuality] ?? PERF.high!)
+const perf = computed(() => perfFor(settings.previewQuality, settings.previewQualityValue))
 
 /* ---------- 可用区域：悬浮面板让位，中心偏移到剩余空白 ---------- */
 
@@ -1428,6 +1443,7 @@ watch(
     () => adjust.values,
     () => adjust.perImage,
     () => settings.previewQuality,
+    () => settings.previewQualityValue,
     () => adjust.cropMode,
     () => adjust.crops,
   ],

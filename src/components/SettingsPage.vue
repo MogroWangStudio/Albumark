@@ -11,6 +11,8 @@ import { APP_VERSION } from '@/core/version'
 import { FONT_CATEGORY_LABELS, useFontsStore, type FontCategory } from '@/stores/fonts'
 import {
   BOOT_STYLES,
+  PREVIEW_CUSTOM_MAX,
+  PREVIEW_CUSTOM_MIN,
   THEMES,
   useSettingsStore,
   type BootStyle,
@@ -64,6 +66,11 @@ const bootStyleModel = computed({
 const qualityModel = computed({
   get: () => settings.previewQuality,
   set: (v: unknown) => (settings.previewQuality = v as PreviewQuality),
+})
+
+const qualityValueModel = computed({
+  get: () => settings.previewQualityValue,
+  set: (v: number) => (settings.previewQualityValue = v),
 })
 
 const minZoomModel = computed({
@@ -240,11 +247,29 @@ async function relaunchOobe(): Promise<void> {
           <AppSegment
             v-model="qualityModel"
             :options="[
+              { value: 'ultra', label: '极致' },
               { value: 'high', label: '高质量' },
               { value: 'balanced', label: '均衡' },
               { value: 'eco', label: '省电' },
+              { value: 'minimal', label: '极省' },
+              { value: 'custom', label: '自定义' },
             ]"
           />
+          <AppSlider
+            v-if="settings.previewQuality === 'custom'"
+            v-model="qualityValueModel"
+            :min="PREVIEW_CUSTOM_MIN"
+            :max="PREVIEW_CUSTOM_MAX"
+            :step="50"
+            label="预览精度"
+            :format="(v) => `${v} px`"
+            :default="1200"
+            @reset="settings.previewQualityValue = 1200"
+          />
+          <p class="note">
+            预览精度是放大查看时的渲染长边（像素）：越高越清晰，耗电与发热越高；
+            导出始终使用原图全分辨率，不受此设置影响。
+          </p>
         </div>
       </section>
 
