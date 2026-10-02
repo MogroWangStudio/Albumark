@@ -101,6 +101,8 @@ const SCRUB_RANGE = 300
 
 const scrubbing = ref(false)
 let scrub: { startX: number; startVal: number; active: boolean } | null = null
+/** 最近一次按下的指针类型：触屏上的双触也会合成 dblclick，用它挡掉键入 */
+let lastPointerType = ''
 
 /** 拖满 SCRUB_RANGE px 走完整个范围，比轨道宽度更缓，便于细调；按 step 取整 */
 function applyScrub(dx: number): void {
@@ -116,6 +118,7 @@ function applyScrub(dx: number): void {
 
 function onValDown(e: PointerEvent): void {
   if (props.disabled || e.button !== 0) return
+  lastPointerType = e.pointerType
   ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
   scrub = { startX: e.clientX, startVal: props.modelValue, active: false }
 }
@@ -135,12 +138,16 @@ function onValMove(e: PointerEvent): void {
 
 function onValUp(e: PointerEvent): void {
   if (!scrub) return
-  const tapped = !scrub.active
   scrub = null
   scrubbing.value = false
   ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
-  // 触屏点按数字：直接进入键入（桌面仍为双击键入）
-  if (tapped && e.type === 'pointerup' && e.pointerType === 'touch') startEdit()
+  // 触屏点按不进入键入：安卓端数值只允许拖动调整，键入保留给桌面双击
+}
+
+/** 双击数值键入；触屏上的点按 / 双触一律不算（lastPointerType 由 pointerdown 记录） */
+function onValDblClick(): void {
+  if (lastPointerType === 'touch') return
+  startEdit()
 }
 
 /* ---------- 触屏：轨道完全不可操作（安卓适配） ----------
@@ -188,7 +195,7 @@ function onTouchDown(e: PointerEvent): void {
         @pointermove="onValMove"
         @pointerup="onValUp"
         @pointercancel="onValUp"
-        @dblclick.stop="startEdit"
+        @dblclick.stop="onValDblClick"
       >{{ display }}</span>
     </div>
     <input
