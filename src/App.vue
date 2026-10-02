@@ -616,9 +616,11 @@ onBeforeUnmount(() => {
 
     <div v-if="dragDepth > 0" class="drop-ring" aria-hidden="true" />
 
-    <!-- 启动画面：纯 CSS 收尾（定时收起若遇上 rAF 停滞会让过渡永远卡住、盖住整个应用） -->
+    <!-- 启动画面：纯 CSS 收尾（定时收起若遇上 rAF 停滞会让过渡永远卡住、盖住整个应用）。
+         三段编排：勾勒与填充在 LogoMark 的 intro 模式内，这里接管第三段——
+         形状放大渐隐的同时整层淡出，主界面从底下浮现 -->
     <div class="boot" aria-hidden="true">
-      <LogoMark class="boot-logo" />
+      <LogoMark intro class="boot-logo" />
     </div>
   </div>
 </template>
@@ -759,7 +761,9 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-/* 启动画面：品牌标记淡入就位后整层淡出收尾（纯 CSS，可见性恢复也能走完） */
+/* 启动画面第三段：形状放大渐隐，整层同步淡出露出主界面（纯 CSS，可见性恢复也能走完）。
+   时间轴与 LogoMark 的 intro 编排衔接：勾勒 0–620ms，填充 500–1200ms，
+   1320ms 起放大消散——界面在层淡出中浮现，logo 在其上继续消散 */
 .boot {
   position: fixed;
   inset: 0;
@@ -768,21 +772,17 @@ onBeforeUnmount(() => {
   place-items: center;
   background: var(--bg);
   pointer-events: none;
-  animation: boot-out 240ms ease 560ms forwards;
+  animation: boot-out 400ms var(--ease) 1360ms forwards;
 }
 .boot-logo {
-  width: 72px;
+  width: 108px;
   height: auto;
-  animation: boot-in 420ms var(--ease-soft) both;
+  animation: boot-bloom 460ms ease-in 1320ms forwards;
 }
-@keyframes boot-in {
-  from {
-    opacity: 0;
-    transform: scale(0.92);
-  }
+@keyframes boot-bloom {
   to {
-    opacity: 1;
-    transform: scale(1);
+    opacity: 0;
+    transform: scale(1.45);
   }
 }
 @keyframes boot-out {
@@ -793,7 +793,10 @@ onBeforeUnmount(() => {
 }
 @media (prefers-reduced-motion: reduce) {
   .boot {
-    animation-duration: 1ms;
+    animation: boot-out 1ms ease 0ms forwards;
+  }
+  .boot-logo {
+    animation: none;
   }
 }
 
