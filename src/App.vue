@@ -801,8 +801,13 @@ onBeforeUnmount(() => {
 }
 
 /* 快门：幕像快门叶片一样从中心开孔，logo 先就位、幕收开后与界面交接。
-   幕是覆盖层（z 1，在 logo 之下），clip-path 圆孔从满屏收缩为 0；
-   幕色比主题底色偏移一档（混入文字色），浅色 / 深色主题下开孔都清晰可辨 */
+   boot 本体必须保持透明——遮盖全由幕（::after）承担，否则幕收开后
+   露出的是 boot 自身背景、主界面永远出不来；幕色比主题底色偏移一档
+   （混入文字色），浅色 / 深色主题下开孔都清晰可辨 */
+.boot.anim-shutter {
+  background: transparent;
+  animation: boot-out 320ms var(--ease) 1180ms forwards;
+}
 .boot.anim-shutter::after {
   content: '';
   position: absolute;
