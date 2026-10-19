@@ -6,6 +6,16 @@ export const isCapacitor =
   !isTauri
 
 /**
+ * macOS 桌面端：窗口保留原生标题栏（decorations + Overlay，
+ * 见 src-tauri/tauri.macos.conf.json），由系统绘制窗口圆角与红绿灯。
+ * 前端据此隐藏自绘窗控、给红绿灯让出版位。
+ */
+export const isMacDesktop =
+  isTauri &&
+  typeof navigator !== 'undefined' &&
+  /mac/i.test(navigator.platform || navigator.userAgent)
+
+/**
  * 程序（exe）所在目录，便携版数据默认放这里。
  * 官方 path.executableDir 底层在 Windows/macOS 返回空值（dirs crate 不支持），
  * 因此走自定义 Rust 命令取 current_exe 的父目录。

@@ -393,8 +393,10 @@ async function relaunchOobe(): Promise<void> {
   display: flex;
   align-items: center;
   gap: 10px;
-  /* 顶部避开状态栏（安卓全面屏下页面从屏幕最顶端开始） */
-  padding: calc(10px + var(--safe-top)) calc(12px + var(--safe-right)) 10px calc(12px + var(--safe-left));
+  /* 顶部避开状态栏（安卓全面屏下页面从屏幕最顶端开始）；
+     左侧让出 macOS 原生红绿灯 */
+  padding: calc(10px + var(--safe-top)) calc(12px + var(--safe-right)) 10px
+    calc(12px + var(--traffic-light-inset) + var(--safe-left));
   border-bottom: 1px solid var(--line);
   flex: none;
   user-select: none;

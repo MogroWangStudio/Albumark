@@ -5,7 +5,7 @@ import LayerEditor from '@/components/LayerEditor.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { type AssetMap } from '@/core/draw'
-import { makeSampleBitmap, paintComposed, SAMPLE_H, SAMPLE_W } from '@/core/sample'
+import { loadSampleBitmap, paintComposed, SAMPLE_VARIANTS, type SampleOrientation } from '@/core/sample'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { resolveTokens, SAMPLE_EXIF } from '@/core/tokens'
 import { toast } from '@/stores/toast'
@@ -92,20 +92,22 @@ let sampleBmp: ImageBitmap | null = null
 const assetBmps: AssetMap = new Map()
 let rafPending = false
 
-/* ---------- 样张方向：横屏 3:2 ⇄ 竖屏 2:3 ----------
+/* ---------- 样张方向：横屏 16:9 ⇄ 竖屏 9:16 ----------
+   两张品牌底图分别作为横 / 竖样张（1920×1080 / 1080×1920）。
    竖构图是水印最容易翻车的场景（贴边文字、九宫格锚点在窄画幅上的观感完全不同），
-   两套尺寸按同一套构图重绘，切换时重置视图，便于随时对照检查。 */
+   切换时重置视图，便于随时对照检查。 */
 const portrait = ref(false)
-const sampleW = computed(() => (portrait.value ? SAMPLE_H : SAMPLE_W))
-const sampleH = computed(() => (portrait.value ? SAMPLE_W : SAMPLE_H))
-/** 两个方向的样张位图各缓存一份：来回切换不重复绘制 */
-const sampleBmps = new Map<'landscape' | 'portrait', ImageBitmap>()
+const orientation = computed<SampleOrientation>(() => (portrait.value ? 'portrait' : 'landscape'))
+const sampleW = computed(() => SAMPLE_VARIANTS[orientation.value].w)
+const sampleH = computed(() => SAMPLE_VARIANTS[orientation.value].h)
+/** 两个方向的样张位图各缓存一份：来回切换不重复解码 */
+const sampleBmps = new Map<SampleOrientation, ImageBitmap>()
 
 async function ensureSampleBitmap(): Promise<ImageBitmap> {
-  const key = portrait.value ? 'portrait' : 'landscape'
+  const key = orientation.value
   const cached = sampleBmps.get(key)
   if (cached) return cached
-  const bmp = await makeSampleBitmap(sampleW.value, sampleH.value)
+  const bmp = await loadSampleBitmap(SAMPLE_VARIANTS[key])
   sampleBmps.set(key, bmp)
   return bmp
 }
@@ -711,7 +713,7 @@ watch(mode, async (m) => {
             class="orient-btn"
             :class="{ on: !portrait }"
             :aria-pressed="!portrait"
-            title="横屏样张 3:2"
+            title="横屏样张 16:9"
             @click="setOrientation(false)"
           >
             横屏
@@ -720,7 +722,7 @@ watch(mode, async (m) => {
             class="orient-btn"
             :class="{ on: portrait }"
             :aria-pressed="portrait"
-            title="竖屏样张 2:3"
+            title="竖屏样张 9:16"
             @click="setOrientation(true)"
           >
             竖屏
@@ -759,7 +761,9 @@ watch(mode, async (m) => {
   align-items: center;
   gap: 8px;
   height: calc(46px + var(--safe-top));
-  padding: var(--safe-top) calc(14px + var(--safe-right)) 0 calc(14px + var(--safe-left));
+  /* 左侧让出 macOS 原生红绿灯（其余平台为 0） */
+  padding: var(--safe-top) calc(14px + var(--safe-right)) 0
+    calc(14px + var(--traffic-light-inset) + var(--safe-left));
   flex: none;
   border-bottom: 1px solid var(--line);
 }

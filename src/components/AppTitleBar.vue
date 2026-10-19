@@ -12,7 +12,7 @@ import {
   X,
 } from 'lucide-vue-next'
 import LogoText from '@/components/brand/LogoText.vue'
-import { isTauri } from '@/core/platform'
+import { isMacDesktop, isTauri } from '@/core/platform'
 import { useHistoryStore } from '@/stores/history'
 import { useWorkspaceStore } from '@/stores/workspace'
 
@@ -26,6 +26,8 @@ const emit = defineEmits<{
 const ws = useWorkspaceStore()
 const history = useHistoryStore()
 const pressed = ref(false)
+/** macOS 用系统红绿灯与系统窗口圆角，前端不再画窗控 */
+const mac = isMacDesktop
 
 /** 快捷键提示按平台显示：macOS 用 ⌘，其余用 Ctrl+ */
 const mod = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl+'
@@ -125,7 +127,7 @@ function onClose(): void {
         </button>
       </div>
 
-      <div v-if="isTauri" class="win-controls">
+      <div v-if="isTauri && !mac" class="win-controls">
         <button class="win-btn" aria-label="最小化" @click="onMinimize"><Minus :size="14" /></button>
         <button class="win-btn" aria-label="最大化/还原" @click="onMaximize"><Square :size="11" /></button>
         <button class="win-btn close" aria-label="关闭" @click="onClose"><X :size="14" /></button>
@@ -141,7 +143,8 @@ function onClose(): void {
   justify-content: space-between;
   gap: 12px;
   height: calc(46px + var(--safe-top));
-  padding: var(--safe-top) calc(10px + var(--safe-right)) 0 calc(10px + var(--safe-left));
+  /* 左侧让出系统红绿灯（macOS 为 78px，其余平台 0），窗口圆角由系统绘制 */
+  padding: var(--safe-top) calc(10px + var(--safe-right)) 0 calc(10px + var(--traffic-light-inset) + var(--safe-left));
   flex: none;
   user-select: none;
   /* 无边框窗口的拖拽区：整条标题栏都可拖（按钮落点由子元素自己接管） */

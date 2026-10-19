@@ -1,10 +1,19 @@
 import { drawLayers, type AssetMap } from './draw'
 import { resolveTokens, SAMPLE_EXIF } from './tokens'
 import type { SerializedAsset, WatermarkLayer } from '@/types/watermark'
+import landscapeUrl from '@/assets/samples/studio-landscape.jpg'
+import portraitUrl from '@/assets/samples/studio-portrait.jpg'
 
-/** 样张尺寸：工作室预览与模板缩略图共用同一构图 */
-export const SAMPLE_W = 1600
-export const SAMPLE_H = 1067
+/**
+ * 工作室样张：横 / 竖两张品牌底图（1920×1080 / 1080×1920）。
+ * 尺寸与素材文件保持一致——画布、命中测试、边框扩展都以这里的宽高为基准。
+ */
+export const SAMPLE_VARIANTS = {
+  landscape: { url: landscapeUrl, w: 1920, h: 1080 },
+  portrait: { url: portraitUrl, w: 1080, h: 1920 },
+} as const
+
+export type SampleOrientation = keyof typeof SAMPLE_VARIANTS
 
 /** 生成一张干净的样张（黄昏海面），画到任意 2D 上下文上 */
 export function drawSample(
@@ -135,12 +144,30 @@ export function paintComposed(
   return { photoX: rx, photoY: ry, frameW, frameH }
 }
 
-/** 位图版样张：工作室画布 drawImage 用。可传入横 / 竖屏尺寸，同一套构图按比例重绘 */
-export async function makeSampleBitmap(w = SAMPLE_W, h = SAMPLE_H): Promise<ImageBitmap> {
-  const oc = new OffscreenCanvas(w, h)
-  const ctx = oc.getContext('2d') as OffscreenCanvasRenderingContext2D
-  drawSample(ctx, w, h)
-  return await createImageBitmap(oc)
+/**
+ * 位图版样张：读取 @/assets 里的品牌底图（Vite 会把它们打进构建产物）。
+ * 素材缺失或被拦截时回退到手绘样张，画布不会空着——工作室仍然可用。
+ */
+export async function loadSampleBitmap(
+  variant: { url: string; w: number; h: number } = SAMPLE_VARIANTS.landscape,
+): Promise<ImageBitmap> {
+  try {
+    const img = new Image()
+    // 先挂事件再设 src：缓存命中也一定会走 onload，不会漏掉回调
+    const ready = new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('样张素材加载失败'))
+    })
+    img.src = variant.url
+    await ready
+    return await createImageBitmap(img)
+  } catch {
+    // 素材缺失时回退到手绘样张：工作室仍然可用，只是看不到品牌底图
+    const oc = new OffscreenCanvas(variant.w, variant.h)
+    const ctx = oc.getContext('2d') as OffscreenCanvasRenderingContext2D
+    drawSample(ctx, variant.w, variant.h)
+    return await createImageBitmap(oc)
+  }
 }
 
 /** 素材 dataUrl → 位图（模板缩略图渲染用） */
@@ -160,7 +187,7 @@ async function assetBitmaps(list: SerializedAsset[]): Promise<AssetMap> {
 /** 模板缩略图的样张位图：模块内惰性生成一份供各处复用 */
 let thumbSampleBmp: ImageBitmap | null = null
 async function ensureThumbSample(): Promise<ImageBitmap> {
-  if (!thumbSampleBmp) thumbSampleBmp = await makeSampleBitmap()
+  if (!thumbSampleBmp) thumbSampleBmp = await loadSampleBitmap(SAMPLE_VARIANTS.landscape)
   return thumbSampleBmp
 }
 
@@ -184,7 +211,11 @@ export async function renderTemplateThumb(
   const resolved = layers.map((l) =>
     l.type === 'text' ? { ...l, content: resolveTokens(l.content, SAMPLE_EXIF, '样张') } : l,
   )
-  // 先算含边框的最终画布尺寸，再按容器适应
+  // 先算含边框的最终画布尺寸，再按容器适应。
+  // 基准尺寸以样张位图自身为准：素材换了尺寸也不会错位
+  const sample = await ensureThumbSample()
+  const baseW = sample.width
+  const baseH = sample.height
   let extL = 0
   let extT = 0
   let extR = 0
@@ -197,12 +228,12 @@ export async function renderTemplateThumb(
       extB += l.bottom
     }
   }
-  const frameW = SAMPLE_W + extL + extR
-  const frameH = SAMPLE_H + extT + extB
+  const frameW = baseW + extL + extR
+  const frameH = baseH + extT + extB
   const fit = Math.min(cw / frameW, ch / frameH)
   ctx.translate((cw - frameW * fit) / 2, (ch - frameH * fit) / 2)
   ctx.scale(fit, fit)
   const bmps = await assetBitmaps(assets)
-  paintComposed(ctx, await ensureThumbSample(), SAMPLE_W, SAMPLE_H, resolved, bmps)
+  paintComposed(ctx, sample, baseW, baseH, resolved, bmps)
   for (const b of bmps.values()) b.close()
 }

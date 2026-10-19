@@ -69,6 +69,11 @@
   --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
   --safe-left: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
   --safe-right: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
+
+  /* macOS 原生红绿灯占位：0 = 无系统窗控（Windows / 安卓 / 浏览器）。
+     macOS 桌面端由 main.ts 写成 78px（14px 起始 + 3×12px 按钮 + 2×8px 间距 + 12px 呼吸），
+     标题栏、水印工作室与设置页的左侧内容据此让位。 */
+  --traffic-light-inset: 0px;
 }
 
 :root[data-theme='light'] {
