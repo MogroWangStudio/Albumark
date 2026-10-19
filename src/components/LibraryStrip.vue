@@ -315,7 +315,12 @@ const marqueeStyle = computed(() => {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding-bottom: 4px;
+  /* 固定高度：横向滚动条出现 / 消失不再改变照片条高度。
+     否则照片数量变化会把上方预览整体顶动一截（切页时尤其明显） */
+  height: 76px;
+  align-items: flex-start;
 }
 .thumb {
   position: relative;

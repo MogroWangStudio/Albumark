@@ -1,8 +1,16 @@
-import type { Adjustments } from '@/types/adjust'
-import { DENOISE_DEFAULT, isCurveNeutral, isHslNeutral, VIGNETTE_DEFAULTS } from '@/types/adjust'
+import type { Adjustments, Curves, HslShift } from '@/types/adjust'
+import {
+  DENOISE_DEFAULT,
+  isCurveNeutral,
+  isCurvesNeutral,
+  isHslNeutral,
+  VIGNETTE_DEFAULTS,
+} from '@/types/adjust'
 
 /** HSL 色带中心（度），与 HSL_BANDS 一致：红 橙 黄 绿 青 蓝 紫 洋红 */
 const HUE_CENTERS = [0, 30, 60, 120, 180, 240, 270, 300]
+/** 跨色带的过渡宽度（度）：色带中心之间做线性交叉淡化，避免硬边 */
+const HUE_LUT_SIZE = 360
 
 /* ---------- 色调曲线 ---------- */
 
@@ -91,6 +99,82 @@ export function buildCurveLut(curve?: number[]): Uint8Array | null {
   return lut
 }
 
+/* ---------- 分通道曲线 ---------- */
+
+type CurveLuts = {
+  r: Uint8Array | null
+  g: Uint8Array | null
+  b: Uint8Array | null
+  rgb: Uint8Array | null
+}
+
+/**
+ * 四条曲线的查找表。应用顺序与 Photoshop 一致：先单通道、后合成通道。
+ * 旧数据只有 curve（合成曲线）：curves.rgb 缺省时用它顶上，老照片的色调不丢。
+ */
+function buildCurveLuts(a: Adjustments): CurveLuts | null {
+  const c: Curves | undefined = a.curves
+  const rgbCurve = c?.rgb ?? a.curve
+  if (isCurvesNeutral(c) && isCurveNeutral(rgbCurve)) return null
+  const luts: CurveLuts = {
+    r: isCurveNeutral(c?.r) ? null : buildCurveLut(c?.r),
+    g: isCurveNeutral(c?.g) ? null : buildCurveLut(c?.g),
+    b: isCurveNeutral(c?.b) ? null : buildCurveLut(c?.b),
+    rgb: isCurveNeutral(rgbCurve) ? null : buildCurveLut(rgbCurve),
+  }
+  if (!luts.r && !luts.g && !luts.b && !luts.rgb) return null
+  return luts
+}
+
+/* ---------- HSL 分色 ---------- */
+
+/**
+ * 把「8 色带的色相 / 饱和度 / 亮度偏移」烘焙成 360° 查找表（每度 dh, ds, dl）。
+ * 逐像素再做一次插值即可，避免每个像素都跑一遍色带匹配。
+ * 权重按相邻色带中心线性交叉 + smoothstep，色带中心全量生效、中点各半。
+ */
+function buildHueShiftLut(hs: HslShift): Float32Array {
+  const lut = new Float32Array(HUE_LUT_SIZE * 3)
+  const at = (arr: number[] | undefined, i: number): number => arr?.[i] ?? 0
+  for (let h = 0; h < HUE_LUT_SIZE; h++) {
+    let seg = 7
+    for (let i = 0; i < 7; i++) {
+      if (h >= HUE_CENTERS[i] && h < HUE_CENTERS[i + 1]) {
+        seg = i
+        break
+      }
+    }
+    const next = seg === 7 ? 0 : seg + 1
+    const span = (seg === 7 ? 360 : HUE_CENTERS[next]) - HUE_CENTERS[seg]
+    const tRaw = span > 0 ? (h - HUE_CENTERS[seg]) / span : 0
+    const t = tRaw * tRaw * (3 - 2 * tRaw)
+    const w0 = 1 - t
+    const w1 = t
+    lut[h * 3] = (w0 * at(hs.h, seg) + w1 * at(hs.h, next)) * 0.75
+    lut[h * 3 + 1] = (w0 * at(hs.s, seg) + w1 * at(hs.s, next)) / 100
+    lut[h * 3 + 2] = (w0 * at(hs.l, seg) + w1 * at(hs.l, next)) / 100
+  }
+  return lut
+}
+
+/* ---------- 白平衡取样 ---------- */
+
+/**
+ * 取样色 → 色温 / 色调滑杆的增量（-100~100 单位）。
+ *
+ * 引擎里色温把 ±32×(v/100) 加到 R、反向加到 B；色调把 ∓26×(v/100) 从 G 减去，
+ * 并以 0.4 倍补到 R/B。设增量为 ΔT、ΔI（0–255 加量），要令三个通道相等：
+ *   r + ΔT + 0.4ΔI = g − ΔI = b − ΔT + 0.4ΔI
+ * 解得 ΔT = (b − r) / 2、ΔI = (2g − r − b) / 2.8。
+ * 因为取样值已包含当前色温/色调，增量叠加在现值上即完成一次「点哪儿哪儿变中性」。
+ */
+export function whiteBalanceDelta(r: number, g: number, b: number): { temperature: number; tint: number } {
+  return {
+    temperature: ((b - r) / 2 / 32) * 100,
+    tint: ((2 * g - r - b) / 2.8 / 26) * 100,
+  }
+}
+
 /* ---------- 局部对比度：可分离盒模糊（清晰度 / 锐化共用） ---------- */
 
 /** 单通道盒模糊：横向 + 纵向两次滑动窗口，返回每通道模糊副本。 */
@@ -140,7 +224,8 @@ function toRGBFloat(data: Uint8ClampedArray): Float32Array {
 
 /**
  * 单遍像素调节管线：曝光 → 亮度 → 对比度 → 阴影/高光 → 色温/色调 →
- * 自然饱和度/饱和度 → HSL 分色 → 去雾 → 晕影 → 曲线 → 降噪 → 清晰度 → 锐化 → 颗粒。
+ * 自然饱和度/饱和度 → HSL 分色 → 去雾 → 晕影 → 分通道曲线 → 合成曲线 →
+ * 降噪 → 清晰度 → 锐化 → 颗粒。
  * 直接操作 RGBA 数据，供 Web Worker 调用；滑杆参数取 -100 ~ 100，曲线为 0–1 控制点。
  */
 export function applyAdjustments(
@@ -152,9 +237,9 @@ export function applyAdjustments(
   const exposure = Math.pow(2, (a.exposure / 100) * 1.2)
   const brightness = (a.brightness / 100) * 40
   const contrast = Math.pow(2, a.contrast / 100)
-  // 阴影/高光：亮度轴上的最大偏移（0-1），非 RGB 加量
-  const shadows = (a.shadows / 100) * 0.5
-  const highlights = (a.highlights / 100) * 0.5
+  // 阴影/高光：权重 0–1，按亮度分区做 gamma 提亮 / 压暗（端点不动）
+  const shadows = a.shadows / 100
+  const highlights = a.highlights / 100
   const temperature = (a.temperature / 100) * 32
   const tint = (a.tint / 100) * 26
   const vignette = a.vignette / 100
@@ -167,14 +252,14 @@ export function applyAdjustments(
   const clarity = a.clarity / 100
   const sharpen = a.sharpen / 100
   const grain = a.grain / 100
-  const lut = buildCurveLut(a.curve)
+  const luts = buildCurveLuts(a)
 
   // 自然饱和度 + 饱和度：以 luma 为轴缩放色度；自然饱和度对低饱和像素加权更大
   const vib = (a.vibrance / 100) * 1.6
   const satMul = 1 + a.saturation / 100
   const colorOn = satMul !== 1 || vib !== 0
   // HSL 分色：仅在给出非中性偏移时进入逐像素 RGB↔HSL 的开销
-  const hs = isHslNeutral(a.hsl) ? null : a.hsl
+  const hueLut = isHslNeutral(a.hsl) ? null : buildHueShiftLut(a.hsl as HslShift)
 
   const cx = w / 2
   const cy = h / 2
@@ -206,37 +291,52 @@ export function applyAdjustments(
         b = (b - mid) * contrast + mid
       }
 
-      // 阴影/高光：以亮度为轴做等比增益——RGB 同乘 l2/l，只改明暗不拉灰色相；
-      // 纯黑附近等比失效（0 乘不出来），混入少量加色让黑位可被抬起
+      // 阴影/高光：亮度分区的 gamma 变换 + 等比缩放色度。
+      // 旧实现用 (1-l)³ 硬加量，纯黑会被抬成 70 级灰雾、高光被乘法推到 255 后偏色；
+      // 现在两端点严格不动（0→0、255→255），只在中低 / 中高亮度按蒙版生效，
+      // 且缩放系数受最亮通道约束，避免单通道溢出造成色相偏移。
       if (shadows !== 0 || highlights !== 0) {
-        const l = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
-        let l2 = l
-        if (shadows !== 0) l2 += shadows * (1 - l) * (1 - l) * (1 - l)
-        if (highlights !== 0) l2 += highlights * l * l * l
-        if (l2 <= 0) {
-          r = 0
-          g = 0
-          b = 0
-        } else if (l2 >= 1) {
-          r = 255
-          g = 255
-          b = 255
-        } else if (l > 1e-4) {
-          const f = l2 / l
-          r *= f
-          g *= f
-          b *= f
-          if (shadows > 0 && l < 0.06) {
-            const add = (l2 - l) * 255 * 0.55 * (1 - l / 0.06)
+        const l0 = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+        const lc = l0 < 0 ? 0 : l0 > 1 ? 1 : l0
+        let lt = lc
+        if (shadows !== 0) {
+          // 阴影蒙版：0.08 以下全量，0.62 以上归零，中间调不被牵连
+          const tm = (lc - 0.08) / 0.54
+          const m = tm <= 0 ? 1 : tm >= 1 ? 0 : 1 - tm * tm * (3 - 2 * tm)
+          const gs = Math.pow(lc, 1 / (1 + shadows * 0.5))
+          lt += (gs - lc) * m
+          // 极暗处给一点点中性抬起，避免死黑被压成一块没有层次的墨
+          if (shadows > 0) lt += shadows * m * 0.02
+        }
+        if (highlights !== 0) {
+          const l1 = lt < 0 ? 0 : lt > 1 ? 1 : lt
+          const tm = (l1 - 0.3) / 0.68
+          const m = tm <= 0 ? 0 : tm >= 1 ? 1 : tm * tm * (3 - 2 * tm)
+          if (highlights > 0) {
+            // 提亮走 gamma：越接近纯白提升越小，白点保持在 255
+            lt += (Math.pow(l1, 1 / (1 + highlights * 0.5)) - l1) * m
+          } else {
+            // 压暗（高光回收）按亮度线性收，纯白也能拉回细节
+            lt += highlights * m * l1 * 0.45
+          }
+        }
+        if (lt !== lc) {
+          if (l0 <= 1e-4) {
+            const add = lt * 255
             r += add
             g += add
             b += add
+          } else {
+            let f = lt / l0
+            const mx = r > g ? (r > b ? r : b) : g > b ? g : b
+            if (mx > 0) {
+              const lim = 255 / mx
+              if (f > lim) f = lim
+            }
+            r *= f
+            g *= f
+            b *= f
           }
-        } else {
-          const add = (l2 - l) * 255 * 0.55
-          r = add
-          g = add
-          b = add
         }
       }
       if (temperature !== 0) {
@@ -261,70 +361,69 @@ export function applyAdjustments(
         g = lum + (g - lum) * f
         b = lum + (b - lum) * f
       }
-      // HSL 分色：像素色相落在哪个色带（相邻带线性过渡）就按该带偏移调整
-      if (hs) {
-        const hmx = r > g ? (r > b ? r : b) : g > b ? g : b
-        const hmn = r < g ? (r < b ? r : b) : g < b ? g : b
+      // HSL 分色：先把通道夹回 0–255 再算 HSL。
+      // 曝光 / 亮度可能把通道推到域外，旧版直接拿越界值求 S，
+      // 会得到负饱和 → 色度被算成 0 → 像素抹成纯白（表现为「HSL 有时不生效」）。
+      if (hueLut) {
+        const rr = r < 0 ? 0 : r > 255 ? 255 : r
+        const gg = g < 0 ? 0 : g > 255 ? 255 : g
+        const bb = b < 0 ? 0 : b > 255 ? 255 : b
+        const hmx = rr > gg ? (rr > bb ? rr : bb) : gg > bb ? gg : bb
+        const hmn = rr < gg ? (rr < bb ? rr : bb) : gg < bb ? gg : bb
         const d = hmx - hmn
-        if (d > 0.5) {
+        if (d > 2) {
           const L = (hmx + hmn) / 510
           let hue: number
-          if (hmx === r) hue = 60 * (((g - b) / d) % 6)
-          else if (hmx === g) hue = 60 * ((b - r) / d + 2)
-          else hue = 60 * ((r - g) / d + 4)
+          if (hmx === rr) hue = 60 * (((gg - bb) / d) % 6)
+          else if (hmx === gg) hue = 60 * ((bb - rr) / d + 2)
+          else hue = 60 * ((rr - gg) / d + 4)
           if (hue < 0) hue += 360
-          const S = d / 255 / (1 - Math.abs(2 * L - 1) + 1e-6)
-          let seg = 7
-          for (let i = 0; i < 7; i++) {
-            if (hue >= HUE_CENTERS[i] && hue < HUE_CENTERS[i + 1]) {
-              seg = i
-              break
+          if (hue >= 360) hue -= 360
+          const den = 1 - Math.abs(2 * L - 1)
+          const S = den > 1e-4 ? Math.min(1, d / 255 / den) : 0
+          // 查表并按度内位置线性插值，避免 1° 台阶
+          const h0 = hue | 0
+          const h1 = h0 >= HUE_LUT_SIZE - 1 ? 0 : h0 + 1
+          const fr = hue - h0
+          const dh = hueLut[h0 * 3] + (hueLut[h1 * 3] - hueLut[h0 * 3]) * fr
+          const ds = hueLut[h0 * 3 + 1] + (hueLut[h1 * 3 + 1] - hueLut[h0 * 3 + 1]) * fr
+          const dl = hueLut[h0 * 3 + 2] + (hueLut[h1 * 3 + 2] - hueLut[h0 * 3 + 2]) * fr
+          if (dh !== 0 || ds !== 0 || dl !== 0) {
+            const h2 = (hue + dh + 360) % 360
+            const sd = ds < -1 ? -1 : ds > 1 ? 1 : ds
+            const s2 = Math.min(1, Math.max(0, S * (1 + sd)))
+            const l2 = Math.min(1, Math.max(0, L + dl * 0.55))
+            // HSL → RGB
+            const c = (1 - Math.abs(2 * l2 - 1)) * s2
+            const hp = h2 / 60
+            const xx = c * (1 - Math.abs((hp % 2) - 1))
+            let r1 = 0
+            let g1 = 0
+            let b1 = 0
+            if (hp < 1) {
+              r1 = c
+              g1 = xx
+            } else if (hp < 2) {
+              r1 = xx
+              g1 = c
+            } else if (hp < 3) {
+              g1 = c
+              b1 = xx
+            } else if (hp < 4) {
+              g1 = xx
+              b1 = c
+            } else if (hp < 5) {
+              r1 = xx
+              b1 = c
+            } else {
+              r1 = c
+              b1 = xx
             }
+            const m2 = l2 - c / 2
+            r = (r1 + m2) * 255
+            g = (g1 + m2) * 255
+            b = (b1 + m2) * 255
           }
-          const next = seg === 7 ? 0 : seg + 1
-          const span = (seg === 7 ? 360 : HUE_CENTERS[next]) - HUE_CENTERS[seg]
-          // smoothstep 权重：色带中心附近全量生效，向相邻带平滑过渡，
-          // 线性插值会把偏离中心的像素衰减到几乎不可见
-          const tRaw = (hue - HUE_CENTERS[seg]) / span
-          const t = tRaw * tRaw * (3 - 2 * tRaw)
-          const w0 = 1 - t
-          const w1 = t
-          const dh = (w0 * hs.h[seg] + w1 * hs.h[next]) * 0.75
-          const ds = (w0 * hs.s[seg] + w1 * hs.s[next]) / 100
-          const dl = (w0 * hs.l[seg] + w1 * hs.l[next]) / 100
-          const h2 = (hue + dh + 360) % 360
-          const s2 = S > 1 ? 1 : S * (1 + (ds < -1 ? -1 : ds > 1 ? 1 : ds))
-          const L2 = L + dl * 0.55
-          // HSL → RGB
-          const c = (1 - Math.abs(2 * (L2 < 0 ? 0 : L2 > 1 ? 1 : L2) - 1)) * (s2 < 0 ? 0 : s2 > 1 ? 1 : s2)
-          const hp = h2 / 60
-          const xx = c * (1 - Math.abs((hp % 2) - 1))
-          let r1 = 0
-          let g1 = 0
-          let b1 = 0
-          if (hp < 1) {
-            r1 = c
-            g1 = xx
-          } else if (hp < 2) {
-            r1 = xx
-            g1 = c
-          } else if (hp < 3) {
-            g1 = c
-            b1 = xx
-          } else if (hp < 4) {
-            g1 = xx
-            b1 = c
-          } else if (hp < 5) {
-            r1 = xx
-            b1 = c
-          } else {
-            r1 = c
-            b1 = xx
-          }
-          const m2 = (L2 < 0 ? 0 : L2 > 1 ? 1 : L2) - c / 2
-          r = (r1 + m2) * 255
-          g = (g1 + m2) * 255
-          b = (b1 + m2) * 255
         }
       }
       // 去雾：按雾量拉黑场再补一点对比，减掉大气灰蒙
@@ -348,10 +447,16 @@ export function applyAdjustments(
         g *= falloff
         b *= falloff
       }
-      if (lut) {
-        r = lut[r < 0 ? 0 : r > 255 ? 255 : r | 0]
-        g = lut[g < 0 ? 0 : g > 255 ? 255 : g | 0]
-        b = lut[b < 0 ? 0 : b > 255 ? 255 : b | 0]
+      // 曲线：单通道先行，合成通道收尾（与 Photoshop 的复合曲线顺序一致）
+      if (luts) {
+        if (luts.r) r = luts.r[r < 0 ? 0 : r > 255 ? 255 : r | 0]
+        if (luts.g) g = luts.g[g < 0 ? 0 : g > 255 ? 255 : g | 0]
+        if (luts.b) b = luts.b[b < 0 ? 0 : b > 255 ? 255 : b | 0]
+        if (luts.rgb) {
+          r = luts.rgb[r < 0 ? 0 : r > 255 ? 255 : r | 0]
+          g = luts.rgb[g < 0 ? 0 : g > 255 ? 255 : g | 0]
+          b = luts.rgb[b < 0 ? 0 : b > 255 ? 255 : b | 0]
+        }
       }
 
       data[i] = r < 0 ? 0 : r > 255 ? 255 : r

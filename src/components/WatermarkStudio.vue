@@ -783,6 +783,7 @@ h1 {
 .editor {
   border-left: 1px solid var(--line);
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 12px;
   min-height: 0;
 }

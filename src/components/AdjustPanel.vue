@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import {
   Aperture,
   Blend,
+  Bookmark,
   ChevronDown,
   Circle,
   CloudFog,
@@ -11,20 +12,26 @@ import {
   Droplet,
   Focus,
   Palette,
+  Pipette,
+  Plus,
   RotateCcw,
   Sparkles,
   Sun,
   SunDim,
   Thermometer,
+  Trash2,
   Zap,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import AppDialog from '@/components/ui/AppDialog.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import CurveEditor from '@/components/ui/CurveEditor.vue'
 import { useAdjustStore } from '@/stores/adjust'
+import { useAdjustPresetsStore, type AdjustPreset } from '@/stores/adjustPresets'
 import { useImagesStore } from '@/stores/images'
+import { toast } from '@/stores/toast'
 import {
   ADJUST_DEFS,
   DENOISE_DEFAULT,
@@ -35,9 +42,11 @@ import {
   neutralHsl,
   sameAdjustments,
   type Adjustments,
+  type Curves,
 } from '@/types/adjust'
 
 const adjust = useAdjustStore()
+const presets = useAdjustPresetsStore()
 const images = useImagesStore()
 
 const icons: Record<string, Component> = {
@@ -77,6 +86,72 @@ const matchesGlobal = computed(() => {
 function onReset(): void {
   if (individual.value) adjust.resetToGlobal(activeId.value)
   else adjust.reset()
+}
+
+/* ---------- 曲线：合成通道 + R/G/B ---------- */
+
+/** 旧数据只有合成曲线 curve：读时并给 rgb 通道，写回时清掉旧字段避免二次应用 */
+const curvesModel = computed<Curves | undefined>({
+  get: () => target.value.curves ?? (target.value.curve ? { rgb: target.value.curve } : undefined),
+  set: (v) => {
+    if (target.value.curve) delete target.value.curve
+    if (v && Object.keys(v).length) target.value.curves = v
+    else delete target.value.curves
+  },
+})
+
+/* ---------- 白平衡吸管 ---------- */
+
+function togglePick(): void {
+  if (!activeId.value) return
+  const next = !adjust.pickingWb
+  adjust.setPickingWb(next)
+  if (next) toast('在画面上点按中性灰或白色的位置')
+}
+
+/* ---------- 调节预设 ---------- */
+
+const presetOpen = ref(false)
+const presetSaving = ref(false)
+const presetName = ref('')
+
+/** 应用目标：多选模式取勾选的照片，否则当前照片 */
+const presetTargetIds = computed<string[]>(() => {
+  const picked = [...images.selectedIds]
+  if (images.multiSelect && picked.length) return picked
+  return activeId.value ? [activeId.value] : []
+})
+
+const presetHint = computed(() =>
+  presetTargetIds.value.length > 1
+    ? `已选 ${presetTargetIds.value.length} 张，点击预设套用到这些照片`
+    : '点击预设套用到当前照片',
+)
+
+function openPresetSave(): void {
+  presetName.value = `调节预设 ${presets.list.length + 1}`
+  presetSaving.value = true
+}
+
+function confirmPresetSave(): void {
+  const p = presets.save(presetName.value, adjust.snapshotFor(activeId.value))
+  presetSaving.value = false
+  presetOpen.value = true
+  toast(`已保存预设「${p.name}」`, 'success')
+}
+
+function applyPreset(p: AdjustPreset): void {
+  const n = presets.apply(p)
+  if (!n) {
+    toast('先选择一张照片', 'error')
+    return
+  }
+  toast(n > 1 ? `已将「${p.name}」套用到 ${n} 张照片` : `已套用「${p.name}」`, 'success')
+}
+
+function applyPresetAll(p: AdjustPreset): void {
+  presets.applyToAll(p)
+  toast(`已将「${p.name}」应用为全局调节`, 'success')
 }
 
 /* ---------- HSL 分色 ---------- */
@@ -183,20 +258,71 @@ function resetDenoise(): void {
         @update:model-value="adjust.setIndividual(activeId, $event)"
       />
     </div>
-    <AppSlider
-      v-for="def in ADJUST_DEFS"
-      :key="def.key"
-      v-model="target[def.key]"
-      :min="-100"
-      :max="100"
-      :label="def.label"
-      :icon="icons[def.key]"
-      :default="0"
-      @reset="individual ? adjust.resetToGlobal(activeId) : adjust.set(def.key, 0)"
-    />
-    <CurveEditor v-model="target.curve" />
-    <section class="hsl">
-      <header class="hsl-head" @click="hslOpen = !hslOpen">
+    <section class="group presets-group">
+      <header class="group-head" @click="presetOpen = !presetOpen">
+        <Bookmark :size="13" />
+        <span>调节预设</span>
+        <span class="flex" />
+        <span v-if="presets.list.length" class="count">{{ presets.list.length }}</span>
+        <button
+          class="mini"
+          title="把当前调节存为预设"
+          :disabled="!activeId"
+          @click.stop="openPresetSave"
+        >
+          <Plus :size="12" />
+        </button>
+        <ChevronDown :size="13" class="chev" :class="{ open: presetOpen }" />
+      </header>
+      <template v-if="presetOpen">
+        <ul v-if="presets.list.length" class="presets">
+          <li v-for="p in presets.list" :key="p.id" class="preset">
+            <button class="preset-apply" :title="`套用「${p.name}」`" @click="applyPreset(p)">
+              {{ p.name }}
+            </button>
+            <button class="preset-all" title="应用到全部照片（全局调节）" @click.stop="applyPresetAll(p)">
+              全部
+            </button>
+            <button class="preset-rm" title="删除预设" @click.stop="presets.remove(p.id)">
+              <Trash2 :size="11" />
+            </button>
+          </li>
+        </ul>
+        <p v-if="!presets.list.length" class="preset-empty">
+          还没有预设。调好当前照片后点右上角「+」保存，之后可一键套用到其他照片。
+        </p>
+        <p v-else class="preset-hint">{{ presetHint }}</p>
+      </template>
+    </section>
+    <template v-for="def in ADJUST_DEFS" :key="def.key">
+      <AppSlider
+        v-model="target[def.key]"
+        :min="-100"
+        :max="100"
+        :label="def.label"
+        :icon="icons[def.key]"
+        :default="0"
+        @reset="individual ? adjust.resetToGlobal(activeId) : adjust.set(def.key, 0)"
+      />
+      <!-- 白平衡吸管紧跟色温 / 色调：取色校正与这两根滑杆是同一件事 -->
+      <div v-if="def.key === 'tint'" class="wb">
+        <button
+          class="wb-pick"
+          :class="{ on: adjust.pickingWb }"
+          :disabled="!activeId"
+          :aria-pressed="adjust.pickingWb"
+          @click="togglePick"
+        >
+          <Pipette :size="13" />{{ adjust.pickingWb ? '取消取样' : '吸管取白平衡' }}
+        </button>
+        <span class="wb-hint">{{
+          adjust.pickingWb ? '在画面点按中性灰或白色处' : '点按画面中性色，自动校正偏色'
+        }}</span>
+      </div>
+    </template>
+    <CurveEditor v-model="curvesModel" />
+    <section class="group">
+      <header class="group-head" @click="hslOpen = !hslOpen">
         <Palette :size="13" />
         <span>HSL 分色调整</span>
         <span class="flex" />
@@ -253,8 +379,8 @@ function resetDenoise(): void {
         </div>
       </template>
     </section>
-    <section class="hsl">
-      <header class="hsl-head" @click="vigOpen = !vigOpen">
+    <section class="group">
+      <header class="group-head" @click="vigOpen = !vigOpen">
         <Circle :size="13" />
         <span>晕影</span>
         <span class="flex" />
@@ -288,8 +414,8 @@ function resetDenoise(): void {
         </div>
       </template>
     </section>
-    <section class="hsl">
-      <header class="hsl-head" @click="dnOpen = !dnOpen">
+    <section class="group">
+      <header class="group-head" @click="dnOpen = !dnOpen">
         <Sparkles :size="13" />
         <span>降噪</span>
         <span class="flex" />
@@ -337,6 +463,26 @@ function resetDenoise(): void {
         <RotateCcw :size="13" />{{ individual ? '还原为全局' : '全部重置' }}
       </AppButton>
     </div>
+
+    <AppDialog
+      :open="presetSaving"
+      title="存为调节预设"
+      :width="360"
+      @close="presetSaving = false"
+    >
+      <p class="dlg-note">保存当前照片的全部调节参数（不含水印与裁剪），之后可套用到其他照片。</p>
+      <input
+        v-model="presetName"
+        class="dlg-input"
+        placeholder="预设名称"
+        spellcheck="false"
+        @keyup.enter="confirmPresetSave"
+      />
+      <div class="dlg-actions">
+        <AppButton variant="ghost" size="sm" @click="presetSaving = false">取消</AppButton>
+        <AppButton variant="primary" size="sm" @click="confirmPresetSave">保存</AppButton>
+      </div>
+    </AppDialog>
   </div>
 </template>
 
@@ -367,14 +513,173 @@ function resetDenoise(): void {
 .foot {
   margin-top: 12px;
 }
-/* ---------- HSL 分色 ---------- */
-.hsl {
+/* ---------- 白平衡吸管 ---------- */
+.wb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 12px;
+}
+.wb-pick {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: calc(26px * var(--ui-zoom, 1));
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: calc(11.5px * var(--ui-zoom, 1));
+  color: var(--text-2);
+  transition:
+    background var(--dur-hover) var(--ease-soft),
+    color var(--dur-hover) var(--ease-soft),
+    border-color var(--dur-hover) var(--ease-soft);
+}
+.wb-pick:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.wb-pick.on {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+.wb-pick:disabled {
+  opacity: 0.45;
+}
+.wb-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  line-height: 1.35;
+}
+/* ---------- 调节预设 ---------- */
+.presets-group {
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+.count {
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--hover);
+  font-size: calc(10.5px * var(--ui-zoom, 1));
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.group-head .mini:disabled {
+  opacity: 0.35;
+}
+.presets {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.preset {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 7px;
+  padding: 0 2px;
+}
+.preset:hover {
+  background: var(--hover);
+}
+.preset-apply {
+  flex: 1;
+  min-width: 0;
+  height: calc(26px * var(--ui-zoom, 1));
+  padding: 0 6px;
+  text-align: left;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 6px;
+}
+.preset-apply:hover {
+  color: var(--accent);
+}
+.preset-all {
+  flex: none;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+}
+.preset-all:hover {
+  color: var(--accent);
+  background: var(--active);
+}
+.preset-rm {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
+}
+.preset:hover .preset-rm {
+  opacity: 1;
+}
+.preset-rm:hover {
+  color: var(--danger);
+}
+.preset-empty,
+.preset-hint {
+  margin: 8px 0 2px;
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  line-height: 1.5;
+}
+/* ---------- 存为预设对话框 ---------- */
+.dlg-note {
+  margin: 0 0 10px;
+  font-size: calc(12px * var(--ui-zoom, 1));
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.dlg-input {
+  width: 100%;
+  height: var(--control-h);
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  font-size: calc(12.5px * var(--ui-zoom, 1));
+}
+.dlg-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+.dlg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+/* ---------- 折叠分组（HSL / 晕影 / 降噪 / 预设） ---------- */
+.group {
   margin-top: 10px;
   border: 1px solid var(--line);
   border-radius: var(--r-m, 10px);
   padding: 8px 10px;
 }
-.hsl-head {
+.group-head {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -383,10 +688,10 @@ function resetDenoise(): void {
   cursor: pointer;
   user-select: none;
 }
-.hsl-head .flex {
+.group-head .flex {
   flex: 1;
 }
-.hsl-head .mini {
+.group-head .mini {
   display: grid;
   place-items: center;
   width: 18px;
@@ -394,7 +699,7 @@ function resetDenoise(): void {
   border-radius: 5px;
   color: var(--text-3);
 }
-.hsl-head .mini:hover {
+.group-head .mini:hover {
   color: var(--text);
   background: var(--hover);
 }
@@ -479,13 +784,13 @@ function resetDenoise(): void {
 }
 /* 触屏（安卓）适配：折叠头 / 色带 / 小重置按钮的热区放大到易命中的尺寸 */
 @media (pointer: coarse) {
-  .hsl {
+  .group {
     padding: 8px 12px;
   }
-  .hsl-head {
+  .group-head {
     padding: 6px 0;
   }
-  .hsl-head .mini {
+  .group-head .mini {
     width: 24px;
     height: 24px;
     border-radius: 7px;
@@ -495,6 +800,20 @@ function resetDenoise(): void {
   }
   .band::before {
     left: 9px;
+  }
+  /* 触屏没有 hover：删除按钮常显，行高与小按钮放大 */
+  .wb-pick {
+    height: 32px;
+    padding: 0 12px;
+  }
+  .preset-apply,
+  .preset-all {
+    height: 34px;
+  }
+  .preset-rm {
+    width: 30px;
+    height: 30px;
+    opacity: 1;
   }
 }
 </style>

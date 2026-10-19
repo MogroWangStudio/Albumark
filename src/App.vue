@@ -31,15 +31,15 @@ import { projectMomentum, springTo, type SpringHandle } from '@/core/spring'
 import { baseName } from '@/core/fs'
 import { toast } from '@/stores/toast'
 import { useAdjustStore } from '@/stores/adjust'
+import { useAdjustPresetsStore } from '@/stores/adjustPresets'
 import { useImagesStore } from '@/stores/images'
 import { useSettingsStore } from '@/stores/settings'
-import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const images = useImagesStore()
 const wm = useWatermarkStore()
-const templates = useTemplatesStore()
+const presets = useAdjustPresetsStore()
 const ws = useWorkspaceStore()
 const adjust = useAdjustStore()
 const settings = useSettingsStore()
@@ -350,12 +350,21 @@ function onPreviewCtx(e: MouseEvent): void {
 
 function onPhotoCtx(e: MouseEvent, id: string): void {
   const item = images.items.find((i) => i.id === id)
+  // 预设套用放在右键菜单里：先点照片再选预设，是最短的一条路径
+  const presetItems: ContextMenuItem[] = presets.list.slice(0, 6).map((p) => ({
+    label: `套用预设「${p.name}」`,
+    action: () => {
+      presets.apply(p, [id])
+      toast(`已将「${p.name}」套用到这张照片`, 'success')
+    },
+  }))
   openContextMenu(e, [
     {
       label: '设为当前照片',
       disabled: id === images.activeId,
       action: () => images.select(id),
     },
+    ...presetItems,
     item?.missing
       ? {
           label: '重新定位源文件…',
@@ -388,7 +397,10 @@ onMounted(async () => {
       /* 插件不可用时退回系统默认行为 */
     }
   }
-  if (!wm.hydrate()) await templates.apply('builtin-signature')
+  // 水印配置只从本地恢复：没有记录时保持「无水印」。
+  // 曾经在这里兜底套用「右下签名」内置模板，导致新建工作目录 / 首次启动后
+  // 导入的照片被莫名加上水印——水印必须是用户主动加的东西。
+  wm.hydrate()
   window.addEventListener('keydown', onKeydown)
   document.addEventListener('contextmenu', onGlobalContextMenu)
   window.addEventListener('pagehide', flushWorkspace)
@@ -719,6 +731,9 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* 面板换页（水印 / 调节 / 裁剪 / 导出）内容高度不同：
+     滚动条槽位常驻，避免每换一页内容被挤动一下 */
+  scrollbar-gutter: stable;
 }
 .inspector-body :deep(.panel-scroll) {
   padding: 14px;

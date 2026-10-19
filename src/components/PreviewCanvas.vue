@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch } from 'vue'
-import { ChevronUp } from 'lucide-vue-next'
+import { ChevronUp, Pipette } from 'lucide-vue-next'
 import type { WatermarkLayer } from '@/types/watermark'
-import { clamp01, CROP_MIN, cropRatioOf, cropRot, cropSourceSize, FULL_CROP, rotatedInnerRect, type Crop } from '@/types/adjust'
+import { clamp01, CROP_MIN, cropInnerBounds, cropRatioOf, cropRot, cropSourceSize, FULL_CROP, type Crop } from '@/types/adjust'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { drawLayers, type AssetMap } from '@/core/draw'
 import { renderClient } from '@/core/renderer'
 import { resolveTokens } from '@/core/tokens'
 import { useAdjustStore } from '@/stores/adjust'
+import { toast } from '@/stores/toast'
 import { useImagesStore } from '@/stores/images'
 import { PREVIEW_CUSTOM_MAX, PREVIEW_CUSTOM_MIN, useSettingsStore } from '@/stores/settings'
 import { useWatermarkStore } from '@/stores/watermark'
@@ -785,6 +786,40 @@ function toImagePx(clientX: number, clientY: number): { x: number; y: number } {
   return { x: (dx - resultMap.ox) / resultMap.scale, y: (dy - resultMap.oy) / resultMap.scale }
 }
 
+/* ---------- 白平衡取样 ---------- */
+
+let wbCanvas: HTMLCanvasElement | null = null
+/** 取 5×5 邻域均值：单像素容易把噪点当偏色，取一小块更稳 */
+const WB_SAMPLE = 5
+
+function sampleResult(x: number, y: number): { r: number; g: number; b: number } | null {
+  const bmp = resultBmp
+  if (!bmp) return null
+  // 小图（缩略级）按实际边长取样，避免源矩形越界被拉伸
+  const S = Math.max(1, Math.min(WB_SAMPLE, bmp.width, bmp.height))
+  if (!wbCanvas) wbCanvas = document.createElement('canvas')
+  wbCanvas.width = S
+  wbCanvas.height = S
+  const ctx = wbCanvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return null
+  // 贴边时把取样框整体收进图内，避免把透明像素平均进去
+  const sx = Math.min(Math.max(0, Math.round(x) - (S >> 1)), Math.max(0, bmp.width - S))
+  const sy = Math.min(Math.max(0, Math.round(y) - (S >> 1)), Math.max(0, bmp.height - S))
+  ctx.clearRect(0, 0, S, S)
+  ctx.drawImage(bmp, sx, sy, S, S, 0, 0, S, S)
+  const d = ctx.getImageData(0, 0, S, S).data
+  let r = 0
+  let g = 0
+  let b = 0
+  for (let i = 0; i < d.length; i += 4) {
+    r += d[i]
+    g += d[i + 1]
+    b += d[i + 2]
+  }
+  const n = d.length / 4
+  return { r: r / n, g: g / n, b: b / n }
+}
+
 /* ---------- 视图变换：缩放 / 平移 / 橡皮筋 ---------- */
 
 /** Apple 式橡皮筋：越界越多阻力越大 */
@@ -972,14 +1007,8 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
 function cropBounds(): { x0: number; y0: number; x1: number; y1: number } {
   const d = adjust.cropDraft
   const a = active.value
-  if (!d || !a?.width || !a.height || !cropRot(d)) {
-    return { x0: 0, y0: 0, x1: 1, y1: 1 }
-  }
-  const inner = rotatedInnerRect(a.width, a.height, cropRot(d))
-  const src = cropSourceSize(a.width, a.height, d)
-  const w = inner.w / src.w
-  const h = inner.h / src.h
-  return { x0: (1 - w) / 2, y0: (1 - h) / 2, x1: (1 + w) / 2, y1: (1 + h) / 2 }
+  if (!d || !a?.width || !a.height) return { x0: 0, y0: 0, x1: 1, y1: 1 }
+  return cropInnerBounds(a.width, a.height, d)
 }
 
 /** 把矩形收敛到活动范围内（含最小边）。 */
@@ -1146,6 +1175,23 @@ function onPointerDown(e: PointerEvent): void {
     window.clearTimeout(settleTimer)
     settleTimer = null
   }
+  // 白平衡吸管：这一次点击只取色，不进入平移 / 选层 / 裁剪手势
+  if (adjust.pickingWb) {
+    if (resultId !== (active.value?.id ?? null)) return
+    if (e.button === 1) {
+      adjust.setPickingWb(false)
+      return
+    }
+    const p = toImagePx(e.clientX, e.clientY)
+    const s = sampleResult(p.x, p.y)
+    if (s) {
+      adjust.applyWhiteBalanceSample(s.r, s.g, s.b)
+      const cur = adjust.snapshotFor(active.value?.id ?? null)
+      toast(`白平衡已取样：色温 ${cur.temperature}，色调 ${cur.tint}`, 'success')
+    }
+    adjust.setPickingWb(false)
+    return
+  }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, downT: performance.now(), moved: false })
   canvas.setPointerCapture(e.pointerId)
 
@@ -1258,15 +1304,13 @@ function onPointerMove(e: PointerEvent): void {
     const d = gesture.startCrop
     const bd = cropBounds()
     if (gesture.handle === 'move') {
-      adjust.cropDraft = {
-        x: Math.min(Math.max(bd.x0, d.x + nx - gesture.startNx), bd.x1 - d.w),
-        y: Math.min(Math.max(bd.y0, d.y + ny - gesture.startNy), bd.y1 - d.h),
-        w: d.w,
-        h: d.h,
-        rot: d.rot,
-        flipH: d.flipH,
-        flipV: d.flipV,
-      }
+      // 拉直后活动范围会小于已有框：先把框收进范围，再按位移移动，
+      // 否则 bd.x1 - d.w 会小于 bd.x0，框被推到范围外（看起来像「裁剪被重置」）
+      const w = Math.min(d.w, Math.max(CROP_MIN, bd.x1 - bd.x0))
+      const h = Math.min(d.h, Math.max(CROP_MIN, bd.y1 - bd.y0))
+      const x = Math.min(Math.max(bd.x0, d.x + nx - gesture.startNx), Math.max(bd.x0, bd.x1 - w))
+      const y = Math.min(Math.max(bd.y0, d.y + ny - gesture.startNy), Math.max(bd.y0, bd.y1 - h))
+      adjust.cropDraft = { x, y, w, h, rot: d.rot, flipH: d.flipH, flipV: d.flipV }
     } else {
       const ratio = cropRatioOf(adjust.cropRatio)
       const imgAspect = resultMap.w / resultMap.h
@@ -1469,8 +1513,18 @@ watch(
 watch(
   () => active.value?.id,
   (id) => {
+    // 换照片即结束取样：吸管是「当前这张」的动作，跨图保留会误点
+    adjust.setPickingWb(false)
     resetView()
     void ws.ensureImageLoaded(id)
+  },
+)
+
+// 离开调节页也结束取样，避免十字光标残留在裁剪 / 导出页
+watch(
+  () => adjust.panel,
+  (p) => {
+    if (p !== 'adjust') adjust.setPickingWb(false)
   },
 )
 
@@ -1539,7 +1593,12 @@ watch(
 )
 
 function onCropKey(e: KeyboardEvent): void {
-  if (e.key === 'Escape' && adjust.cropMode) adjust.exitCrop()
+  if (e.key !== 'Escape') return
+  if (adjust.pickingWb) {
+    adjust.setPickingWb(false)
+    return
+  }
+  if (adjust.cropMode) adjust.exitCrop()
 }
 
 onMounted(() => {
@@ -1589,6 +1648,7 @@ onBeforeUnmount(() => {
       <canvas
         ref="cvBase"
         class="canvas"
+        :class="{ picking: adjust.pickingWb }"
         @pointerdown="onPointerDown"
         @pointermove="onPointerMove"
         @pointerup="onPointerUp"
@@ -1612,8 +1672,13 @@ onBeforeUnmount(() => {
       />
     </div>
     <Transition name="fade">
-      <div v-if="rendering" class="render-hint" aria-hidden="true">
+      <div v-if="rendering && !adjust.pickingWb" class="render-hint" aria-hidden="true">
         <span class="render-spin" />渲染中
+      </div>
+    </Transition>
+    <Transition name="fade">
+      <div v-if="adjust.pickingWb" class="pick-hint" aria-hidden="true">
+        <Pipette :size="12" />点按画面中的中性灰或白色
       </div>
     </Transition>
     <button
@@ -1664,8 +1729,33 @@ onBeforeUnmount(() => {
 .overlay {
   pointer-events: none;
 }
+.canvas.picking {
+  cursor: crosshair;
+}
 .canvas:active {
   cursor: grabbing;
+}
+.canvas.picking:active {
+  cursor: crosshair;
+}
+/* 吸管提示：与渲染提示同位置同风格，同一时刻只会出现一个 */
+.pick-hint {
+  position: absolute;
+  left: calc(10px + var(--safe-left));
+  bottom: calc(40px + var(--safe-bottom));
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--surface);
+  backdrop-filter: var(--blur-material);
+  -webkit-backdrop-filter: var(--blur-material);
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--accent);
+  pointer-events: none;
 }
 .sel {
   position: absolute;

@@ -295,6 +295,9 @@ onMounted(() => {
   padding: 24px;
   background: var(--canvas);
   overflow-y: auto;
+  /* 滚动条常驻两侧留白：内容高度随项目数量变化时不再挤压居中排版。
+     否则每次切页滚动条出现 / 消失都会让页面横向抖一下，和入场动画叠在一起就是闪烁 */
+  scrollbar-gutter: stable both-edges;
 }
 .card {
   width: min(560px, 100%);

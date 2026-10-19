@@ -1,6 +1,14 @@
 import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { isPlainFullCrop, NEUTRAL, type Adjustments, type Crop, type SliderKey } from '@/types/adjust'
+import {
+  cloneAdjustments,
+  isPlainFullCrop,
+  NEUTRAL,
+  type Adjustments,
+  type Crop,
+  type SliderKey,
+} from '@/types/adjust'
+import { whiteBalanceDelta } from '@/core/adjust'
 import { useImagesStore } from '@/stores/images'
 
 const PERSIST_KEY = 'albumark.adjust.v1'
@@ -16,12 +24,9 @@ function load(): Adjustments {
 }
 
 function plain(a: Adjustments): Adjustments {
-  const out = { ...toRaw(a) }
   // 结构化可选字段深拍平：任何写入路径带进的响应式 Proxy 都会让 Worker 的
-  // structuredClone 抛 DataCloneError、渲染静默失败（hsl 曾踩过此坑）
-  if (out.hsl) out.hsl = { h: [...out.hsl.h], s: [...out.hsl.s], l: [...out.hsl.l] }
-  if (out.curve) out.curve = [...out.curve]
-  return out
+  // structuredClone 抛 DataCloneError、渲染静默失败（hsl / curves 都踩过此坑）
+  return cloneAdjustments(toRaw(a) as Adjustments)
 }
 
 export const useAdjustStore = defineStore('adjust', () => {
@@ -37,6 +42,7 @@ export const useAdjustStore = defineStore('adjust', () => {
   function reset(): void {
     Object.assign(values, NEUTRAL)
     delete values.curve
+    delete values.curves
     delete values.hsl
     delete values.denoise
     delete values.denoiseMethod
@@ -74,6 +80,61 @@ export const useAdjustStore = defineStore('adjust', () => {
   /** 单独调节模式下把这张照片还原为全局参数 */
   function resetToGlobal(id: string | null): void {
     if (id && perImage.value[id]) perImage.value[id] = plain(values)
+  }
+
+  /** 该照片的可写参数对象：独立参数优先，否则全局（与面板编辑目标一致） */
+  function editableFor(id: string | null): Adjustments {
+    if (id && perImage.value[id]) return perImage.value[id]
+    return values
+  }
+
+  /* ---------- 白平衡吸管 ---------- */
+
+  /** 吸管待取样：预览层据此把下一次点击解释为「取中性色」而不是平移/选层 */
+  const pickingWb = ref(false)
+
+  function setPickingWb(on: boolean): void {
+    pickingWb.value = on
+  }
+
+  /**
+   * 用取样色反解色温 / 色调：在当前值上叠加增量，使取样点三通道相等。
+   * 取样值来自预览合成结果（已含当前色温/色调），所以增量与现值可叠加。
+   */
+  function applyWhiteBalanceSample(r: number, g: number, b: number): void {
+    const id = useImagesStore().activeId
+    const t = editableFor(id)
+    const d = whiteBalanceDelta(r, g, b)
+    const clamp = (v: number): number => Math.min(100, Math.max(-100, Math.round(v)))
+    t.temperature = clamp((t.temperature ?? 0) + d.temperature)
+    t.tint = clamp((t.tint ?? 0) + d.tint)
+  }
+
+  /** 把一组参数整份写入指定照片（预设应用）；无独立参数时先落成独立参数 */
+  function applyToImages(ids: string[], src: Adjustments): void {
+    if (!ids.length) return
+    const next = { ...perImage.value }
+    for (const id of ids) next[id] = plain(src)
+    perImage.value = next
+  }
+
+  /** 把一组参数写入全局（用于预设的「应用到全部照片」） */
+  function applyToGlobal(src: Adjustments): void {
+    const data = plain(src)
+    Object.assign(values, NEUTRAL, data)
+    if (!data.curve) delete values.curve
+    if (!data.curves) delete values.curves
+    if (!data.hsl) delete values.hsl
+    if (!data.denoise) {
+      delete values.denoise
+      delete values.denoiseMethod
+    } else if (data.denoiseMethod === undefined) {
+      // 预设若没带算法字段，回到默认（「边缘保持」），不沿用上一份残留
+      delete values.denoiseMethod
+    }
+    if (data.vignetteRadius === undefined) delete values.vignetteRadius
+    if (data.vignetteFeather === undefined) delete values.vignetteFeather
+    if (data.vignetteShape === undefined) delete values.vignetteShape
   }
 
   watch(values, () => {
@@ -140,6 +201,12 @@ export const useAdjustStore = defineStore('adjust', () => {
     snapshotFor,
     perImageSnapshot,
     resetToGlobal,
+    editableFor,
+    pickingWb,
+    setPickingWb,
+    applyWhiteBalanceSample,
+    applyToImages,
+    applyToGlobal,
     panel,
     crops,
     cropMode,

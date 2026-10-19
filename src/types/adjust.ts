@@ -20,10 +20,15 @@ export interface Adjustments {
   /** 颗粒：亮度加权噪点 */
   grain: number
   /**
-   * 色调曲线：扁平化的 [x0,y0,x1,y1,…] 控制点，数值归一化到 0–1。
-   * 空数组 / undefined = 恒等曲线（不调整）。
+   * 合成（RGB）色调曲线：扁平化的 [x0,y0,x1,y1,…] 控制点，数值归一化到 0–1。
+   * 空数组 / undefined = 恒等曲线（不调整）。旧数据只有这一条曲线，保留兼容。
    */
   curve?: number[]
+  /**
+   * 分通道曲线：r/g/b 为单通道，rgb 为合成曲线（在单通道之后应用）。
+   * 与 curve 同时存在时，curve 作为合成曲线的旧值参与合并（见 core/adjust）。
+   */
+  curves?: Curves
   /** HSL 分色调整：8 色带各自的色相 / 饱和度 / 亮度偏移（-100~100）；undefined = 全部中性 */
   hsl?: HslShift
   /** 降噪强度（0-100）；undefined / 0 = 关闭 */
@@ -56,6 +61,24 @@ export interface HslShift {
   s: number[]
   l: number[]
 }
+
+/** 曲线通道：rgb 为合成通道（最后应用），r/g/b 为单通道 */
+export type CurveChannel = 'rgb' | 'r' | 'g' | 'b'
+
+/** 四条曲线各自的控制点（0–1 扁平数组），缺省即恒等 */
+export interface Curves {
+  rgb?: number[]
+  r?: number[]
+  g?: number[]
+  b?: number[]
+}
+
+export const CURVE_CHANNELS: { value: CurveChannel; label: string; hint: string }[] = [
+  { value: 'rgb', label: 'RGB', hint: '合成通道' },
+  { value: 'r', label: 'R', hint: '红色通道' },
+  { value: 'g', label: 'G', hint: '绿色通道' },
+  { value: 'b', label: 'B', hint: '蓝色通道' },
+]
 
 export type AdjustKey = keyof Adjustments
 
@@ -100,7 +123,14 @@ export function isHslNeutral(hsl?: HslShift): boolean {
 /** 统一滑杆列表的数值键：排除曲线 / HSL 与带子选项的可选参数字段 */
 export type SliderKey = Exclude<
   AdjustKey,
-  'curve' | 'hsl' | 'denoise' | 'denoiseMethod' | 'vignetteRadius' | 'vignetteFeather' | 'vignetteShape'
+  | 'curve'
+  | 'curves'
+  | 'hsl'
+  | 'denoise'
+  | 'denoiseMethod'
+  | 'vignetteRadius'
+  | 'vignetteFeather'
+  | 'vignetteShape'
 >
 
 export const ADJUST_DEFS: { key: SliderKey; label: string }[] = [
@@ -123,6 +153,33 @@ export function isCurveNeutral(curve?: number[]): boolean {
   return !curve || curve.length < 4
 }
 
+/** 四条曲线是否全部恒等 */
+export function isCurvesNeutral(curves?: Curves): boolean {
+  if (!curves) return true
+  return (
+    isCurveNeutral(curves.rgb) &&
+    isCurveNeutral(curves.r) &&
+    isCurveNeutral(curves.g) &&
+    isCurveNeutral(curves.b)
+  )
+}
+
+/** 深拷贝一份纯数据调节参数（预设、独立调节都用它，避免把 Proxy 带进 Worker） */
+export function cloneAdjustments(a: Adjustments): Adjustments {
+  const out: Adjustments = { ...a }
+  if (a.curve) out.curve = [...a.curve]
+  if (a.curves) {
+    out.curves = {
+      rgb: a.curves.rgb ? [...a.curves.rgb] : undefined,
+      r: a.curves.r ? [...a.curves.r] : undefined,
+      g: a.curves.g ? [...a.curves.g] : undefined,
+      b: a.curves.b ? [...a.curves.b] : undefined,
+    }
+  }
+  if (a.hsl) out.hsl = { h: [...a.hsl.h], s: [...a.hsl.s], l: [...a.hsl.l] }
+  return out
+}
+
 /** 两份调节参数是否完全一致（可选字段按各自缺省值参与比较） */
 export function sameAdjustments(a: Adjustments, b: Adjustments): boolean {
   if (!ADJUST_DEFS.every(({ key }) => a[key] === b[key])) return false
@@ -138,6 +195,7 @@ export function sameAdjustments(a: Adjustments, b: Adjustments): boolean {
     return false
   return (
     JSON.stringify(a.curve ?? []) === JSON.stringify(b.curve ?? []) &&
+    JSON.stringify(a.curves ?? null) === JSON.stringify(b.curves ?? null) &&
     JSON.stringify(a.hsl ?? null) === JSON.stringify(b.hsl ?? null)
   )
 }
@@ -224,8 +282,25 @@ export function rotatedInnerRect(w0: number, h0: number, deg: number): { w: numb
   return { w: wr, h: hr }
 }
 
-/** 比例预设：ratio 为像素宽高比（w/h），null = 自由 */
-export const CROP_RATIOS: { value: string; label: string; ratio: number | null }[] = [
+/**
+ * 拉直后的裁剪活动范围（归一化，相对变换后源图）：不含透明角落的最大内接矩形。
+ * 未拉直时即整图。
+ */
+export function cropInnerBounds(
+  w0: number,
+  h0: number,
+  c?: Pick<Crop, 'rot' | 'flipH' | 'flipV'>,
+): { x0: number; y0: number; x1: number; y1: number } {
+  const rot = cropRot(c)
+  if (!rot || w0 <= 0 || h0 <= 0) return { x0: 0, y0: 0, x1: 1, y1: 1 }
+  const src = cropSourceSize(w0, h0, c)
+  const inner = rotatedInnerRect(w0, h0, rot)
+  const w = Math.min(1, inner.w / Math.max(1e-6, src.w))
+  const h = Math.min(1, inner.h / Math.max(1e-6, src.h))
+  return { x0: (1 - w) / 2, y0: (1 - h) / 2, x1: (1 + w) / 2, y1: (1 + h) / 2 }
+}
+
+/** 比例预设：ratio 为像素宽高比（w/h），null = 自由 */export const CROP_RATIOS: { value: string; label: string; ratio: number | null }[] = [
   { value: 'free', label: '自由', ratio: null },
   { value: '1:1', label: '1:1', ratio: 1 },
   { value: '4:3', label: '4:3', ratio: 4 / 3 },

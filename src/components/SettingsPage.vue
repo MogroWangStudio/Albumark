@@ -411,6 +411,8 @@ async function relaunchOobe(): Promise<void> {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* 切页时滚动条常驻，居中内容不会横向抖一下 */
+  scrollbar-gutter: stable both-edges;
   padding: 20px 16px calc(28px + var(--safe-bottom));
   display: flex;
   flex-direction: column;

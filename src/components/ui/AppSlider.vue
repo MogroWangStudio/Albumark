@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RotateCcw } from 'lucide-vue-next'
 import type { Component } from 'vue'
 
@@ -144,19 +144,16 @@ function onValUp(e: PointerEvent): void {
 }
 
 /* ---------- 触屏轨道：可拖不可点 ----------
-   拦掉原生「按下即跳值」，值只能由拖动改变：
+   安卓 / 窄视口下把原生 range 彻底关掉指针事件（pointer-events: none），
+   拖动逻辑全部由外层 .track 承担：
    - 按在拇指上：从当前值 1:1 跟手（尊重抓取偏移，不跳变）
    - 按在轨道其他位置拖动：拇指吸附到手指位置跟随（先移动才吸附，轻点不跳）
    - 轻点（无位移）：什么都不发生
-   拦截范围见 shouldGuardTrack：桌面宽窗的鼠标不拦截，点按跳值保持原生；
-   轨道 touch-action: pan-y，手指纵向滑动仍可滚动面板
-   （滚动启动会派发 pointercancel，拖动安全中断） */
+   之所以不靠 preventDefault：Chromium 的原生滑块在 pointerdown 默认被取消后
+   仍会处理随后的 pointermove / click，点按跳值时有发生。让原生控件收不到
+   指针事件，才真正堵死「点一下就改值」。桌面宽窗鼠标不受影响，保持原生点按。 */
 const TRACK_HOTSPOT = 26 // 拇指（22px）外的抓取余量
 
-/** 触屏与移动布局下轨道走「可拖不可点」：轻点不跳值，只允许拖动。
- *  判定与 CSS 适配（pointer: coarse）、面板抽屉断点（≤900px）同源——
- *  真机触屏、开发者工具的移动端模拟（触摸注入或仅窄视口）下都生效，
- *  桌面宽窗的鼠标保持原生点按跳值 */
 const coarseQuery =
   typeof window !== 'undefined' && window.matchMedia
     ? window.matchMedia('(pointer: coarse)')
@@ -166,11 +163,28 @@ const drawerQuery =
     ? window.matchMedia('(max-width: 900px)')
     : null
 
-function shouldGuardTrack(e: PointerEvent): boolean {
-  if (e.pointerType === 'touch') return true
-  return !!(coarseQuery?.matches || drawerQuery?.matches)
+/** 原生滑块锁定（触屏 / 移动布局）：真机触屏与开发者工具的移动端模拟都生效 */
+const locked = ref(!!(coarseQuery?.matches || drawerQuery?.matches))
+
+function syncLocked(): void {
+  locked.value = !!(coarseQuery?.matches || drawerQuery?.matches)
 }
 
+onMounted(() => {
+  coarseQuery?.addEventListener('change', syncLocked)
+  drawerQuery?.addEventListener('change', syncLocked)
+  syncLocked()
+})
+onBeforeUnmount(() => {
+  coarseQuery?.removeEventListener('change', syncLocked)
+  drawerQuery?.removeEventListener('change', syncLocked)
+})
+
+function shouldGuardTrack(e: PointerEvent): boolean {
+  return e.pointerType === 'touch' || locked.value
+}
+
+const trackEl = ref<HTMLInputElement | null>(null)
 const trackActive = ref(false)
 let track: {
   startX: number
@@ -200,10 +214,12 @@ function quantize(v: number): number {
 
 function onTrackDown(e: PointerEvent): void {
   if (props.disabled || !shouldGuardTrack(e)) return
+  const el = trackEl.value
+  if (!el) return
   e.preventDefault()
-  const el = e.currentTarget as HTMLInputElement
+  const host = e.currentTarget as HTMLElement
   try {
-    el.setPointerCapture(e.pointerId)
+    host.setPointerCapture(e.pointerId)
   } catch {
     /* 指针已失效时捕获失败：拖动在指针停留时仍可跟随 */
   }
@@ -288,22 +304,27 @@ function onTrackUp(e: PointerEvent): void {
         @dblclick.stop="startEdit"
       >{{ display }}</span>
     </div>
-    <input
-      type="range"
-      :min="min"
-      :max="max"
-      :step="step"
-      :value="modelValue"
-      :disabled="disabled"
-      :class="{ dragging: trackActive }"
-      :style="fillStyle"
-      :aria-label="label || undefined"
-      @input="onInput"
+    <div
+      class="track"
       @pointerdown="onTrackDown"
       @pointermove="onTrackMove"
       @pointerup="onTrackUp"
       @pointercancel="onTrackUp"
-    />
+    >
+      <input
+        ref="trackEl"
+        type="range"
+        :min="min"
+        :max="max"
+        :step="step"
+        :value="modelValue"
+        :disabled="disabled"
+        :class="{ dragging: trackActive, locked }"
+        :style="fillStyle"
+        :aria-label="label || undefined"
+        @input="onInput"
+      />
+    </div>
   </div>
 </template>
 
@@ -387,6 +408,15 @@ input[type='range'] {
   --hi: 100%;
   /* 触屏：横向给滑块（拖动调值），纵向留给页面滚动 */
   touch-action: pan-y;
+}
+/* 轨道外壳：触屏 / 窄视口下由它接管指针，原生滑块收不到指针事件。
+   纵向手势仍交给面板滚动（pan-y），横向拖动由 JS 跟手 */
+.track {
+  position: relative;
+  touch-action: pan-y;
+}
+input[type='range'].locked {
+  pointer-events: none;
 }
 /* 凹槽轨道 + 实心填充，拇指带描边与悬浮光晕 */
 input[type='range']::-webkit-slider-runnable-track {
