@@ -91,6 +91,43 @@ const grabbing = ref(false)
 let sampleBmp: ImageBitmap | null = null
 const assetBmps: AssetMap = new Map()
 let rafPending = false
+
+/* ---------- 样张方向：横屏 3:2 ⇄ 竖屏 2:3 ----------
+   竖构图是水印最容易翻车的场景（贴边文字、九宫格锚点在窄画幅上的观感完全不同），
+   两套尺寸按同一套构图重绘，切换时重置视图，便于随时对照检查。 */
+const portrait = ref(false)
+const sampleW = computed(() => (portrait.value ? SAMPLE_H : SAMPLE_W))
+const sampleH = computed(() => (portrait.value ? SAMPLE_W : SAMPLE_H))
+/** 两个方向的样张位图各缓存一份：来回切换不重复绘制 */
+const sampleBmps = new Map<'landscape' | 'portrait', ImageBitmap>()
+
+async function ensureSampleBitmap(): Promise<ImageBitmap> {
+  const key = portrait.value ? 'portrait' : 'landscape'
+  const cached = sampleBmps.get(key)
+  if (cached) return cached
+  const bmp = await makeSampleBitmap(sampleW.value, sampleH.value)
+  sampleBmps.set(key, bmp)
+  return bmp
+}
+
+/** 切换横 / 竖屏：重取样张位图、复位缩放与平移（画幅比例变了，旧视图没有意义） */
+let orientSeq = 0
+async function setOrientation(vertical: boolean): Promise<void> {
+  if (portrait.value === vertical) return
+  portrait.value = vertical
+  stopViewAnim()
+  viewZoom.value = 1
+  viewPan.x = 0
+  viewPan.y = 0
+  // 连续快速切换时只认最后一次：较早的 await 返回后不再覆盖画布位图
+  const seq = ++orientSeq
+  sampleBmp = null
+  const bmp = await ensureSampleBitmap()
+  if (seq !== orientSeq) return
+  sampleBmp = bmp
+  redraw()
+}
+
 /** 最近一次绘制到画布的映射（设备像素），命中测试与拖拽换算用 */
 const vmap = { scale: 1, ox: 0, oy: 0, dpr: 1 }
 
@@ -109,7 +146,7 @@ function resolvedLayers(): WatermarkLayer[] {
   )
 }
 
-/** 含边框扩展的最终画布尺寸（照片区域仍是样张尺寸） */
+/** 含边框扩展的最终画布尺寸（照片区域仍是样张尺寸，随横 / 竖屏切换） */
 const frameSize = computed(() => {
   let l = 0
   let r = 0
@@ -123,7 +160,7 @@ const frameSize = computed(() => {
       b += layer.bottom
     }
   }
-  return { w: SAMPLE_W + l + r, h: SAMPLE_H + t + b }
+  return { w: sampleW.value + l + r, h: sampleH.value + t + b }
 })
 
 function redraw(): void {
@@ -149,7 +186,14 @@ function redraw(): void {
   const oy = (rect.height * dpr - frame.h * fit) / 2 + viewPan.y * dpr
   ctx.translate(ox, oy)
   ctx.scale(fit, fit)
-  const composed = paintComposed(ctx, sampleBmp, SAMPLE_W, SAMPLE_H, resolvedLayers(), assetBmps)
+  const composed = paintComposed(
+    ctx,
+    sampleBmp,
+    sampleW.value,
+    sampleH.value,
+    resolvedLayers(),
+    assetBmps,
+  )
   const { photoX, photoY } = composed
 
   // 选中图层：描边框 + 锚点十字，画在照片区域坐标系（边框层全画布，不画锚点）
@@ -159,13 +203,13 @@ function redraw(): void {
     const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#ffa72f'
     ctx.save()
     ctx.translate(photoX, photoY)
-    const box = measureLayer(sel, SAMPLE_W, SAMPLE_H, measureContext())
+    const box = measureLayer(sel, sampleW.value, sampleH.value, measureContext())
     ctx.strokeStyle = accent
     ctx.globalAlpha = 0.95
     ctx.lineWidth = 1.5 / fit
     ctx.setLineDash([5 / fit, 4 / fit])
     ctx.strokeRect(box.cx - box.w / 2, box.cy - box.h / 2, box.w, box.h)
-    const a = anchorPoint(sel.anchor, SAMPLE_W, SAMPLE_H)
+    const a = anchorPoint(sel.anchor, sampleW.value, sampleH.value)
     ctx.setLineDash([])
     ctx.globalAlpha = 0.75
     ctx.lineWidth = 1 / fit
@@ -382,10 +426,10 @@ function onPointerDown(e: PointerEvent): void {
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     if (l.type === 'border' || !l.visible) continue
-    const box = measureLayer(l, SAMPLE_W, SAMPLE_H, measureContext())
+    const box = measureLayer(l, sampleW.value, sampleH.value, measureContext())
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
-      const c = layerPivot(l, SAMPLE_W, SAMPLE_H)
+      const c = layerPivot(l, sampleW.value, sampleH.value)
       gesture = {
         type: 'layer',
         id: l.id,
@@ -440,17 +484,19 @@ function onPointerMove(e: PointerEvent): void {
     const dpy = ((e.clientY - gesture.startClient.y) * vmap.dpr) / vmap.scale
     let cx = gesture.startCx + dpx
     let cy = gesture.startCy + dpy
-    // 吸附样张中线与安全边距
+    // 吸附样张中线与安全边距（尺寸随横 / 竖屏变化）
     if (settings.wmSnap) {
+      const sw = sampleW.value
+      const sh = sampleH.value
       const t = 8 / (vmap.scale / vmap.dpr)
-      for (const x of [SAMPLE_W / 2, SAMPLE_W * 0.04, SAMPLE_W * 0.96]) {
+      for (const x of [sw / 2, sw * 0.04, sw * 0.96]) {
         if (Math.abs(cx - x) < t) cx = x
       }
-      for (const y of [SAMPLE_H / 2, SAMPLE_H * 0.04, SAMPLE_H * 0.96]) {
+      for (const y of [sh / 2, sh * 0.04, sh * 0.96]) {
         if (Math.abs(cy - y) < t) cy = y
       }
     }
-    const a = anchorPoint(layer.anchor, SAMPLE_W, SAMPLE_H)
+    const a = anchorPoint(layer.anchor, sampleW.value, sampleH.value)
     wm.update(layer.id, {
       offsetX: Math.round(cx - a.x),
       offsetY: Math.round(cy - a.y),
@@ -578,7 +624,7 @@ function onCursorMove(e: PointerEvent): void {
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     if (l.type === 'border' || !l.visible) continue
-    if (hitTest(measureLayer(l, SAMPLE_W, SAMPLE_H, measureContext()), p.x, p.y)) {
+    if (hitTest(measureLayer(l, sampleW.value, sampleH.value, measureContext()), p.x, p.y)) {
       grabbing.value = true
       return
     }
@@ -591,7 +637,7 @@ let ro: ResizeObserver | null = null
 onMounted(async () => {
   // 工作室在沙箱草稿上编辑：离开时草稿丢弃，不影响项目照片的水印
   wm.enterStudio()
-  sampleBmp = await makeSampleBitmap()
+  sampleBmp = await ensureSampleBitmap()
   ro = new ResizeObserver(() => redraw())
   if (boxEl.value) ro.observe(boxEl.value)
   redraw()
@@ -601,8 +647,9 @@ onBeforeUnmount(() => {
   wm.exitStudio()
   ro?.disconnect()
   stopViewAnim()
-  sampleBmp?.close()
   sampleBmp = null
+  for (const b of sampleBmps.values()) b.close()
+  sampleBmps.clear()
   for (const b of assetBmps.values()) b.close()
   assetBmps.clear()
 })
@@ -658,6 +705,27 @@ watch(mode, async (m) => {
     <!-- 模板编辑器：v-show 常驻，画布状态与视图变换在切换间保留 -->
     <div v-show="mode === 'edit'" class="body">
       <div ref="boxEl" class="preview">
+        <!-- 样张方向：竖构图是水印最容易翻车的场景，随时切换对照 -->
+        <div class="orient material" role="group" aria-label="样张方向">
+          <button
+            class="orient-btn"
+            :class="{ on: !portrait }"
+            :aria-pressed="!portrait"
+            title="横屏样张 3:2"
+            @click="setOrientation(false)"
+          >
+            横屏
+          </button>
+          <button
+            class="orient-btn"
+            :class="{ on: portrait }"
+            :aria-pressed="portrait"
+            title="竖屏样张 2:3"
+            @click="setOrientation(true)"
+          >
+            竖屏
+          </button>
+        </div>
         <canvas
           ref="canvasEl"
           class="sample"
@@ -763,17 +831,47 @@ h1 {
   position: relative;
   min-width: 0;
   min-height: 0;
-  background: var(--canvas);
+  /* 中性工作台底色：比页面底色略沉一档，样张轮廓清晰，也不再靠白色圆角卡片衬托 */
+  background: color-mix(in srgb, var(--canvas) 88%, var(--text) 12%);
 }
-/* 画布铺满容器（四周留边），缩放与平移都发生在画布内部的绘制变换里 */
+/* 方向切换：浮在样张上方，材质底保证任何照片上都可读 */
+.orient {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 2;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  backdrop-filter: var(--blur-material);
+  -webkit-backdrop-filter: var(--blur-material);
+}
+.orient-btn {
+  height: calc(24px * var(--ui-zoom, 1));
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
+  color: var(--text-2);
+  transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
+}
+.orient-btn:hover:not(.on) {
+  color: var(--text);
+}
+.orient-btn.on {
+  background: var(--raised);
+  color: var(--text);
+}
+/* 画布铺满容器（四周留边），缩放与平移都发生在画布内部的绘制变换里。
+   不加圆角与投影：样张本身就是照片，多余的白底圆角卡片会干扰对水印的判断 */
 .sample {
   position: absolute;
   inset: 20px;
   width: calc(100% - 40px);
   height: calc(100% - 40px);
   display: block;
-  border-radius: var(--r-m);
-  box-shadow: var(--shadow-2);
   touch-action: none;
   cursor: default;
 }

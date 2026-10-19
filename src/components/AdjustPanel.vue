@@ -43,6 +43,7 @@ import {
   sameAdjustments,
   type Adjustments,
   type Curves,
+  type SliderKey,
 } from '@/types/adjust'
 
 const adjust = useAdjustStore()
@@ -86,6 +87,15 @@ const matchesGlobal = computed(() => {
 function onReset(): void {
   if (individual.value) adjust.resetToGlobal(activeId.value)
   else adjust.reset()
+}
+
+/**
+ * 单项复位：只把这一项归零。
+ * 这里曾经在「单独调节」下调用 resetToGlobal()——点某一项的复位按钮会把
+ * 整张照片的所有调节一起还原成全局，属于明显的误伤。
+ */
+function resetOne(key: SliderKey): void {
+  target.value[key] = 0
 }
 
 /* ---------- 曲线：合成通道 + R/G/B ---------- */
@@ -226,6 +236,11 @@ function resetVignette(): void {
   delete target.value.vignetteShape
 }
 
+/** 单项恢复缺省：删除可选字段即回到引擎里的默认值（半径 / 羽化都是 50） */
+function resetVigField(k: 'vignetteRadius' | 'vignetteFeather'): void {
+  delete target.value[k]
+}
+
 /* ---------- 降噪：强度 + 算法 ---------- */
 
 const dnOpen = ref(false)
@@ -302,7 +317,7 @@ function resetDenoise(): void {
         :label="def.label"
         :icon="icons[def.key]"
         :default="0"
-        @reset="individual ? adjust.resetToGlobal(activeId) : adjust.set(def.key, 0)"
+        @reset="resetOne(def.key)"
       />
       <!-- 白平衡吸管紧跟色温 / 色调：取色校正与这两根滑杆是同一件事 -->
       <div v-if="def.key === 'tint'" class="wb">
@@ -398,8 +413,8 @@ function resetDenoise(): void {
           :default="0"
           @reset="target.vignette = 0"
         />
-        <AppSlider v-model="vigRadiusModel" :min="0" :max="100" label="半径" :default="50" />
-        <AppSlider v-model="vigFeatherModel" :min="0" :max="100" label="羽化" :default="50" />
+        <AppSlider v-model="vigRadiusModel" :min="0" :max="100" label="半径" :default="50" @reset="resetVigField('vignetteRadius')" />
+        <AppSlider v-model="vigFeatherModel" :min="0" :max="100" label="羽化" :default="50" @reset="resetVigField('vignetteFeather')" />
         <div class="row-inline">
           <span class="fl2">形状</span>
           <AppSegment

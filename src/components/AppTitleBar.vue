@@ -1,8 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Brush, FolderOpen, ImagePlus, Minus, Settings, Square, X } from 'lucide-vue-next'
+import {
+  Brush,
+  FolderOpen,
+  ImagePlus,
+  Minus,
+  Redo2,
+  Settings,
+  Square,
+  Undo2,
+  X,
+} from 'lucide-vue-next'
 import LogoText from '@/components/brand/LogoText.vue'
 import { isTauri } from '@/core/platform'
+import { useHistoryStore } from '@/stores/history'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const emit = defineEmits<{
@@ -13,7 +24,20 @@ const emit = defineEmits<{
 }>()
 
 const ws = useWorkspaceStore()
+const history = useHistoryStore()
 const pressed = ref(false)
+
+/** 快捷键提示按平台显示：macOS 用 ⌘，其余用 Ctrl+ */
+const mod = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl+'
+
+const undoTitle = computed(() => {
+  if (history.suspended) return '水印工作室的草稿不进入撤销历史'
+  return history.canUndo ? `撤销${history.undoLabel}（${mod}Z）` : '没有可撤销的操作'
+})
+const redoTitle = computed(() => {
+  if (history.suspended) return '水印工作室的草稿不进入撤销历史'
+  return history.canRedo ? `重做${history.redoLabel}（${mod}⇧Z）` : '没有可重做的操作'
+})
 
 // 药丸集合组里的控件：工作区 / 导入 / 水印工作室 / 设置
 const canImport = computed(() => ws.inProject)
@@ -61,6 +85,28 @@ function onClose(): void {
     </div>
 
     <div class="right">
+      <!-- 撤销 / 重做：状态由编辑历史决定，禁用时给出原因 -->
+      <div class="history" role="group" aria-label="撤销与重做">
+        <button
+          class="hist"
+          :disabled="!history.canUndo || history.suspended"
+          :title="undoTitle"
+          aria-label="撤销"
+          @click="history.undo()"
+        >
+          <Undo2 :size="15" />
+        </button>
+        <button
+          class="hist"
+          :disabled="!history.canRedo || history.suspended"
+          :title="redoTitle"
+          aria-label="重做"
+          @click="history.redo()"
+        >
+          <Redo2 :size="15" />
+        </button>
+      </div>
+
       <div class="pill" role="toolbar" aria-label="主工具">
         <button class="pill-item" @click="emit('openWorkspace')">
           <FolderOpen :size="15" /><span>工作区</span>
@@ -110,9 +156,44 @@ function onClose(): void {
 }
 .pill,
 .win-controls,
+.history,
 .logo-btn,
 .ws-chip {
   -webkit-app-region: no-drag;
+}
+/* 撤销 / 重做：与主工具同高的胶囊，图标按钮，禁用时压暗但仍可读 */
+.history {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 34px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--hover);
+  border: 1px solid var(--line);
+}
+.hist {
+  width: 30px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--text-2);
+  transition:
+    background var(--dur-hover) var(--ease-soft),
+    color var(--dur-hover) var(--ease-soft),
+    transform var(--dur-fast) var(--ease);
+}
+.hist:hover:not(:disabled) {
+  background: var(--active);
+  color: var(--text);
+}
+.hist:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.hist:disabled {
+  opacity: 0.32;
+  cursor: default;
 }
 .logo-btn {
   display: inline-flex;
@@ -237,6 +318,21 @@ function onClose(): void {
   }
   .pill-item {
     padding: 0 9px;
+  }
+  /* 窄屏把撤销组压缩，避免和工具胶囊一起挤爆标题栏 */
+  .history {
+    height: 30px;
+    padding: 0 2px;
+  }
+  .hist {
+    width: 26px;
+    height: 24px;
+  }
+}
+@media (max-width: 560px) {
+  /* 工作区入口已在工具胶囊里，窄屏省掉重复的项目名胶囊 */
+  .ws-chip {
+    display: none;
   }
 }
 </style>

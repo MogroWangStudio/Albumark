@@ -32,6 +32,7 @@ import { baseName } from '@/core/fs'
 import { toast } from '@/stores/toast'
 import { useAdjustStore } from '@/stores/adjust'
 import { useAdjustPresetsStore } from '@/stores/adjustPresets'
+import { useHistoryStore } from '@/stores/history'
 import { useImagesStore } from '@/stores/images'
 import { useSettingsStore } from '@/stores/settings'
 import { useWatermarkStore } from '@/stores/watermark'
@@ -40,6 +41,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 const images = useImagesStore()
 const wm = useWatermarkStore()
 const presets = useAdjustPresetsStore()
+const history = useHistoryStore()
 const ws = useWorkspaceStore()
 const adjust = useAdjustStore()
 const settings = useSettingsStore()
@@ -401,6 +403,8 @@ onMounted(async () => {
   // 曾经在这里兜底套用「右下签名」内置模板，导致新建工作目录 / 首次启动后
   // 导入的照片被莫名加上水印——水印必须是用户主动加的东西。
   wm.hydrate()
+  // 装载完成后的状态才是撤销的起点：否则用户第一次撤销会把「刚恢复的水印」撤掉
+  history.reset()
   window.addEventListener('keydown', onKeydown)
   document.addEventListener('contextmenu', onGlobalContextMenu)
   window.addEventListener('pagehide', flushWorkspace)
@@ -485,6 +489,21 @@ function onKeydown(e: KeyboardEvent): void {
     e.preventDefault()
     images.selectAll()
     return
+  }
+  // 撤销 / 重做：输入框内保留系统文本撤销，其余场景走编辑历史
+  if (!typing && (e.metaKey || e.ctrlKey) && !e.altKey) {
+    const k = e.key.toLowerCase()
+    if (k === 'z') {
+      e.preventDefault()
+      if (e.shiftKey) history.redo()
+      else history.undo()
+      return
+    }
+    if (k === 'y') {
+      e.preventDefault()
+      history.redo()
+      return
+    }
   }
   // 左右方向键：顺序切换当前照片
   if (!typing && view.value === 'main' && inProject.value && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {

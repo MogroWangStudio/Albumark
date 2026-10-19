@@ -135,11 +135,11 @@ export function paintComposed(
   return { photoX: rx, photoY: ry, frameW, frameH }
 }
 
-/** 位图版样张：工作室画布 drawImage 用 */
-export async function makeSampleBitmap(): Promise<ImageBitmap> {
-  const oc = new OffscreenCanvas(SAMPLE_W, SAMPLE_H)
+/** 位图版样张：工作室画布 drawImage 用。可传入横 / 竖屏尺寸，同一套构图按比例重绘 */
+export async function makeSampleBitmap(w = SAMPLE_W, h = SAMPLE_H): Promise<ImageBitmap> {
+  const oc = new OffscreenCanvas(w, h)
   const ctx = oc.getContext('2d') as OffscreenCanvasRenderingContext2D
-  drawSample(ctx, SAMPLE_W, SAMPLE_H)
+  drawSample(ctx, w, h)
   return await createImageBitmap(oc)
 }
 

@@ -175,6 +175,83 @@ export function whiteBalanceDelta(r: number, g: number, b: number): { temperatur
   }
 }
 
+/* ---------- 影调核心：曝光 / 亮度 / 对比度 / 阴影 / 高光 ---------- */
+
+const TONE_SIZE = 1024
+
+function smoothstep01(v: number): number {
+  const t = v < 0 ? 0 : v > 1 ? 1 : v
+  return t * t * (3 - 2 * t)
+}
+
+/** smoothstep 的反函数：负对比度时把两端向中灰收 */
+function invSmoothstep(v: number): number {
+  const t = v < 0 ? 0 : v > 1 ? 1 : v
+  return 0.5 - Math.sin(Math.asin(1 - 2 * t) / 3)
+}
+
+/**
+ * 曝光曲线：线性提亮，接近白点后走软肩。
+ * 肩部的拐点随曝光量移动——e ≤ 1 时整段恒等，所以参数全中性时这条曲线
+ * 不会偷偷改变照片；e > 1 时只有将被打到 255 以上的部分被压回，呈现胶片式
+ * 高光滚降，而不是一刀切的白块。
+ */
+function exposureCurve(x: number, e: number): number {
+  if (e <= 1) return x * e
+  const knee = 1 - 0.35 * Math.min(1, (e - 1) / 0.5)
+  const y = x * e
+  if (y <= knee) return y
+  return knee + (1 - knee) * (1 - Math.exp(-(y - knee) / (1 - knee)))
+}
+
+/**
+ * 影调查找表：输入亮度 0–1 → 输出亮度 0–1。
+ *
+ * 五项控制在亮度域串成一条单调曲线：
+ * 曝光（软肩）→ 亮度（端点不动的 gamma）→ 对比度（平滑 S 曲线，不再是
+ * 围绕中灰的线性乘法——高对比不会把暗部压死、把高光推爆）→
+ * 阴影 / 高光（各带互补蒙版的 gamma，中间调基本不动）。
+ * 逐像素只查一次表、按比例缩放 RGB，速度快且不会逐通道运算串色。
+ * 末尾强制单调：任何参数组合都不允许曲线出现反向段（会在暗部形成脏色带）。
+ */
+function buildToneLut(a: Adjustments): Float32Array {
+  const e = Math.pow(2, (a.exposure / 100) * 1.2)
+  // 曝光 > 1 时把软肩曲线归一化：纯白仍落在纯白，不因滚降被压掉一级
+  const top = e > 1 ? exposureCurve(1, e) : 1
+  const bright = a.brightness / 100
+  const contrast = a.contrast / 100
+  const shadows = a.shadows / 100
+  const highlights = a.highlights / 100
+  const lut = new Float32Array(TONE_SIZE)
+  for (let i = 0; i < TONE_SIZE; i++) {
+    const x = i / (TONE_SIZE - 1)
+    let t = exposureCurve(x, e) / top
+    // 亮度：0 仍为 0、1 仍为 1，只抬 / 压中间调，不会给黑位抹灰
+    if (bright !== 0) t = Math.pow(t, 1 / (1 + bright * 0.5))
+    // 对比度：S 曲线（或反 S 曲线），端点固定、全程平滑
+    if (contrast > 0) {
+      t += (smoothstep01(t) - t) * contrast * 0.9
+    } else if (contrast < 0) {
+      t += (invSmoothstep(t) - t) * -contrast * 0.9
+    }
+    // 阴影：0.62 以下按降幂蒙版生效，纯黑保持纯黑
+    if (shadows !== 0) {
+      const m = 1 - smoothstep01(t / 0.62)
+      t += (Math.pow(t, 1 / (1 + shadows * 0.55)) - t) * m
+    }
+    // 高光：0.35 以上按升幂蒙版生效，纯白保持纯白（不制造灰白）
+    if (highlights !== 0) {
+      const m = smoothstep01((t - 0.35) / 0.65)
+      t += (Math.pow(t, 1 / (1 + highlights * 0.55)) - t) * m
+    }
+    lut[i] = t < 0 ? 0 : t > 1 ? 1 : t
+  }
+  for (let i = 1; i < TONE_SIZE; i++) {
+    if (lut[i] < lut[i - 1]) lut[i] = lut[i - 1]
+  }
+  return lut
+}
+
 /* ---------- 局部对比度：可分离盒模糊（清晰度 / 锐化共用） ---------- */
 
 /** 单通道盒模糊：横向 + 纵向两次滑动窗口，返回每通道模糊副本。 */
@@ -223,9 +300,9 @@ function toRGBFloat(data: Uint8ClampedArray): Float32Array {
 }
 
 /**
- * 单遍像素调节管线：曝光 → 亮度 → 对比度 → 阴影/高光 → 色温/色调 →
- * 自然饱和度/饱和度 → HSL 分色 → 去雾 → 晕影 → 分通道曲线 → 合成曲线 →
- * 降噪 → 清晰度 → 锐化 → 颗粒。
+ * 单遍像素调节管线：影调（曝光 → 亮度 → 对比度 → 阴影/高光，一次查表）→
+ * 色温/色调 → 自然饱和度/饱和度 → HSL 分色 → 去雾 → 晕影 →
+ * 分通道曲线 → 合成曲线 → 降噪 → 清晰度 → 锐化 → 颗粒。
  * 直接操作 RGBA 数据，供 Web Worker 调用；滑杆参数取 -100 ~ 100，曲线为 0–1 控制点。
  */
 export function applyAdjustments(
@@ -234,12 +311,6 @@ export function applyAdjustments(
   h: number,
   a: Adjustments,
 ): void {
-  const exposure = Math.pow(2, (a.exposure / 100) * 1.2)
-  const brightness = (a.brightness / 100) * 40
-  const contrast = Math.pow(2, a.contrast / 100)
-  // 阴影/高光：权重 0–1，按亮度分区做 gamma 提亮 / 压暗（端点不动）
-  const shadows = a.shadows / 100
-  const highlights = a.highlights / 100
   const temperature = (a.temperature / 100) * 32
   const tint = (a.tint / 100) * 26
   const vignette = a.vignette / 100
@@ -253,6 +324,14 @@ export function applyAdjustments(
   const sharpen = a.sharpen / 100
   const grain = a.grain / 100
   const luts = buildCurveLuts(a)
+  // 影调：仅五项中有任意非中性时才建表（全中性时整条管线对亮度恒等）
+  const toneOn =
+    a.exposure !== 0 ||
+    a.brightness !== 0 ||
+    a.contrast !== 0 ||
+    a.shadows !== 0 ||
+    a.highlights !== 0
+  const tone = toneOn ? buildToneLut(a) : null
 
   // 自然饱和度 + 饱和度：以 luma 为轴缩放色度；自然饱和度对低饱和像素加权更大
   const vib = (a.vibrance / 100) * 1.6
@@ -263,7 +342,6 @@ export function applyAdjustments(
 
   const cx = w / 2
   const cy = h / 2
-  const mid = 127.5
   const vInvDenom = 1 / Math.max(cx, cy)
 
   for (let y = 0, i = 0; y < h; y++) {
@@ -275,70 +353,24 @@ export function applyAdjustments(
       let g = data[i + 1]
       let b = data[i + 2]
 
-      if (exposure !== 1) {
-        r *= exposure
-        g *= exposure
-        b *= exposure
-      }
-      if (brightness !== 0) {
-        r += brightness
-        g += brightness
-        b += brightness
-      }
-      if (contrast !== 1) {
-        r = (r - mid) * contrast + mid
-        g = (g - mid) * contrast + mid
-        b = (b - mid) * contrast + mid
-      }
-
-      // 阴影/高光：亮度分区的 gamma 变换 + 等比缩放色度。
-      // 旧实现用 (1-l)³ 硬加量，纯黑会被抬成 70 级灰雾、高光被乘法推到 255 后偏色；
-      // 现在两端点严格不动（0→0、255→255），只在中低 / 中高亮度按蒙版生效，
-      // 且缩放系数受最亮通道约束，避免单通道溢出造成色相偏移。
-      if (shadows !== 0 || highlights !== 0) {
+      // 影调：按亮度查表，RGB 等比跟随——只改明暗，色相与色度关系保持不变。
+      // 查表值做线性插值，避免 1024 级台阶在渐变天空上现出条带。
+      if (tone) {
         const l0 = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
-        const lc = l0 < 0 ? 0 : l0 > 1 ? 1 : l0
-        let lt = lc
-        if (shadows !== 0) {
-          // 阴影蒙版：0.08 以下全量，0.62 以上归零，中间调不被牵连
-          const tm = (lc - 0.08) / 0.54
-          const m = tm <= 0 ? 1 : tm >= 1 ? 0 : 1 - tm * tm * (3 - 2 * tm)
-          const gs = Math.pow(lc, 1 / (1 + shadows * 0.5))
-          lt += (gs - lc) * m
-          // 极暗处给一点点中性抬起，避免死黑被压成一块没有层次的墨
-          if (shadows > 0) lt += shadows * m * 0.02
-        }
-        if (highlights !== 0) {
-          const l1 = lt < 0 ? 0 : lt > 1 ? 1 : lt
-          const tm = (l1 - 0.3) / 0.68
-          const m = tm <= 0 ? 0 : tm >= 1 ? 1 : tm * tm * (3 - 2 * tm)
-          if (highlights > 0) {
-            // 提亮走 gamma：越接近纯白提升越小，白点保持在 255
-            lt += (Math.pow(l1, 1 / (1 + highlights * 0.5)) - l1) * m
-          } else {
-            // 压暗（高光回收）按亮度线性收，纯白也能拉回细节
-            lt += highlights * m * l1 * 0.45
-          }
-        }
-        if (lt !== lc) {
-          if (l0 <= 1e-4) {
-            const add = lt * 255
-            r += add
-            g += add
-            b += add
-          } else {
-            let f = lt / l0
-            const mx = r > g ? (r > b ? r : b) : g > b ? g : b
-            if (mx > 0) {
-              const lim = 255 / mx
-              if (f > lim) f = lim
-            }
+        if (l0 > 1e-4) {
+          const x = l0 >= 1 ? TONE_SIZE - 1 : l0 * (TONE_SIZE - 1)
+          const i0 = x | 0
+          const i1 = i0 < TONE_SIZE - 1 ? i0 + 1 : i0
+          const t = tone[i0] + (tone[i1] - tone[i0]) * (x - i0)
+          if (t !== l0) {
+            const f = t / l0
             r *= f
             g *= f
             b *= f
           }
         }
       }
+
       if (temperature !== 0) {
         r += temperature
         b -= temperature

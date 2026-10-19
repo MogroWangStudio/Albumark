@@ -372,6 +372,24 @@ export const useWatermarkStore = defineStore('watermark', () => {
       /* 素材过大等情况直接放弃持久化 */
     }
   }
+  /**
+   * 撤销 / 重做：整份替换全局水印与逐图独立水印。
+   * 只处理照片使用中的图层，不碰工作室草稿（草稿有自己的保存语义）。
+   */
+  function restoreState(
+    nextLayers: WatermarkLayer[],
+    nextPerImage: Record<string, WatermarkLayer[]>,
+  ): void {
+    layers.value = nextLayers.map((l) => migrateLayer(deepClone(l)))
+    const im: Record<string, WatermarkLayer[]> = {}
+    for (const [id, list] of Object.entries(nextPerImage)) {
+      im[id] = list.map((l) => migrateLayer(deepClone(l)))
+    }
+    perImage.value = im
+    selectedId.value = editTarget()[0]?.id ?? null
+    schedulePersist()
+  }
+
   function hydrate(): boolean {
     try {
       let raw = window.localStorage.getItem(PERSIST_KEY)
@@ -431,6 +449,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     applyToTarget,
     serialize,
     schedulePersist,
+    restoreState,
     hydrate,
   }
 })

@@ -137,6 +137,27 @@ export const useAdjustStore = defineStore('adjust', () => {
     if (data.vignetteShape === undefined) delete values.vignetteShape
   }
 
+  /* ---------- 撤销 / 重做：整份状态回填 ---------- */
+
+  /**
+   * 用一份纯数据快照替换当前全部调节状态（全局 + 逐图 + 裁剪）。
+   * 先 reset 再覆盖：快照里没有的可选字段（曲线 / HSL / 降噪…）不会残留。
+   */
+  function restoreState(next: {
+    values: Adjustments
+    perImage: Record<string, Adjustments>
+    crops: Record<string, Crop>
+  }): void {
+    reset()
+    Object.assign(values, cloneAdjustments(next.values))
+    const im: Record<string, Adjustments> = {}
+    for (const [id, a] of Object.entries(next.perImage)) im[id] = cloneAdjustments(a)
+    perImage.value = im
+    const cr: Record<string, Crop> = {}
+    for (const [id, c] of Object.entries(next.crops)) cr[id] = { ...c }
+    crops.value = cr
+  }
+
   watch(values, () => {
     try {
       window.localStorage.setItem(PERSIST_KEY, JSON.stringify(values))
@@ -207,6 +228,7 @@ export const useAdjustStore = defineStore('adjust', () => {
     applyWhiteBalanceSample,
     applyToImages,
     applyToGlobal,
+    restoreState,
     panel,
     crops,
     cropMode,
