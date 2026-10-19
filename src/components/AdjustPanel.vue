@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
   Aperture,
   Blend,
@@ -19,15 +19,16 @@ import {
   Sun,
   SunDim,
   Thermometer,
-  Trash2,
   Zap,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
+import AdjustPresetCard from '@/components/ui/AdjustPresetCard.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import CurveEditor from '@/components/ui/CurveEditor.vue'
+import { buildPresetBase } from '@/core/presetThumb'
 import { useAdjustStore } from '@/stores/adjust'
 import { useAdjustPresetsStore, type AdjustPreset } from '@/stores/adjustPresets'
 import { useImagesStore } from '@/stores/images'
@@ -37,6 +38,8 @@ import {
   DENOISE_DEFAULT,
   DENOISE_METHODS,
   HSL_BANDS,
+  isCurvesNeutral,
+  isCurveNeutral,
   isHslNeutral,
   isNeutral,
   neutralHsl,
@@ -137,6 +140,41 @@ const presetHint = computed(() =>
     ? `已选 ${presetTargetIds.value.length} 张，点击预设套用到这些照片`
     : '点击预设套用到当前照片',
 )
+
+/**
+ * 卡片缩略图的底图：优先用当前照片的图库缩略图，套上预设参数实时算出效果；
+ * 没有照片时用内置合成样张。切换照片时异步换底，逐张缓存。
+ */
+const presetBase = ref<ImageData | null>(null)
+let baseSeq = 0
+watch(
+  () => images.active?.thumbUrl ?? '',
+  async (url) => {
+    const seq = ++baseSeq
+    const data = await buildPresetBase(url)
+    // 连续切图时只认最后一次，避免旧底图覆盖新照片
+    if (seq === baseSeq) presetBase.value = data
+  },
+  { immediate: true },
+)
+
+/** 当前照片的参数与哪条预设完全一致（用于「已应用」标记与选中态） */
+const activePresetId = computed(
+  () => presets.list.find((p) => sameAdjustments(target.value, p.values))?.id ?? null,
+)
+
+/** 卡片第二行：有效调节项数 + 保存日期 */
+function presetInfo(p: AdjustPreset): string {
+  const v = p.values
+  let n = 0
+  for (const { key } of ADJUST_DEFS) if (v[key] !== 0) n++
+  if (v.vignette !== 0) n++
+  if ((v.denoise ?? 0) > 0) n++
+  if (!isCurvesNeutral(v.curves) || !isCurveNeutral(v.curve)) n++
+  if (!isHslNeutral(v.hsl)) n++
+  const d = new Date(p.createdAt)
+  return `${n ? `${n} 项调节` : '中性参数'} · ${d.getMonth() + 1}月${d.getDate()}日`
+}
 
 function openPresetSave(): void {
   presetName.value = `调节预设 ${presets.list.length + 1}`
@@ -290,19 +328,21 @@ function resetDenoise(): void {
         <ChevronDown :size="13" class="chev" :class="{ open: presetOpen }" />
       </header>
       <template v-if="presetOpen">
-        <ul v-if="presets.list.length" class="presets">
-          <li v-for="p in presets.list" :key="p.id" class="preset">
-            <button class="preset-apply" :title="`套用「${p.name}」`" @click="applyPreset(p)">
-              {{ p.name }}
-            </button>
-            <button class="preset-all" title="应用到全部照片（全局调节）" @click.stop="applyPresetAll(p)">
-              全部
-            </button>
-            <button class="preset-rm" title="删除预设" @click.stop="presets.remove(p.id)">
-              <Trash2 :size="11" />
-            </button>
-          </li>
-        </ul>
+        <div v-if="presets.list.length" class="preset-scroll">
+          <div class="preset-grid">
+            <AdjustPresetCard
+              v-for="p in presets.list"
+              :key="p.id"
+              :preset="p"
+              :base="presetBase"
+              :active="activePresetId === p.id"
+              :info="presetInfo(p)"
+              @apply="applyPreset(p)"
+              @apply-all="applyPresetAll(p)"
+              @remove="presets.remove(p.id)"
+            />
+          </div>
+        </div>
         <p v-if="!presets.list.length" class="preset-empty">
           还没有预设。调好当前照片后点右上角「+」保存，之后可一键套用到其他照片。
         </p>
@@ -591,68 +631,23 @@ function resetDenoise(): void {
 .group-head .mini:disabled {
   opacity: 0.35;
 }
-.presets {
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+/* 预设卡片：沿用工作室模板卡片的语言——缩略图在上、名称与信息在下，
+   悬停抬起，当前生效的一条带强调色描边 */
+.preset-scroll {
+  /* 悬停时卡片上移 2px，顶部留出同样的余量，避免被滚动容器裁掉 */
+  margin-top: 4px;
+  padding-top: 2px;
+  /* 预设多时在组内滚动：不把整块面板撑长，也不打断下方的滑杆 */
+  max-height: clamp(200px, 40vh, 340px);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding-right: 1px;
 }
-.preset {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  border-radius: 7px;
-  padding: 0 2px;
-}
-.preset:hover {
-  background: var(--hover);
-}
-.preset-apply {
-  flex: 1;
-  min-width: 0;
-  height: calc(26px * var(--ui-zoom, 1));
-  padding: 0 6px;
-  text-align: left;
-  font-size: calc(12.5px * var(--ui-zoom, 1));
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border-radius: 6px;
-}
-.preset-apply:hover {
-  color: var(--accent);
-}
-.preset-all {
-  flex: none;
-  height: 22px;
-  padding: 0 6px;
-  border-radius: 6px;
-  font-size: calc(11px * var(--ui-zoom, 1));
-  color: var(--text-3);
-}
-.preset-all:hover {
-  color: var(--accent);
-  background: var(--active);
-}
-.preset-rm {
-  flex: none;
-  width: 22px;
-  height: 22px;
+.preset-grid {
   display: grid;
-  place-items: center;
-  border-radius: 6px;
-  color: var(--text-3);
-  opacity: 0;
-  transition: opacity var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
-}
-.preset:hover .preset-rm {
-  opacity: 1;
-}
-.preset-rm:hover {
-  color: var(--danger);
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 8px;
+  padding-bottom: 2px;
 }
 .preset-empty,
 .preset-hint {
@@ -816,19 +811,16 @@ function resetDenoise(): void {
   .band::before {
     left: 9px;
   }
-  /* 触屏没有 hover：删除按钮常显，行高与小按钮放大 */
+  /* 触屏没有 hover：预设卡片按更窄的列宽排布，滚动区给得更高一些 */
   .wb-pick {
     height: 32px;
     padding: 0 12px;
   }
-  .preset-apply,
-  .preset-all {
-    height: 34px;
+  .preset-scroll {
+    max-height: clamp(240px, 46vh, 420px);
   }
-  .preset-rm {
-    width: 30px;
-    height: 30px;
-    opacity: 1;
+  .preset-grid {
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
   }
 }
 </style>
