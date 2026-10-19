@@ -28,19 +28,24 @@ export interface WatermarkAsset {
   aspect: number
 }
 
-/* ---------- 持久化：按工作目录分片 ----------
-   水印属于「这个工作目录的排版习惯」，不是整个软件的全局设置：
-   每个工作目录一份配置（存储键带目录路径），切换目录即换用对应的一份；
-   其他工作目录、以及尚未进入任何目录的状态都读不到这份水印。
-   旧版的单一全局键只在升级后并入第一个打开的工作目录，随后彻底失效。 */
-const PERSIST_PREFIX = 'albumark.watermark.v3:'
+/* ---------- 持久化：按工作项目分片 ----------
+   水印属于「这个工作项目的排版」，不是整个软件、也不是整个工作目录的设置：
+   每个工作项目一份配置（存储键带项目 id），切换项目即换用对应的一份；
+   同目录下的其他项目、其他目录、以及尚未打开项目的状态都读不到这份水印。
+   上一版按工作目录分片（v3）的数据不再有归属：升级后并入该目录下第一个
+   打开的项目，随后删除；更早的单一全局键（v2 / v1）同样只迁移一次。 */
+const PERSIST_PREFIX = 'albumark.watermark.v4:'
+/** 上一版的工作目录分片，仅用于一次性迁移，迁移后立即删除 */
+const DIR_PERSIST_PREFIX = 'albumark.watermark.v3:'
 const LEGACY_PERSIST_KEY = 'albumark.watermark.v2'
 /** 更早的存储键：偏移按长边百分比存储，读取后一次性迁移为固定像素 */
 const LEGACY_V1_KEY = 'albumark.watermark.v1'
-/** 旧全局配置只迁移一次，避免把同一份水印带给后续每个目录 */
-const MIGRATED_KEY = 'albumark.watermark.v3:migrated'
-/** 浏览器临时项目（没有磁盘工作目录）单独一份配置 */
+/** 旧全局配置只迁移一次，避免把同一份水印带给后续每个项目 */
+const MIGRATED_KEY = 'albumark.watermark.v4:migrated'
+/** 浏览器临时项目（没有磁盘路径）单独一份配置 */
 export const EPHEMERAL_WATERMARK_SCOPE = '__ephemeral__'
+/** 项目作用域前缀：与临时作用域、以及历史上的裸目录路径区分开 */
+const PROJECT_SCOPE_PREFIX = 'p:'
 
 interface StoredWatermark {
   layers: WatermarkLayer[]
@@ -120,33 +125,34 @@ export const useWatermarkStore = defineStore('watermark', () => {
   const studioActive = ref(false)
   const studioLayers = ref<WatermarkLayer[]>([])
   /**
-   * 水印作用域：当前工作目录的路径（浏览器临时项目为 EPHEMERAL_WATERMARK_SCOPE）。
-   * 空串 = 尚未进入任何工作目录，此时不读也不写任何水印配置。
+   * 水印作用域：当前工作项目的标识（`p:<项目 id>`；浏览器临时项目为
+   * EPHEMERAL_WATERMARK_SCOPE）。
+   * 空串 = 尚未打开任何工作项目，此时不读也不写任何水印配置。
    */
   const scopeKey = ref('')
-  /** 逐图独立水印是会话级数据，按作用域暂存：切换目录再切回来仍然保留 */
+  /** 逐图独立水印是会话级数据，按作用域暂存：切换项目再切回来仍然保留 */
   const perImageByScope = new Map<string, Record<string, WatermarkLayer[]>>()
 
-  /** 进入工作室：快照一份当前目录的水印作为草稿，工作室的全部编辑都只作用于草稿 */
+  /** 进入工作室：快照一份当前项目的水印作为草稿，工作室的全部编辑都只作用于草稿 */
   function enterStudio(): void {
     studioLayers.value = plainLayers()
     studioActive.value = true
     setEditContext(null)
   }
 
-  /** 离开工作室：丢弃草稿，编辑上下文回到目录级水印 */
+  /** 离开工作室：丢弃草稿，编辑上下文回到项目级水印 */
   function exitStudio(): void {
     studioActive.value = false
     studioLayers.value = []
     setEditContext(null)
   }
 
-  /** 当前生效的水印图层：预览 / 导出用（单张独立优先，否则当前目录的水印） */
+  /** 当前生效的水印图层：预览 / 导出用（单张独立优先，否则当前项目的水印） */
   function effectiveLayers(id: string | null): WatermarkLayer[] {
     return (id ? perImage.value[id] : undefined) ?? layers.value
   }
 
-  /** 当前正在编辑的图层列表：工作室编辑草稿，面板按上下文编辑独立副本或目录级水印 */
+  /** 当前正在编辑的图层列表：工作室编辑草稿，面板按上下文编辑独立副本或项目级水印 */
   function editTarget(): WatermarkLayer[] {
     if (studioActive.value) return studioLayers.value
     return (editId.value ? perImage.value[editId.value] : undefined) ?? layers.value
@@ -162,7 +168,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     selectedId.value = editTarget()[0]?.id ?? null
   }
 
-  /** 开启时把当前生效的图层深拷贝为这张照片的独立水印，关闭即恢复目录级水印 */
+  /** 开启时把当前生效的图层深拷贝为这张照片的独立水印，关闭即恢复项目级水印 */
   function setIndividual(id: string | null, on: boolean): void {
     if (!id) return
     if (on) {
@@ -368,7 +374,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
       editTarget().push(...incoming)
     }
     selectedId.value = incoming[0]?.id ?? null
-    // 只有目录级水印需要落盘；单张照片的独立水印属于会话数据
+    // 只有项目级水印需要落盘；单张照片的独立水印属于会话数据
     if (!studioActive.value && !editId.value) schedulePersist()
   }
 
@@ -405,7 +411,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     }
   }
 
-  /** 旧版全局配置：只并入第一个打开的工作目录，之后作废 */
+  /** 旧版全局配置：只并入第一个打开的工作项目，之后作废 */
   function takeLegacy(): StoredWatermark | null {
     try {
       if (window.localStorage.getItem(MIGRATED_KEY)) return null
@@ -433,9 +439,9 @@ export const useWatermarkStore = defineStore('watermark', () => {
   }
 
   /**
-   * 旧全局键就地作废（不取数据）。目标目录已有自己的配置时调用——
-   * 否则旧键会一直躺在原地，等某个后打开的新目录把它捡走：
-   * 那正是「新目录莫名出现别人的水印」的来源。
+   * 旧全局键就地作废（不取数据）。当前项目已有自己的配置时调用——
+   * 否则旧键会一直躺在原地，等某个后打开的新项目把它捡走：
+   * 那正是「新项目莫名出现别人的水印」的来源。
    */
   function retireLegacy(): void {
     try {
@@ -445,6 +451,42 @@ export const useWatermarkStore = defineStore('watermark', () => {
       window.localStorage.removeItem(LEGACY_V1_KEY)
     } catch {
       /* 存储异常时宁可少删：所有读取路径都有空值兜底 */
+    }
+  }
+
+  /** 上一版按工作目录存储的分片键（目录路径本身就是旧版的 scope 值） */
+  function dirStorageKey(dirPath: string): string {
+    return DIR_PERSIST_PREFIX + encodeURIComponent(dirPath)
+  }
+
+  /**
+   * 取走上一版的工作目录分片（并立即删除）。它是「整个目录共用一份」的旧数据，
+   * 没有项目之外的归属：只并入该目录下**第一个被打开的项目**，同目录的其余项目
+   * 从无水印开始——否则每个项目都会拿到同一份，跨项目串显就复现了。
+   */
+  function takeDirShard(): StoredWatermark | null {
+    const dirPath = ws.dir?.path
+    if (!dirPath) return null
+    try {
+      const raw = window.localStorage.getItem(dirStorageKey(dirPath))
+      // 无论能否解析都不再保留：目录级配置不应流向第二个项目
+      window.localStorage.removeItem(dirStorageKey(dirPath))
+      if (!raw) return null
+      const data = JSON.parse(raw) as StoredWatermark
+      return data && Array.isArray(data.layers) ? data : null
+    } catch {
+      return null
+    }
+  }
+
+  /** 目录级分片就地作废（当前项目已有自己的配置，或迁移已经完成） */
+  function retireDirShard(): void {
+    const dirPath = ws.dir?.path
+    if (!dirPath) return
+    try {
+      window.localStorage.removeItem(dirStorageKey(dirPath))
+    } catch {
+      /* 少删不影响正确性：读取路径有空值兜底 */
     }
   }
 
@@ -462,10 +504,13 @@ export const useWatermarkStore = defineStore('watermark', () => {
     persistTimer = window.setTimeout(persist, 500)
   }
   function persist(): void {
-    // 工作室草稿不写入；没有工作目录时也没有可写的分片
+    // 工作室草稿不写入；没有打开项目时也没有可写的分片
     if (studioActive.value || !scopeKey.value) return
+    // 项目从未存过配置、现在也没有任何图层：不落盘，不给它留一个空分片
+    // （空分片还会挡住之后可能的旧数据迁移）
+    if (!layers.value.length && !readStored(scopeKey.value)) return
     try {
-      // 恒写「目录级」水印：正在编辑某张照片的独立水印时，不能把它顶成目录默认
+      // 恒写「项目级」水印：正在编辑某张照片的独立水印时，不能把它顶成项目默认
       window.localStorage.setItem(scopedStorageKey(scopeKey.value), JSON.stringify(serializeList(layers.value)))
     } catch {
       /* 素材过大等情况直接放弃持久化 */
@@ -481,7 +526,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
   }
 
   /**
-   * 撤销 / 重做：整份替换当前目录的目录级水印与逐图独立水印。
+   * 撤销 / 重做：整份替换当前项目的项目级水印与逐图独立水印。
    * 只处理照片使用中的图层，不碰工作室草稿（草稿有自己的保存语义）。
    */
   function restoreState(
@@ -499,18 +544,18 @@ export const useWatermarkStore = defineStore('watermark', () => {
   }
 
   /**
-   * 切换水印作用域（工作目录）。
+   * 切换水印作用域（工作项目）。
    *
-   * 这是「水印只属于一个工作目录」的闸门：切换时先把旧目录的改动落盘、
-   * 暂存它的逐图水印，再清空运行态并载入新目录的配置。
-   * 传入空串 = 当前没有工作目录：保持无水印，绝不沿用上一个目录的图层。
-   * 分片数据损坏时同样落在「无水印」——绝不回退到其他目录的配置。
+   * 这是「水印只属于一个工作项目」的闸门：切换时先把旧项目的改动落盘、
+   * 暂存它的逐图水印，再清空运行态并载入新项目的配置。
+   * 传入空串 = 当前没有打开项目：保持无水印，绝不沿用上一个项目的图层。
+   * 分片数据损坏时同样落在「无水印」——绝不回退到其他项目的配置。
    */
   function setScope(next: string): void {
     const key = next || ''
     if (key === scopeKey.value) return
     if (studioActive.value) {
-      // 工作室草稿没有跨目录的语义：切目录等同于离开工作室
+      // 工作室草稿没有跨项目的语义：切项目等同于离开工作室
       studioActive.value = false
       studioLayers.value = []
     }
@@ -528,41 +573,62 @@ export const useWatermarkStore = defineStore('watermark', () => {
       const stored = readStored(key)
       if (stored) {
         adoptStored(stored)
-        // 本目录已有配置：旧全局键就地作废，绝不流向之后打开的目录
-        retireLegacy()
       } else {
-        const legacy = takeLegacy()
-        if (legacy) {
-          adoptStored(legacy)
-          // 迁移结果立即写成该目录自己的分片，其他目录读不到
+        // 迁移优先级：上一版的目录分片（更近）> 更旧的单一全局键
+        const inherited = takeDirShard() ?? takeLegacy()
+        if (inherited) {
+          adoptStored(inherited)
+          // 迁移结果立即写成这个项目自己的分片，其他项目读不到
           persist()
         }
       }
+      // 无论来自哪里：旧全局键与目录级分片就地作废，绝不流向之后打开的项目
+      retireLegacy()
+      retireDirShard()
     } catch {
-      /* 分片损坏 / 迁移失败：保持无水印，也不碰任何其他目录的数据 */
+      /* 分片损坏 / 迁移失败：保持无水印，也不碰任何其他项目的数据 */
     }
     selectedId.value = editTarget()[0]?.id ?? null
   }
 
   /**
-   * 作用域绑定长在 store 内部：由工作目录直接推导，目录变即换配置。
+   * 作用域绑定长在 store 内部：由当前工作项目直接推导，项目变即换配置。
    * 曾经依赖 App.vue 的组件 watch 手动同步——那条链路上任何一环脱钩
-   * （store 热更新重建、监听注册晚于目录装载、后续重构改动装配顺序）
-   * 都会让 scopeKey 与实际目录永久脱节、水印凭空消失或串目录。
-   * watch 以 immediate 注册：store 无论何时创建，都先对齐到当前目录。
+   * （store 热更新重建、监听注册晚于项目装载、后续重构改动装配顺序）
+   * 都会让 scopeKey 与实际项目永久脱节、水印凭空消失或串项目。
+   * watch 以 immediate 注册：store 无论何时创建，都先对齐到当前项目。
    */
-  const derivedScope = computed(
-    () => ws.dir?.path ?? (ws.inProject ? EPHEMERAL_WATERMARK_SCOPE : ''),
-  )
+  const derivedScope = computed(() => {
+    const p = ws.current
+    if (!p) return ''
+    // 浏览器临时项目没有磁盘路径：整个会话共用一份固定作用域
+    if (!p.path) return EPHEMERAL_WATERMARK_SCOPE
+    return PROJECT_SCOPE_PREFIX + p.id
+  })
   watch(derivedScope, (next) => setScope(next), { immediate: true })
 
-  /** 按当前工作目录立即对齐作用域。绑定是自动的，通常无需手动调用。 */
+  /** 按当前工作项目立即对齐作用域。绑定是自动的，通常无需手动调用。 */
   function syncScope(): void {
     setScope(derivedScope.value)
   }
 
-  // 目录级水印的手动编辑（拖动、改字、增删图层）同样走防抖持久化；
-  // 只观察 layers：逐图独立水印属于会话数据，不写进目录配置
+  /**
+   * 项目被删除：它的分片不再有归属，一并清除，避免残留数据在新建同名项目
+   * 或复用 id 时被读回来。
+   */
+  function forgetProject(id: string): void {
+    const key = PROJECT_SCOPE_PREFIX + id
+    perImageByScope.delete(key)
+    try {
+      window.localStorage.removeItem(scopedStorageKey(key))
+    } catch {
+      /* 清不掉也不影响正确性 */
+    }
+    if (scopeKey.value === key) setScope('')
+  }
+
+  // 项目级水印的手动编辑（拖动、改字、增删图层）同样走防抖持久化；
+  // 只观察 layers：逐图独立水印属于会话数据，不写进项目配置
   watch(layers, () => schedulePersist(), { deep: true })
 
   return {
@@ -572,7 +638,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     perImage,
     editId,
     studioActive,
-    /** 当前工作目录作用域（空串 = 未进入任何目录） */
+    /** 当前工作项目作用域（`p:<id>`；空串 = 未打开任何项目） */
     scopeKey,
     enterStudio,
     exitStudio,
@@ -602,5 +668,6 @@ export const useWatermarkStore = defineStore('watermark', () => {
     restoreState,
     setScope,
     syncScope,
+    forgetProject,
   }
 })

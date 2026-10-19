@@ -46,9 +46,10 @@ const ws = useWorkspaceStore()
 const adjust = useAdjustStore()
 const settings = useSettingsStore()
 
-// 水印作用域的绑定在水印 store 内部：由 ws.dir 直接推导并自动换装配置
-// （见 stores/watermark.ts 的 derivedScope watch）。这里不再做任何手动同步——
-// 曾经的组件级 watch 在 store 重建 / 装配顺序变化时会与目录脱钩，水印凭空消失。
+// 水印作用域的绑定在水印 store 内部：由当前工作项目（ws.current）直接推导并
+// 自动换装配置（见 stores/watermark.ts 的 derivedScope watch）。这里不再做任何
+// 手动同步——曾经的组件级 watch 在 store 重建 / 装配顺序变化时会与项目脱钩，
+// 水印凭空消失或串到别的项目上。
 
 /** 启动画面在进入应用时定格：之后在设置里改款式 / 时长 / 开关只在下次启动生效 */
 const bootVisible = ref(settings.bootEnabled)
@@ -414,9 +415,9 @@ onMounted(async () => {
       /* 插件不可用时退回系统默认行为 */
     }
   }
-  // 水印配置由 store 内部绑定自动按当前工作目录载入（含旧全局键的一次性迁移）。
-  // 等目录扫描完成后重立撤销基线；期间若目录已变化，history 自身的作用域
-  // watch 已经 reset 过，这里的重复调用是无害的幂等操作。
+  // 水印配置由 store 内部绑定自动按当前工作项目载入（含旧目录分片 / 全局键的
+  // 一次性迁移）。启动不会自动打开项目，因此这里通常仍是空作用域；
+  // 等目录扫描完成后重立撤销基线，是无害的幂等操作。
   await workspaceReady
   history.reset()
 })

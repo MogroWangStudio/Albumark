@@ -15,12 +15,12 @@ const wm = useWatermarkStore()
 const adjust = useAdjustStore()
 const ws = useWorkspaceStore()
 
-/** 作用域提示：这份水印只属于当前工作目录，切换目录不会带过去 */
-const scopeName = computed(() => ws.dir?.name ?? '临时项目')
+/** 作用域提示：这份水印只属于当前工作项目，切换到别的项目不会带过去 */
+const scopeName = computed(() => ws.current?.name ?? '未打开项目')
 const scopeHint = computed(() =>
-  ws.dir
-    ? `水印只作用于工作目录「${ws.dir.name}」，其他工作目录不受影响`
-    : '水印只作用于当前临时项目',
+  ws.current
+    ? `水印只作用于工作项目「${ws.current.name}」，同目录的其他项目与其他工作目录都不受影响`
+    : '尚未打开工作项目，水印配置无处存放',
 )
 
 const activeId = computed(() => images.active?.id ?? null)

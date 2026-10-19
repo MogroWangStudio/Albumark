@@ -17,6 +17,7 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
 import { isTauri } from '@/core/platform'
 import { useSettingsStore } from '@/stores/settings'
+import { useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore, type WorkDirMeta } from '@/stores/workspace'
 
 /**
@@ -24,6 +25,7 @@ import { useWorkspaceStore, type WorkDirMeta } from '@/stores/workspace'
  * 无文件能力的环境（浏览器）降级为会话内临时项目。
  */
 const ws = useWorkspaceStore()
+const wm = useWatermarkStore()
 const settings = useSettingsStore()
 
 type Step = 'oobe' | 'projects'
@@ -85,7 +87,10 @@ function confirmRemove(): void {
   removeTarget.value = null
   if (!t) return
   const meta = ws.projects.find((p) => p.id === t.id)
-  if (meta) void ws.removeProject(meta)
+  if (!meta) return
+  // 项目没了，它那份水印配置也不该留在本地等被别处读走
+  wm.forgetProject(meta.id)
+  void ws.removeProject(meta)
 }
 
 function fmtDate(t: number): string {
