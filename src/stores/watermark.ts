@@ -13,6 +13,7 @@ import type {
 } from '@/types/watermark'
 import { migrateLayer, migrateOffsetsToPx } from '@/types/watermark'
 import type { SerializedAsset } from '@/types/watermark'
+import { useWorkspaceStore } from './workspace'
 
 /** 图层与资产是纯 JSON 数据；structuredClone 会拒绝 Vue 的响应式 Proxy（模板对象来自 store），故用 JSON 深拷贝 */
 function deepClone<T>(value: T): T {
@@ -103,6 +104,8 @@ export function makeBorderLayer(patch: Partial<BorderLayer> = {}): BorderLayer {
 }
 
 export const useWatermarkStore = defineStore('watermark', () => {
+  /** 工作区 store：作用域直接从它推导（store 间单向依赖，workspace 不回引水印） */
+  const ws = useWorkspaceStore()
   const layers = ref<WatermarkLayer[]>([])
   const selectedId = ref<string | null>(null)
   const assets = ref<Record<string, WatermarkAsset>>({})
@@ -402,7 +405,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     }
   }
 
-  /** 旧版全局配置：只并入第一个打开的工作目录，之后移除旧键 */
+  /** 旧版全局配置：只并入第一个打开的工作目录，之后作废 */
   function takeLegacy(): StoredWatermark | null {
     try {
       if (window.localStorage.getItem(MIGRATED_KEY)) return null
@@ -426,6 +429,22 @@ export const useWatermarkStore = defineStore('watermark', () => {
       return data
     } catch {
       return null
+    }
+  }
+
+  /**
+   * 旧全局键就地作废（不取数据）。目标目录已有自己的配置时调用——
+   * 否则旧键会一直躺在原地，等某个后打开的新目录把它捡走：
+   * 那正是「新目录莫名出现别人的水印」的来源。
+   */
+  function retireLegacy(): void {
+    try {
+      if (window.localStorage.getItem(MIGRATED_KEY)) return
+      window.localStorage.setItem(MIGRATED_KEY, '1')
+      window.localStorage.removeItem(LEGACY_PERSIST_KEY)
+      window.localStorage.removeItem(LEGACY_V1_KEY)
+    } catch {
+      /* 存储异常时宁可少删：所有读取路径都有空值兜底 */
     }
   }
 
@@ -485,6 +504,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
    * 这是「水印只属于一个工作目录」的闸门：切换时先把旧目录的改动落盘、
    * 暂存它的逐图水印，再清空运行态并载入新目录的配置。
    * 传入空串 = 当前没有工作目录：保持无水印，绝不沿用上一个目录的图层。
+   * 分片数据损坏时同样落在「无水印」——绝不回退到其他目录的配置。
    */
   function setScope(next: string): void {
     const key = next || ''
@@ -504,18 +524,41 @@ export const useWatermarkStore = defineStore('watermark', () => {
     editId.value = null
     selectedId.value = null
     if (!key) return
-    const stored = readStored(key)
-    if (stored) {
-      adoptStored(stored)
-    } else {
-      const legacy = takeLegacy()
-      if (legacy) {
-        adoptStored(legacy)
-        // 迁移结果立即写成该目录自己的分片，其他目录读不到
-        persist()
+    try {
+      const stored = readStored(key)
+      if (stored) {
+        adoptStored(stored)
+        // 本目录已有配置：旧全局键就地作废，绝不流向之后打开的目录
+        retireLegacy()
+      } else {
+        const legacy = takeLegacy()
+        if (legacy) {
+          adoptStored(legacy)
+          // 迁移结果立即写成该目录自己的分片，其他目录读不到
+          persist()
+        }
       }
+    } catch {
+      /* 分片损坏 / 迁移失败：保持无水印，也不碰任何其他目录的数据 */
     }
     selectedId.value = editTarget()[0]?.id ?? null
+  }
+
+  /**
+   * 作用域绑定长在 store 内部：由工作目录直接推导，目录变即换配置。
+   * 曾经依赖 App.vue 的组件 watch 手动同步——那条链路上任何一环脱钩
+   * （store 热更新重建、监听注册晚于目录装载、后续重构改动装配顺序）
+   * 都会让 scopeKey 与实际目录永久脱节、水印凭空消失或串目录。
+   * watch 以 immediate 注册：store 无论何时创建，都先对齐到当前目录。
+   */
+  const derivedScope = computed(
+    () => ws.dir?.path ?? (ws.inProject ? EPHEMERAL_WATERMARK_SCOPE : ''),
+  )
+  watch(derivedScope, (next) => setScope(next), { immediate: true })
+
+  /** 按当前工作目录立即对齐作用域。绑定是自动的，通常无需手动调用。 */
+  function syncScope(): void {
+    setScope(derivedScope.value)
   }
 
   // 目录级水印的手动编辑（拖动、改字、增删图层）同样走防抖持久化；
@@ -558,5 +601,6 @@ export const useWatermarkStore = defineStore('watermark', () => {
     flushPersist,
     restoreState,
     setScope,
+    syncScope,
   }
 })

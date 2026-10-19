@@ -229,6 +229,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     dir.value = meta
     if (current.value) closeProject()
     else await scanProjects()
+    // 打开着项目时走的是 closeProject，不会经过 scanProjects 的落盘分支；
+    // 这里补一次，保证「上次使用的目录」真的被记住——否则重启会退回上一个目录，
+    // 连带着看上去像是水印串了目录
+    await persistDir()
   }
 
   /** 移除工作目录记录（不删除磁盘上的文件）。 */

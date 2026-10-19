@@ -195,9 +195,16 @@ export const useHistoryStore = defineStore('history', () => {
   )
 
   // 换项目：旧项目的历史不能套用到新项目上
-  // （工作目录切换由 App 在换完水印配置后再立基线，见 watermarkScope 的 watch）
   watch(
     () => ws.current?.id ?? null,
+    () => reset(),
+  )
+  // 换水印作用域（工作目录 / 临时项目）：水印 store 换装配置后立即重立基线。
+  // 跟随 wm.scopeKey 而不是目录路径——临时项目没有目录，作用域也会切换；
+  // 否则「载入新目录的水印」会被记成一步可撤销的编辑，一按撤销就把
+  // 上一个目录的水印带回来
+  watch(
+    () => wm.scopeKey,
     () => reset(),
   )
 

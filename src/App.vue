@@ -35,7 +35,7 @@ import { useAdjustPresetsStore } from '@/stores/adjustPresets'
 import { useHistoryStore } from '@/stores/history'
 import { useImagesStore } from '@/stores/images'
 import { pickBootStyle, useSettingsStore } from '@/stores/settings'
-import { EPHEMERAL_WATERMARK_SCOPE, useWatermarkStore } from '@/stores/watermark'
+import { useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const images = useImagesStore()
@@ -46,20 +46,9 @@ const ws = useWorkspaceStore()
 const adjust = useAdjustStore()
 const settings = useSettingsStore()
 
-/**
- * 水印作用域：跟随当前工作目录，而不是整个应用。
- * 浏览器临时项目没有磁盘目录，单独用 EPHEMERAL_WATERMARK_SCOPE；
- * 不在任何目录里时留空 —— 水印 store 会清空运行态，不会把别处的配置带出来。
- */
-const watermarkScope = computed(
-  () => ws.dir?.path ?? (ws.inProject ? EPHEMERAL_WATERMARK_SCOPE : ''),
-)
-watch(watermarkScope, (scope) => {
-  // 先换配置、再重立撤销基线：目录切换不能变成一步可撤销的「水印编辑」，
-  // 否则在新目录里撤销会把上一个目录的水印带回来
-  wm.setScope(scope)
-  history.reset()
-})
+// 水印作用域的绑定在水印 store 内部：由 ws.dir 直接推导并自动换装配置
+// （见 stores/watermark.ts 的 derivedScope watch）。这里不再做任何手动同步——
+// 曾经的组件级 watch 在 store 重建 / 装配顺序变化时会与目录脱钩，水印凭空消失。
 
 /** 启动画面在进入应用时定格：之后在设置里改款式 / 时长 / 开关只在下次启动生效 */
 const bootVisible = ref(settings.bootEnabled)
@@ -425,11 +414,10 @@ onMounted(async () => {
       /* 插件不可用时退回系统默认行为 */
     }
   }
-  // 水印按工作目录分片：等目录就绪后载入该目录的一份，再立撤销基线。
-  // 曾经是单一全局配置，新建目录 / 切换目录都会沿用上一处的水印——现在不会了。
+  // 水印配置由 store 内部绑定自动按当前工作目录载入（含旧全局键的一次性迁移）。
+  // 等目录扫描完成后重立撤销基线；期间若目录已变化，history 自身的作用域
+  // watch 已经 reset 过，这里的重复调用是无害的幂等操作。
   await workspaceReady
-  wm.setScope(watermarkScope.value)
-  // 装载完成后的状态才是撤销的起点：否则用户第一次撤销会把「刚恢复的水印」撤掉
   history.reset()
 })
 
