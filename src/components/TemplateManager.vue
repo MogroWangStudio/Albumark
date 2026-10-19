@@ -178,7 +178,8 @@ function fmtDate(t?: number): string {
 }
 .thumb-box {
   aspect-ratio: 16 / 10;
-  background: var(--canvas);
+  /* 与编辑器的样张工作台同色：缩略图不再垫一层纯白底 */
+  background: color-mix(in srgb, var(--canvas) 88%, var(--text) 12%);
   border-bottom: 1px solid var(--line);
 }
 .thumb {
