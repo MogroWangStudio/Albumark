@@ -184,10 +184,24 @@ function smoothstep01(v: number): number {
   return t * t * (3 - 2 * t)
 }
 
-/** smoothstep 的反函数：负对比度时把两端向中灰收 */
-function invSmoothstep(v: number): number {
-  const t = v < 0 ? 0 : v > 1 ? 1 : v
-  return 0.5 - Math.sin(Math.asin(1 - 2 * t) / 3)
+/** 对比度强度上限：tanh 曲线在中灰处的斜率约 1.65，两端收敛为 0.3，不做硬切 */
+const CONTRAST_K = 3.0
+
+/**
+ * 对比度：tanh 家族的 S 曲线（负值走它的反函数）。
+ * 相比 smoothstep，两端导数不为 0——不会在纯黑 / 纯白附近堆出一段斜率极大的
+ * 过渡（那正是暗部色带的来源）；端点仍严格固定在 0 / 1。
+ */
+function contrastCurve(t: number, c: number): number {
+  if (t <= 0) return 0
+  if (t >= 1) return 1
+  const s = c * CONTRAST_K
+  if (c > 0) {
+    return 0.5 + (0.5 * Math.tanh((t - 0.5) * s)) / Math.tanh(s / 2)
+  }
+  // 负对比度 = 正曲线的反函数：把两端平滑地收向中灰
+  const k = Math.tanh(-s / 2)
+  return 0.5 + Math.atanh((2 * t - 1) * k) / -s
 }
 
 /**
@@ -229,11 +243,7 @@ function buildToneLut(a: Adjustments): Float32Array {
     // 亮度：0 仍为 0、1 仍为 1，只抬 / 压中间调，不会给黑位抹灰
     if (bright !== 0) t = Math.pow(t, 1 / (1 + bright * 0.5))
     // 对比度：S 曲线（或反 S 曲线），端点固定、全程平滑
-    if (contrast > 0) {
-      t += (smoothstep01(t) - t) * contrast * 0.9
-    } else if (contrast < 0) {
-      t += (invSmoothstep(t) - t) * -contrast * 0.9
-    }
+    if (contrast !== 0) t = contrastCurve(t, contrast)
     // 阴影：0.62 以下按降幂蒙版生效，纯黑保持纯黑
     if (shadows !== 0) {
       const m = 1 - smoothstep01(t / 0.62)
