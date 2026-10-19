@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { ArrowLeft, Check, Download, ExternalLink, HardDrive, LoaderCircle } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ArrowLeft, Check, Download, ExternalLink, HardDrive, LoaderCircle, Play, Shuffle } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
+import BootScreen from '@/components/BootScreen.vue'
+import LogoMark from '@/components/brand/LogoMark.vue'
 import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platform'
 import {
   checkForUpdate,
@@ -16,12 +18,17 @@ import { toast } from '@/stores/toast'
 import { APP_VERSION } from '@/core/version'
 import { FONT_CATEGORY_LABELS, useFontsStore, type FontCategory } from '@/stores/fonts'
 import {
-  BOOT_STYLES,
+  BOOT_DURATION_DEFAULT,
+  BOOT_DURATION_MAX,
+  BOOT_DURATION_MIN,
+  BOOT_STYLE_CHOICES,
   PREVIEW_CUSTOM_MAX,
   PREVIEW_CUSTOM_MIN,
   THEMES,
+  pickBootStyle,
   useSettingsStore,
   type BootStyle,
+  type BootStyleChoice,
   type PreviewQuality,
   type ThemeDef,
   type ThemeMode,
@@ -66,8 +73,35 @@ const zoomModel = computed({
 
 const bootStyleModel = computed({
   get: () => settings.bootStyle,
-  set: (v: unknown) => (settings.bootStyle = v as BootStyle),
+  set: (v: unknown) => (settings.bootStyle = v as BootStyleChoice),
 })
+
+/** 时长以毫秒存储，滑杆按 100ms 取整并直接显示秒数 */
+const bootDurationModel = computed({
+  get: () => settings.bootDuration,
+  set: (v: number) => (settings.bootDuration = Math.round(v / 100) * 100),
+})
+
+/* ---------- 启动动画试播 ----------
+   按当前款式与时长在设置页上方播一次，不改动任何配置；
+   选「随机」时每次试播都会重新抽一款，效果与下次启动一致 */
+const previewing = ref(false)
+const previewStyle = ref<BootStyle>('default')
+const previewSeq = ref(0)
+let previewTimer = 0
+
+function previewBoot(): void {
+  previewStyle.value = pickBootStyle(settings.bootStyle)
+  previewSeq.value++
+  previewing.value = true
+  window.clearTimeout(previewTimer)
+  // 与 App 启动时一致：动画总长 + 一点收尾余量后卸载，避免遮罩留下
+  previewTimer = window.setTimeout(() => {
+    previewing.value = false
+  }, settings.bootDuration + 260)
+}
+
+onBeforeUnmount(() => window.clearTimeout(previewTimer))
 
 const qualityModel = computed({
   get: () => settings.previewQuality,
@@ -244,12 +278,60 @@ async function relaunchOobe(): Promise<void> {
           </div>
           <AppSwitch v-model="settings.bootEnabled" />
         </div>
-        <div v-if="settings.bootEnabled" class="row col">
-          <div class="text">
-            <span class="label">动画款式</span>
+        <template v-if="settings.bootEnabled">
+          <div class="row col">
+            <div class="text">
+              <span class="label">动画款式</span>
+              <p class="desc">八款编排各不相同；「随机」会在每次启动时抽一款</p>
+            </div>
+            <div class="styles" role="radiogroup" aria-label="启动动画款式">
+              <button
+                v-for="s in BOOT_STYLE_CHOICES"
+                :key="s.value"
+                class="style-card"
+                :class="[`st-${s.value}`, { on: settings.bootStyle === s.value }]"
+                role="radio"
+                :aria-checked="settings.bootStyle === s.value"
+                :title="s.hint"
+                @click="bootStyleModel = s.value"
+              >
+                <span class="st-thumb">
+                  <Shuffle v-if="s.value === 'random'" :size="16" class="st-rand" />
+                  <LogoMark v-else class="st-logo" />
+                </span>
+                <span class="st-text">
+                  <span class="st-name">{{ s.label }}</span>
+                  <span class="st-hint">{{ s.hint }}</span>
+                </span>
+              </button>
+            </div>
           </div>
-          <AppSegment v-model="bootStyleModel" :options="BOOT_STYLES" />
-        </div>
+          <div class="row col">
+            <div class="text">
+              <span class="label">动画时长</span>
+              <p class="desc">整段动画的总长，随机款式同样按这个时长播放</p>
+            </div>
+            <AppSlider
+              v-model="bootDurationModel"
+              :min="BOOT_DURATION_MIN"
+              :max="BOOT_DURATION_MAX"
+              :step="100"
+              label="时长"
+              :format="(v) => `${(v / 1000).toFixed(1)} 秒`"
+              :default="BOOT_DURATION_DEFAULT"
+              @reset="settings.bootDuration = BOOT_DURATION_DEFAULT"
+            />
+          </div>
+          <div class="row preview-row">
+            <div class="text">
+              <span class="label">预览效果</span>
+              <p class="desc">按当前款式与时长播放一次，不会改动任何设置</p>
+            </div>
+            <AppButton size="sm" @click="previewBoot">
+              <Play :size="13" />{{ previewing ? '重新预览' : '预览动画' }}
+            </AppButton>
+          </div>
+        </template>
       </section>
 
       <section class="group">
@@ -376,6 +458,15 @@ async function relaunchOobe(): Promise<void> {
         </div>
       </section>
     </div>
+
+    <!-- 试播层：与启动时同一个组件，按当前选择播放一次后自动卸载 -->
+    <BootScreen
+      v-if="previewing"
+      :key="previewSeq"
+      :style-id="previewStyle"
+      :duration="settings.bootDuration"
+      preview
+    />
   </div>
 </template>
 
@@ -492,6 +583,160 @@ async function relaunchOobe(): Promise<void> {
 .note {
   font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
+}
+/* ---------- 启动动画款式：缩略示意 + 名称与一句描述 ---------- */
+.styles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  gap: 8px;
+}
+.style-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  text-align: left;
+  transition:
+    border-color var(--dur-hover) var(--ease-soft),
+    background var(--dur-hover) var(--ease-soft);
+}
+.style-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--surface-solid);
+}
+.style-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.style-card.on {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.st-thumb {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--canvas) 90%, var(--text) 10%);
+  overflow: hidden;
+}
+.st-logo {
+  width: 24px;
+  height: auto;
+}
+.st-rand {
+  color: var(--accent);
+}
+.st-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.st-name {
+  font-size: calc(12.5px * var(--ui-zoom, 1));
+  line-height: 1.3;
+}
+.st-hint {
+  font-size: calc(10.5px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.style-card.on .st-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+/* 每款的缩略示意：一眼能认出的静止标记，不在这里跑动画 */
+.st-default .st-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 65%, transparent);
+  border-radius: 50%;
+}
+.st-shutter .st-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at 50% 50%,
+    transparent 0 9px,
+    color-mix(in srgb, var(--bg) 76%, var(--text)) 10px
+  );
+}
+.st-develop .st-logo {
+  opacity: 0.75;
+  filter: blur(1.3px);
+}
+.st-develop .st-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at 50% 55%,
+    color-mix(in srgb, var(--accent) 20%, transparent),
+    transparent 70%
+  );
+}
+.st-flash .st-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 45%, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0) 62%);
+}
+.st-bars .st-thumb::before,
+.st-bars .st-thumb::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 26%;
+  background: rgba(10, 9, 8, 0.72);
+}
+.st-bars .st-thumb::before {
+  top: 0;
+}
+.st-bars .st-thumb::after {
+  bottom: 0;
+}
+.st-focus .st-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  border-radius: 2px;
+}
+.st-slide .st-logo {
+  width: 20px;
+  transform: translateY(-3px);
+}
+.st-slide .st-thumb::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 20px;
+  height: 8px;
+  transform: translateX(-50%);
+  background:
+    linear-gradient(var(--accent), var(--accent)) 50% 100% / 12px 1.5px no-repeat,
+    linear-gradient(color-mix(in srgb, var(--accent) 65%, transparent), color-mix(in srgb, var(--accent) 65%, transparent)) 50% 40% / 18px 1px no-repeat,
+    linear-gradient(color-mix(in srgb, var(--accent) 35%, transparent), color-mix(in srgb, var(--accent) 35%, transparent)) 50% 0 / 14px 1px no-repeat;
+}
+.st-double .st-logo {
+  filter: drop-shadow(4px 0 0 color-mix(in srgb, var(--accent) 45%, transparent));
 }
 /* ---------- 主题色卡：一小块「相纸台」示意，无渐变堆砌 ---------- */
 .themes {

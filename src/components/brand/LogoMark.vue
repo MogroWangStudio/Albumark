@@ -96,7 +96,8 @@ withDefaults(defineProps<{ animated?: boolean; intro?: boolean }>(), {
 
 /* ---------- 启动编排：勾勒 → 填充（纯 CSS，可见性恢复也能走完） ---------- */
 /* 描边经 pathLength="1" 归一化，无需测量各路径实际长度；
-   vector-effect 让所有形状的线条粗细一致（不受深层 matrix 变换影响） */
+   vector-effect 让所有形状的线条粗细一致（不受深层 matrix 变换影响）。
+   时间轴按 --boot-total（启动动画总时长）等比缩放，改时长不会错拍 */
 .intro path,
 .intro rect {
   stroke: var(--ink);
@@ -108,24 +109,25 @@ withDefaults(defineProps<{ animated?: boolean; intro?: boolean }>(), {
   stroke-dashoffset: 1;
   fill-opacity: 0;
   animation:
-    intro-draw 620ms cubic-bezier(0.6, 0, 0.3, 1) both,
-    intro-fill 460ms var(--ease-soft) calc(500ms + var(--d, 0ms)) both;
+    intro-draw calc(var(--boot-total, 1500ms) * 0.36) cubic-bezier(0.6, 0, 0.3, 1) both,
+    intro-fill calc(var(--boot-total, 1500ms) * 0.3) var(--ease-soft)
+      calc(var(--boot-total, 1500ms) * 0.28 + var(--d, 0ms)) both;
 }
 /* 填充依次充盈：主体两翼 → 光带 → 双小三角 */
 .intro .wing-a path {
   --d: 0ms;
 }
 .intro .wing-b path {
-  --d: 60ms;
+  --d: calc(var(--boot-total, 1500ms) * 0.035);
 }
 .intro .bar rect {
-  --d: 120ms;
+  --d: calc(var(--boot-total, 1500ms) * 0.07);
 }
 .intro .tri-a path {
-  --d: 180ms;
+  --d: calc(var(--boot-total, 1500ms) * 0.105);
 }
 .intro .tri-b path {
-  --d: 240ms;
+  --d: calc(var(--boot-total, 1500ms) * 0.14);
 }
 @keyframes intro-draw {
   to {

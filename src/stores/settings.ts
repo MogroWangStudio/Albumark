@@ -84,15 +84,48 @@ export const THEMES: ThemeDef[] = [
   },
 ]
 
-/** 启动动画款式：勾勒（默认三段式）/ 快门 / 显影 / 闪光 */
-export type BootStyle = 'default' | 'shutter' | 'develop' | 'flash'
+/** 启动动画款式：勾勒（默认三段式）/ 快门 / 显影 / 闪光 / 遮幅 / 对焦 / 推移 / 叠影 */
+export type BootStyle =
+  | 'default'
+  | 'shutter'
+  | 'develop'
+  | 'flash'
+  | 'bars'
+  | 'focus'
+  | 'slide'
+  | 'double'
 
-export const BOOT_STYLES: { value: BootStyle; label: string }[] = [
-  { value: 'default', label: '勾勒' },
-  { value: 'shutter', label: '快门' },
-  { value: 'develop', label: '显影' },
-  { value: 'flash', label: '闪光' },
+/** 启动动画选择：具体款式，或每次启动随机抽一款 */
+export type BootStyleChoice = BootStyle | 'random'
+
+export const BOOT_STYLES: { value: BootStyle; label: string; hint: string }[] = [
+  { value: 'default', label: '勾勒', hint: '线条勾勒，颜色填入' },
+  { value: 'shutter', label: '快门', hint: '黑幕收开，露出界面' },
+  { value: 'develop', label: '显影', hint: '影像在药水中浮现' },
+  { value: 'flash', label: '闪光', hint: '快门灯一闪而过' },
+  { value: 'bars', label: '遮幅', hint: '上下黑边退开' },
+  { value: 'focus', label: '对焦', hint: '取景框收拢合焦' },
+  { value: 'slide', label: '推移', hint: '整幅画面上移' },
+  { value: 'double', label: '叠影', hint: '两重影像叠合' },
 ]
+
+/** 款式选项（含随机）：设置页的卡片列表与随机抽样共用同一份清单 */
+export const BOOT_STYLE_CHOICES: { value: BootStyleChoice; label: string; hint: string }[] = [
+  ...BOOT_STYLES,
+  { value: 'random', label: '随机', hint: '每次启动随机一款' },
+]
+
+/** 启动动画时长（毫秒）：所有款式的时间轴按这个总长等比缩放 */
+export const BOOT_DURATION_MIN = 800
+export const BOOT_DURATION_MAX = 3000
+export const BOOT_DURATION_DEFAULT = 1500
+
+/** 把设置里的选择解析成实际款式：随机时在这里抽一次 */
+export function pickBootStyle(choice: BootStyleChoice): BootStyle {
+  if (choice !== 'random') return choice
+  const pool = BOOT_STYLES
+  return pool[Math.floor(Math.random() * pool.length)].value
+}
 
 export interface AppSettings {
   /** 外观主题：auto 跟随系统 */
@@ -103,8 +136,10 @@ export interface AppSettings {
   uiZoom: number
   /** 启动动画：关闭后直接进入主界面 */
   bootEnabled: boolean
-  /** 启动动画款式 */
-  bootStyle: BootStyle
+  /** 启动动画款式（random = 每次启动随机） */
+  bootStyle: BootStyleChoice
+  /** 启动动画总时长（毫秒） */
+  bootDuration: number
   /** 导入时提醒缺少 EXIF 元数据 */
   exifNotice: boolean
   /** 预览安全区：图片最小缩放值（1 = 适应窗口，可小于 1 缩得更小） */
@@ -128,6 +163,7 @@ const DEFAULTS: AppSettings = {
   uiZoom: 1,
   bootEnabled: true,
   bootStyle: 'default',
+  bootDuration: BOOT_DURATION_DEFAULT,
   exifNotice: true,
   minZoom: 1,
   previewQuality: 'high',
@@ -141,7 +177,16 @@ const DEFAULTS: AppSettings = {
 function load(): AppSettings {
   try {
     const raw = window.localStorage.getItem(PERSIST_KEY)
-    if (raw) return { ...DEFAULTS, ...(JSON.parse(raw) as Partial<AppSettings>) }
+    if (raw) {
+      const data = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<AppSettings>) }
+      // 旧版本 / 手改存档的容错：款式必须存在，时长夹回档位并取整到 100ms
+      if (!BOOT_STYLE_CHOICES.some((s) => s.value === data.bootStyle)) data.bootStyle = DEFAULTS.bootStyle
+      const dur = Number(data.bootDuration)
+      data.bootDuration = Number.isFinite(dur)
+        ? Math.min(BOOT_DURATION_MAX, Math.max(BOOT_DURATION_MIN, Math.round(dur / 100) * 100))
+        : BOOT_DURATION_DEFAULT
+      return data
+    }
   } catch {
     /* 忽略损坏数据 */
   }
@@ -160,7 +205,8 @@ export const useSettingsStore = defineStore('settings', () => {
   const fontFamily = ref(initial.fontFamily)
   const uiZoom = ref(initial.uiZoom)
   const bootEnabled = ref(initial.bootEnabled)
-  const bootStyle = ref<BootStyle>(initial.bootStyle)
+  const bootStyle = ref<BootStyleChoice>(initial.bootStyle)
+  const bootDuration = ref(initial.bootDuration)
   const exifNotice = ref(initial.exifNotice)
   const minZoom = ref(initial.minZoom)
   const previewQuality = ref<PreviewQuality>(initial.previewQuality)
@@ -181,6 +227,7 @@ export const useSettingsStore = defineStore('settings', () => {
           uiZoom: uiZoom.value,
           bootEnabled: bootEnabled.value,
           bootStyle: bootStyle.value,
+          bootDuration: bootDuration.value,
           exifNotice: exifNotice.value,
           minZoom: minZoom.value,
           previewQuality: previewQuality.value,
@@ -249,6 +296,7 @@ export const useSettingsStore = defineStore('settings', () => {
     uiZoom,
     bootEnabled,
     bootStyle,
+    bootDuration,
     exifNotice,
     minZoom,
     previewQuality,
