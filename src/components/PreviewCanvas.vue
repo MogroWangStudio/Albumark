@@ -1572,6 +1572,16 @@ watch(
   },
 )
 
+// 草稿被指针以外的来源改动（撤销 / 重做回填）时重绘裁剪叠加层：
+// 拖动路径自己会调用 drawOverlay，这里兜住其余入口，避免框与照片状态不一致
+watch(
+  () => adjust.cropDraft,
+  () => {
+    if (adjust.cropMode) drawOverlay()
+  },
+  { deep: true },
+)
+
 // 翻转 / 拉直变化：先在主线程用低清位图即时粗渲（拖动中实时跟手），
 // 停顿 140ms 后再交给 Worker 精修（保留防抖，只在停顿时渲染一次）
 watch(
