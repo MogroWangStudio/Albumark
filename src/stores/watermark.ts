@@ -1,4 +1,4 @@
-import { computed, ref, toRaw } from 'vue'
+import { computed, ref, toRaw, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { blobToDataUrl, dataUrlToBlob, rasterizeSvg } from '@/core/svg'
@@ -27,9 +27,24 @@ export interface WatermarkAsset {
   aspect: number
 }
 
-const PERSIST_KEY = 'albumark.watermark.v2'
-/** 旧版存储键：偏移按长边百分比存储，读取后一次性迁移为固定像素 */
-const LEGACY_PERSIST_KEY = 'albumark.watermark.v1'
+/* ---------- 持久化：按工作目录分片 ----------
+   水印属于「这个工作目录的排版习惯」，不是整个软件的全局设置：
+   每个工作目录一份配置（存储键带目录路径），切换目录即换用对应的一份；
+   其他工作目录、以及尚未进入任何目录的状态都读不到这份水印。
+   旧版的单一全局键只在升级后并入第一个打开的工作目录，随后彻底失效。 */
+const PERSIST_PREFIX = 'albumark.watermark.v3:'
+const LEGACY_PERSIST_KEY = 'albumark.watermark.v2'
+/** 更早的存储键：偏移按长边百分比存储，读取后一次性迁移为固定像素 */
+const LEGACY_V1_KEY = 'albumark.watermark.v1'
+/** 旧全局配置只迁移一次，避免把同一份水印带给后续每个目录 */
+const MIGRATED_KEY = 'albumark.watermark.v3:migrated'
+/** 浏览器临时项目（没有磁盘工作目录）单独一份配置 */
+export const EPHEMERAL_WATERMARK_SCOPE = '__ephemeral__'
+
+interface StoredWatermark {
+  layers: WatermarkLayer[]
+  assets?: SerializedAsset[]
+}
 
 /** 锚点九宫格的默认边距（像素）。 */
 function defaultOffset(anchor: AnchorPreset): { offsetX: number; offsetY: number } {
@@ -101,27 +116,34 @@ export const useWatermarkStore = defineStore('watermark', () => {
   /** 水印工作室沙箱：工作室内的编辑只落在草稿上，退回编辑界面即丢弃，不影响照片水印 */
   const studioActive = ref(false)
   const studioLayers = ref<WatermarkLayer[]>([])
+  /**
+   * 水印作用域：当前工作目录的路径（浏览器临时项目为 EPHEMERAL_WATERMARK_SCOPE）。
+   * 空串 = 尚未进入任何工作目录，此时不读也不写任何水印配置。
+   */
+  const scopeKey = ref('')
+  /** 逐图独立水印是会话级数据，按作用域暂存：切换目录再切回来仍然保留 */
+  const perImageByScope = new Map<string, Record<string, WatermarkLayer[]>>()
 
-  /** 进入工作室：快照一份全局水印作为草稿，工作室的全部编辑都只作用于草稿 */
+  /** 进入工作室：快照一份当前目录的水印作为草稿，工作室的全部编辑都只作用于草稿 */
   function enterStudio(): void {
     studioLayers.value = plainLayers()
     studioActive.value = true
     setEditContext(null)
   }
 
-  /** 离开工作室：丢弃草稿，编辑上下文回到全局 */
+  /** 离开工作室：丢弃草稿，编辑上下文回到目录级水印 */
   function exitStudio(): void {
     studioActive.value = false
     studioLayers.value = []
     setEditContext(null)
   }
 
-  /** 当前生效的水印图层：预览 / 导出用（独立优先，否则全局） */
+  /** 当前生效的水印图层：预览 / 导出用（单张独立优先，否则当前目录的水印） */
   function effectiveLayers(id: string | null): WatermarkLayer[] {
     return (id ? perImage.value[id] : undefined) ?? layers.value
   }
 
-  /** 当前正在编辑的图层列表：工作室编辑草稿，面板按上下文编辑独立副本或全局 */
+  /** 当前正在编辑的图层列表：工作室编辑草稿，面板按上下文编辑独立副本或目录级水印 */
   function editTarget(): WatermarkLayer[] {
     if (studioActive.value) return studioLayers.value
     return (editId.value ? perImage.value[editId.value] : undefined) ?? layers.value
@@ -137,7 +159,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     selectedId.value = editTarget()[0]?.id ?? null
   }
 
-  /** 开启时把当前生效的图层深拷贝为这张照片的独立水印，关闭即恢复全局 */
+  /** 开启时把当前生效的图层深拷贝为这张照片的独立水印，关闭即恢复目录级水印 */
   function setIndividual(id: string | null, on: boolean): void {
     if (!id) return
     if (on) {
@@ -308,7 +330,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
       }
     }
     if (studioActive.value) {
-      // 工作室内应用模板只写草稿，不触碰照片正在使用的全局水印
+      // 工作室内应用模板只写草稿，不触碰照片正在使用的目录级水印
       studioLayers.value = layersData.map((l) => migrateLayer(deepClone(l)))
       selectedId.value = studioLayers.value[0]?.id ?? null
       return
@@ -343,37 +365,104 @@ export const useWatermarkStore = defineStore('watermark', () => {
       editTarget().push(...incoming)
     }
     selectedId.value = incoming[0]?.id ?? null
-    if (!studioActive.value) schedulePersist()
+    // 只有目录级水印需要落盘；单张照片的独立水印属于会话数据
+    if (!studioActive.value && !editId.value) schedulePersist()
   }
 
-  function serialize(): { layers: WatermarkLayer[]; assets: SerializedAsset[] } {
-    const raw = toRaw(editTarget())
+  /** 序列化一组图层（连同它们引用的素材）：模板保存与目录持久化共用 */
+  function serializeList(list: WatermarkLayer[]): { layers: WatermarkLayer[]; assets: SerializedAsset[] } {
+    const raw = toRaw(list)
     const used = new Set(raw.filter((l) => l.type === 'image').map((l) => (l as ImageLayer).assetId))
-    const list: SerializedAsset[] = []
+    const assetsOut: SerializedAsset[] = []
     for (const a of Object.values(assets.value)) {
-      if (used.has(a.id)) list.push({ id: a.id, name: a.name, dataUrl: a.dataUrl, aspect: a.aspect })
+      if (used.has(a.id)) assetsOut.push({ id: a.id, name: a.name, dataUrl: a.dataUrl, aspect: a.aspect })
     }
-    return { layers: deepClone(raw), assets: list }
+    return { layers: deepClone(raw), assets: assetsOut }
   }
 
-  // 持久化全局水印配置（素材以 dataUrl 内嵌，超限则放弃；独立水印随会话）
+  /** 保存模板时序列化当前编辑目标（可能是某张照片的独立水印） */
+  function serialize(): { layers: WatermarkLayer[]; assets: SerializedAsset[] } {
+    return serializeList(editTarget())
+  }
+
+  /* ---------- 持久化：只写当前工作目录的分片 ---------- */
+
+  function scopedStorageKey(scope: string): string {
+    return PERSIST_PREFIX + encodeURIComponent(scope)
+  }
+
+  function readStored(scope: string): StoredWatermark | null {
+    try {
+      const raw = window.localStorage.getItem(scopedStorageKey(scope))
+      if (!raw) return null
+      const data = JSON.parse(raw) as StoredWatermark
+      return data && Array.isArray(data.layers) ? data : null
+    } catch {
+      return null
+    }
+  }
+
+  /** 旧版全局配置：只并入第一个打开的工作目录，之后移除旧键 */
+  function takeLegacy(): StoredWatermark | null {
+    try {
+      if (window.localStorage.getItem(MIGRATED_KEY)) return null
+      let raw = window.localStorage.getItem(LEGACY_PERSIST_KEY)
+      let fromV1 = false
+      if (!raw) {
+        raw = window.localStorage.getItem(LEGACY_V1_KEY)
+        fromV1 = Boolean(raw)
+      }
+      if (!raw) {
+        window.localStorage.setItem(MIGRATED_KEY, '1')
+        return null
+      }
+      const data = JSON.parse(raw) as StoredWatermark
+      if (!data || !Array.isArray(data.layers)) return null
+      // 先完成旧格式折算，确认没抛错再移除旧键，避免迁移失败把配置弄丢
+      if (fromV1) data.layers = data.layers.map(migrateOffsetsToPx)
+      window.localStorage.setItem(MIGRATED_KEY, '1')
+      window.localStorage.removeItem(LEGACY_PERSIST_KEY)
+      window.localStorage.removeItem(LEGACY_V1_KEY)
+      return data
+    } catch {
+      return null
+    }
+  }
+
+  function adoptStored(data: StoredWatermark): void {
+    layers.value = data.layers.map((l) => migrateLayer(deepClone(l)))
+    for (const a of data.assets ?? []) {
+      // 素材缓存是会话级的：同 id 已经加载过就不覆盖
+      if (!assets.value[a.id]) assets.value[a.id] = { ...a, blob: null }
+    }
+  }
+
   let persistTimer: number | null = null
   function schedulePersist(): void {
     if (persistTimer) window.clearTimeout(persistTimer)
     persistTimer = window.setTimeout(persist, 500)
   }
   function persist(): void {
-    // 工作室草稿不写入全局水印配置
-    if (studioActive.value) return
+    // 工作室草稿不写入；没有工作目录时也没有可写的分片
+    if (studioActive.value || !scopeKey.value) return
     try {
-      const data = serialize()
-      window.localStorage.setItem(PERSIST_KEY, JSON.stringify(data))
+      // 恒写「目录级」水印：正在编辑某张照片的独立水印时，不能把它顶成目录默认
+      window.localStorage.setItem(scopedStorageKey(scopeKey.value), JSON.stringify(serializeList(layers.value)))
     } catch {
       /* 素材过大等情况直接放弃持久化 */
     }
   }
+  /** 立即写出防抖中的水印：切目录 / 切后台 / 退出前调用，避免 500ms 窗口丢改动 */
+  function flushPersist(): void {
+    if (persistTimer) {
+      window.clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    persist()
+  }
+
   /**
-   * 撤销 / 重做：整份替换全局水印与逐图独立水印。
+   * 撤销 / 重做：整份替换当前目录的目录级水印与逐图独立水印。
    * 只处理照片使用中的图层，不碰工作室草稿（草稿有自己的保存语义）。
    */
   function restoreState(
@@ -390,33 +479,48 @@ export const useWatermarkStore = defineStore('watermark', () => {
     schedulePersist()
   }
 
-  function hydrate(): boolean {
-    try {
-      let raw = window.localStorage.getItem(PERSIST_KEY)
-      let fromLegacy = false
-      if (!raw) {
-        raw = window.localStorage.getItem(LEGACY_PERSIST_KEY)
-        fromLegacy = true
-        if (!raw) return false
-      }
-      const data = JSON.parse(raw) as { layers: WatermarkLayer[]; assets: SerializedAsset[] }
-      if (!Array.isArray(data.layers) || !data.layers.length) return false
-      layers.value = data.layers.map((l) => migrateLayer(l))
-      if (fromLegacy) {
-        // 旧偏移为长边百分比，折算成固定像素后写入新键
-        layers.value = layers.value.map(migrateOffsetsToPx)
-        window.localStorage.removeItem(LEGACY_PERSIST_KEY)
-      }
-      for (const a of data.assets ?? []) {
-        assets.value[a.id] = { ...a, blob: null }
-      }
-      selectedId.value = layers.value[0]?.id ?? null
-      if (fromLegacy) schedulePersist()
-      return true
-    } catch {
-      return false
+  /**
+   * 切换水印作用域（工作目录）。
+   *
+   * 这是「水印只属于一个工作目录」的闸门：切换时先把旧目录的改动落盘、
+   * 暂存它的逐图水印，再清空运行态并载入新目录的配置。
+   * 传入空串 = 当前没有工作目录：保持无水印，绝不沿用上一个目录的图层。
+   */
+  function setScope(next: string): void {
+    const key = next || ''
+    if (key === scopeKey.value) return
+    if (studioActive.value) {
+      // 工作室草稿没有跨目录的语义：切目录等同于离开工作室
+      studioActive.value = false
+      studioLayers.value = []
     }
+    if (scopeKey.value) {
+      flushPersist()
+      perImageByScope.set(scopeKey.value, perImage.value)
+    }
+    scopeKey.value = key
+    layers.value = []
+    perImage.value = key ? (perImageByScope.get(key) ?? {}) : {}
+    editId.value = null
+    selectedId.value = null
+    if (!key) return
+    const stored = readStored(key)
+    if (stored) {
+      adoptStored(stored)
+    } else {
+      const legacy = takeLegacy()
+      if (legacy) {
+        adoptStored(legacy)
+        // 迁移结果立即写成该目录自己的分片，其他目录读不到
+        persist()
+      }
+    }
+    selectedId.value = editTarget()[0]?.id ?? null
   }
+
+  // 目录级水印的手动编辑（拖动、改字、增删图层）同样走防抖持久化；
+  // 只观察 layers：逐图独立水印属于会话数据，不写进目录配置
+  watch(layers, () => schedulePersist(), { deep: true })
 
   return {
     layers,
@@ -425,6 +529,8 @@ export const useWatermarkStore = defineStore('watermark', () => {
     perImage,
     editId,
     studioActive,
+    /** 当前工作目录作用域（空串 = 未进入任何目录） */
+    scopeKey,
     enterStudio,
     exitStudio,
     selected,
@@ -449,7 +555,8 @@ export const useWatermarkStore = defineStore('watermark', () => {
     applyToTarget,
     serialize,
     schedulePersist,
+    flushPersist,
     restoreState,
-    hydrate,
+    setScope,
   }
 })

@@ -195,6 +195,7 @@ export const useHistoryStore = defineStore('history', () => {
   )
 
   // 换项目：旧项目的历史不能套用到新项目上
+  // （工作目录切换由 App 在换完水印配置后再立基线，见 watermarkScope 的 watch）
   watch(
     () => ws.current?.id ?? null,
     () => reset(),

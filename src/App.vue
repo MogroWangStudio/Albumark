@@ -35,7 +35,7 @@ import { useAdjustPresetsStore } from '@/stores/adjustPresets'
 import { useHistoryStore } from '@/stores/history'
 import { useImagesStore } from '@/stores/images'
 import { pickBootStyle, useSettingsStore } from '@/stores/settings'
-import { useWatermarkStore } from '@/stores/watermark'
+import { EPHEMERAL_WATERMARK_SCOPE, useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const images = useImagesStore()
@@ -45,6 +45,21 @@ const history = useHistoryStore()
 const ws = useWorkspaceStore()
 const adjust = useAdjustStore()
 const settings = useSettingsStore()
+
+/**
+ * 水印作用域：跟随当前工作目录，而不是整个应用。
+ * 浏览器临时项目没有磁盘目录，单独用 EPHEMERAL_WATERMARK_SCOPE；
+ * 不在任何目录里时留空 —— 水印 store 会清空运行态，不会把别处的配置带出来。
+ */
+const watermarkScope = computed(
+  () => ws.dir?.path ?? (ws.inProject ? EPHEMERAL_WATERMARK_SCOPE : ''),
+)
+watch(watermarkScope, (scope) => {
+  // 先换配置、再重立撤销基线：目录切换不能变成一步可撤销的「水印编辑」，
+  // 否则在新目录里撤销会把上一个目录的水印带回来
+  wm.setScope(scope)
+  history.reset()
+})
 
 /** 启动画面在进入应用时定格：之后在设置里改款式 / 时长 / 开关只在下次启动生效 */
 const bootVisible = ref(settings.bootEnabled)
@@ -394,7 +409,13 @@ function openWorkspace(): void {
 }
 
 onMounted(async () => {
-  if (isTauri || isCapacitor) void ws.init()
+  // 目录扫描与原生监听并行启动；快捷键 / 右键拦截先就位，不等待磁盘
+  const workspaceReady = isTauri || isCapacitor ? ws.init() : Promise.resolve()
+  window.addEventListener('keydown', onKeydown)
+  document.addEventListener('contextmenu', onGlobalContextMenu)
+  window.addEventListener('pagehide', flushWorkspace)
+  document.addEventListener('visibilitychange', onVisChange)
+  narrowQuery?.addEventListener('change', onNarrowChange)
   if (isTauri) void watchNativeDrop()
   if (isCapacitor) {
     try {
@@ -404,17 +425,12 @@ onMounted(async () => {
       /* 插件不可用时退回系统默认行为 */
     }
   }
-  // 水印配置只从本地恢复：没有记录时保持「无水印」。
-  // 曾经在这里兜底套用「右下签名」内置模板，导致新建工作目录 / 首次启动后
-  // 导入的照片被莫名加上水印——水印必须是用户主动加的东西。
-  wm.hydrate()
+  // 水印按工作目录分片：等目录就绪后载入该目录的一份，再立撤销基线。
+  // 曾经是单一全局配置，新建目录 / 切换目录都会沿用上一处的水印——现在不会了。
+  await workspaceReady
+  wm.setScope(watermarkScope.value)
   // 装载完成后的状态才是撤销的起点：否则用户第一次撤销会把「刚恢复的水印」撤掉
   history.reset()
-  window.addEventListener('keydown', onKeydown)
-  document.addEventListener('contextmenu', onGlobalContextMenu)
-  window.addEventListener('pagehide', flushWorkspace)
-  document.addEventListener('visibilitychange', onVisChange)
-  narrowQuery?.addEventListener('change', onNarrowChange)
 })
 
 let capBack: PluginListenerHandle | null = null
@@ -447,6 +463,7 @@ async function onAndroidBack(): Promise<void> {
   }
   const now = Date.now()
   if (now - lastBackAt < BACK_EXIT_WINDOW) {
+    wm.flushPersist()
     await ws.flushSave()
     const { App } = await import('@capacitor/app')
     await App.exitApp()
@@ -458,6 +475,8 @@ async function onAndroidBack(): Promise<void> {
 
 /** 防抖保存的兜底：切后台/页面隐藏时立即写出，防止 400ms 窗口内被系统杀掉丢数据 */
 function flushWorkspace(): void {
+  // 水印的防抖窗口是 500ms，和项目清单一起在这里兜底
+  wm.flushPersist()
   void ws.flushSave().catch(() => undefined)
 }
 
