@@ -518,7 +518,7 @@ function resetDenoise(): void {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: -2px 0 12px;
+  margin: 6px 0 12px;
 }
 .wb-pick {
   flex: none;
