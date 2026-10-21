@@ -5,10 +5,22 @@ import { isCapacitor, isTauri } from '@/core/platform'
 
 export type ThemeMode = 'auto' | 'dark' | 'light' | 'darkroom' | 'cyanotype' | 'paper' | 'gallery'
 /**
- * 预览渲染质量：五档预设 + custom（自定义档位）。
+ * 预览渲染质量：自适应 / 五档预设 / custom（自定义档位）。
+ * 自适应按当前缩放实时决定渲染分辨率：放大补精度，缩小降分辨率；
  * 自定义时 previewQualityValue 为精修长边像素，即时档与叠加层密度随之派生。
  */
-export type PreviewQuality = 'ultra' | 'high' | 'balanced' | 'eco' | 'minimal' | 'custom'
+export type PreviewQuality = 'adaptive' | 'ultra' | 'high' | 'balanced' | 'eco' | 'minimal' | 'custom'
+
+/** 渲染质量选项：设置页与存档校验共用同一份清单 */
+export const PREVIEW_QUALITIES: { value: PreviewQuality; label: string }[] = [
+  { value: 'adaptive', label: '自适应' },
+  { value: 'ultra', label: '极致' },
+  { value: 'high', label: '高质量' },
+  { value: 'balanced', label: '均衡' },
+  { value: 'eco', label: '省电' },
+  { value: 'minimal', label: '极省' },
+  { value: 'custom', label: '自定义' },
+]
 
 /** 自定义预览精度的取值范围（精修长边像素） */
 export const PREVIEW_CUSTOM_MIN = 600
@@ -185,6 +197,14 @@ function load(): AppSettings {
       data.bootDuration = Number.isFinite(dur)
         ? Math.min(BOOT_DURATION_MAX, Math.max(BOOT_DURATION_MIN, Math.round(dur / 100) * 100))
         : BOOT_DURATION_DEFAULT
+      // 渲染质量同理：未知档位回落到默认，自定义精度夹回范围并取整到 50px
+      if (!PREVIEW_QUALITIES.some((q) => q.value === data.previewQuality)) {
+        data.previewQuality = DEFAULTS.previewQuality
+      }
+      const pq = Number(data.previewQualityValue)
+      data.previewQualityValue = Number.isFinite(pq)
+        ? Math.min(PREVIEW_CUSTOM_MAX, Math.max(PREVIEW_CUSTOM_MIN, Math.round(pq / 50) * 50))
+        : DEFAULTS.previewQualityValue
       return data
     }
   } catch {

@@ -24,6 +24,7 @@ import {
   BOOT_STYLE_CHOICES,
   PREVIEW_CUSTOM_MAX,
   PREVIEW_CUSTOM_MIN,
+  PREVIEW_QUALITIES,
   THEMES,
   pickBootStyle,
   useSettingsStore,
@@ -358,14 +359,8 @@ async function relaunchOobe(): Promise<void> {
           </div>
           <AppSegment
             v-model="qualityModel"
-            :options="[
-              { value: 'ultra', label: '极致' },
-              { value: 'high', label: '高质量' },
-              { value: 'balanced', label: '均衡' },
-              { value: 'eco', label: '省电' },
-              { value: 'minimal', label: '极省' },
-              { value: 'custom', label: '自定义' },
-            ]"
+            :options="PREVIEW_QUALITIES"
+            wrap
           />
           <AppSlider
             v-if="settings.previewQuality === 'custom'"
@@ -379,7 +374,8 @@ async function relaunchOobe(): Promise<void> {
             @reset="settings.previewQualityValue = 1200"
           />
           <p class="note">
-            预览精度是放大查看时的渲染长边（像素）：越高越清晰，耗电与发热越高；
+            「自适应」按当前缩放实时决定预览分辨率：放大补细节，缩小降耗电；
+            其余档位是固定的渲染长边（像素），越高越清晰、也越费电。
             导出始终使用原图全分辨率，不受此设置影响。
           </p>
         </div>

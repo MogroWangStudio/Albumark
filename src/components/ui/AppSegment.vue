@@ -3,6 +3,8 @@ defineProps<{
   options: { value: string; label: string; disabled?: boolean }[]
   modelValue: string
   small?: boolean
+  /** 选项较多时允许换行：每项等宽分摊一行，窄屏不横向溢出 */
+  wrap?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -11,7 +13,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="seg" :class="{ small }">
+  <div class="seg" :class="{ small, wrap }">
     <button
       v-for="o in options"
       :key="o.value"
@@ -37,6 +39,16 @@ const emit = defineEmits<{
   padding: 0 9px;
   font-size: calc(12px * var(--ui-zoom, 1));
 }
+/* 选项多到一行放不下时换行，每项等宽分摊，窄屏也不横向溢出 */
+.seg.wrap {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.seg.wrap button {
+  flex: 1 1 auto;
+  min-width: calc(52px * var(--ui-zoom, 1));
+}
 button {
   height: calc(26px * var(--ui-zoom, 1));
   padding: 0 12px;
@@ -45,7 +57,12 @@ button {
   color: var(--text-2);
   transition:
     background var(--dur-hover) var(--ease-soft),
-    color var(--dur-hover) var(--ease-soft);
+    color var(--dur-hover) var(--ease-soft),
+    transform 90ms ease-out;
+}
+/* 按下即反馈：不等松手，点下去就有回应 */
+button:active:not(:disabled) {
+  transform: scale(0.96);
 }
 button:hover:not(:disabled):not(.on) {
   color: var(--text);

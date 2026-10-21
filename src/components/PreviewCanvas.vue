@@ -46,8 +46,16 @@ const PERF: Record<string, { final: number; draft: number; dprCap: number }> = {
   minimal: { final: 640, draft: 320, dprCap: 1 },
 }
 
+/**
+ * 自适应档的渲染长边范围：下限保证缩到很小时仍有可用清晰度，
+ * 上限约束内存与解码开销（再高的倍率也不会无限吃显存）。
+ */
+const ADAPTIVE_MIN = 640
+const ADAPTIVE_MAX = 3200
+
 /** 自定义档位：精度（精修长边）无极可调，即时档与叠加层密度随之派生 */
 function perfFor(q: string, custom: number): { final: number; draft: number; dprCap: number } {
+  if (q === 'adaptive') return { final: ADAPTIVE_MAX, draft: 480, dprCap: 2 }
   if (q === 'custom') {
     const final = Math.min(PREVIEW_CUSTOM_MAX, Math.max(PREVIEW_CUSTOM_MIN, custom))
     return {
@@ -57,6 +65,37 @@ function perfFor(q: string, custom: number): { final: number; draft: number; dpr
     }
   }
   return PERF[q] ?? PERF.high!
+}
+
+/**
+ * 自适应档当前需要的渲染长边：按「照片在屏幕上的实际像素」取景。
+ * 放大时目标随之变大（≤ 源图原生长边 / ADAPTIVE_MAX），缩小时随之变小；
+ * 不做这个换算的话，放大只是把同一张位图拉大，细节永远是糊的。
+ */
+function adaptiveLong(): number {
+  const a = active.value
+  const dpr = view.dpr || 1
+  const fw = avail.w || view.w
+  const fh = avail.h || view.h
+  if (!a?.width || !a.height || !fw || !fh) return ADAPTIVE_MIN
+  const geom = adjust.cropMode ? adjust.cropDraft : adjust.cropOf(a.id)
+  const src = cropSourceSize(a.width, a.height, geom ?? undefined)
+  // 裁剪编辑时显示整张变换后源图；其余情况画面只包含裁剪矩形
+  const outW = Math.max(1, src.w * (adjust.cropMode ? 1 : (geom?.w ?? 1)))
+  const outH = Math.max(1, src.h * (adjust.cropMode ? 1 : (geom?.h ?? 1)))
+  const aspect = outW / outH
+  // 适应窗口时照片的显示长边（CSS px）：等比放进可用区域
+  const fitW = Math.min(fw, fh * aspect)
+  const fitLong = Math.max(fitW, fitW / aspect)
+  const wanted = Math.round(fitLong * zoom.value * dpr)
+  const native = Math.max(outW, outH)
+  return Math.max(320, Math.min(ADAPTIVE_MAX, native || ADAPTIVE_MAX, Math.max(ADAPTIVE_MIN, wanted)))
+}
+
+/** 即时（低清）渲染的自适应目标：约为精修目标的一半，拖动滑杆时先给一版能看的 */
+function adaptiveDraftLong(): number {
+  if (settings.previewQuality !== 'adaptive') return perf.value.draft
+  return Math.min(1200, Math.max(480, Math.round(adaptiveLong() * 0.5)))
 }
 
 const frame = ref<HTMLDivElement | null>(null)
@@ -383,11 +422,14 @@ async function renderBase(draft: boolean): Promise<void> {
   if (!a || !cvBase.value) return
   const seq = ++baseSeq
   const viewLong = Math.max(view.w, view.h) * view.dpr || 800
+  const adaptive = settings.previewQuality === 'adaptive'
   // 即时刷新用「不低于当前显示分辨率」的档位：替换位图时尺寸不变，避免画面忽糊忽清地闪烁
   const currentLong = resultBmp ? Math.max(resultBmp.width, resultBmp.height) : 0
   const maxLong = draft
-    ? Math.max(perf.value.draft, currentLong)
-    : Math.min(perf.value.final, viewLong)
+    ? Math.max(adaptiveDraftLong(), currentLong)
+    : adaptive
+      ? adaptiveLong()
+      : Math.min(perf.value.final, viewLong)
   const bmp = await ensureBitmap(maxLong)
   if (!bmp) {
     // 照片文件未装载（后台渐进补齐中）或解码失败：清掉旧画面，
@@ -1011,19 +1053,24 @@ function cropBounds(): { x0: number; y0: number; x1: number; y1: number } {
   return cropInnerBounds(a.width, a.height, d)
 }
 
-/** 把矩形收敛到活动范围内（含最小边）。 */
+/**
+ * 把矩形收敛到活动范围内（含最小边）。
+ * base 用于保留矩形之外的几何量（拉直角度 / 翻转）：只调整选框时绝不能
+ * 把 rot 丢掉——旧实现返回裸矩形，拖动选框或换比例就等于「拉直归零」。
+ */
 function clampRect(
   x0: number,
   y0: number,
   x1: number,
   y1: number,
   bd: { x0: number; y0: number; x1: number; y1: number },
+  base?: Pick<Crop, 'rot' | 'flipH' | 'flipV'>,
 ): Crop {
   const left = Math.min(Math.max(bd.x0, x0), bd.x1 - CROP_MIN)
   const top = Math.min(Math.max(bd.y0, y0), bd.y1 - CROP_MIN)
   const right = Math.min(Math.max(left + CROP_MIN, x1), bd.x1)
   const bottom = Math.min(Math.max(top + CROP_MIN, y1), bd.y1)
-  return { x: left, y: top, w: right - left, h: bottom - top }
+  return { ...base, x: left, y: top, w: right - left, h: bottom - top }
 }
 
 /**
@@ -1047,7 +1094,7 @@ function resizeCrop(
   if (handle.includes('e')) right = Math.max(nx, left + CROP_MIN)
   if (handle.includes('n')) top = Math.min(ny, bottom - CROP_MIN)
   if (handle.includes('s')) bottom = Math.max(ny, top + CROP_MIN)
-  if (!ratio) return clampRect(left, top, right, bottom, bd)
+  if (!ratio) return clampRect(left, top, right, bottom, bd, start)
 
   const k = imgAspect / ratio // 归一化高 = 归一化宽 × k
   const hasN = handle.includes('n')
@@ -1066,7 +1113,7 @@ function resizeCrop(
       h = Math.max(CROP_MIN, availH)
       w = h / k
     }
-    return clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd)
+    return clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd, start)
   }
   if (!hasW && !hasE) {
     // 纵边：水平方向以框中心对称伸缩
@@ -1080,7 +1127,7 @@ function resizeCrop(
       w = Math.max(CROP_MIN, availW)
       h = w * k
     }
-    return clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd)
+    return clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd, start)
   }
   // 角：对角为锚
   const ax = hasW ? right : left
@@ -1097,6 +1144,7 @@ function resizeCrop(
     w = h / k
   }
   return {
+    ...start,
     x: hasW ? ax - w : ax,
     y: hasN ? ay - h : ay,
     w,
@@ -1148,9 +1196,14 @@ function hitCropHandle(p: { x: number; y: number }): CropHandle | null {
 /** 选择比例后把当前框调整为该比例的最大内接矩形（保持中心，限制在活动范围内）。 */
 function applyRatioToDraft(): void {
   const d = adjust.cropDraft
+  const a = active.value
   const ratio = cropRatioOf(adjust.cropRatio)
-  if (!d || !ratio || !resultMap.w) return
-  const k = resultMap.w / resultMap.h / ratio
+  if (!d || !ratio) return
+  // 比例换算用「变换后源图」的宽高比，而不是当前画面映射：
+  // 刚改完拉直、精修位图还没回来时，resultMap 仍是旧角度的尺寸
+  const src = a?.width && a.height ? cropSourceSize(a.width, a.height, d) : { w: resultMap.w, h: resultMap.h }
+  if (!src.w || !src.h) return
+  const k = src.w / src.h / ratio
   const bd = cropBounds()
   const cx = d.x + d.w / 2
   const cy = d.y + d.h / 2
@@ -1164,7 +1217,8 @@ function applyRatioToDraft(): void {
   }
   w = Math.max(w, CROP_MIN)
   h = Math.max(h, CROP_MIN)
-  adjust.cropDraft = clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd)
+  // 只换比例，拉直角度与翻转必须原样带走（否则换比例等于把拉直清空）
+  adjust.cropDraft = { ...d, ...clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd) }
 }
 
 function onPointerDown(e: PointerEvent): void {
@@ -1313,7 +1367,13 @@ function onPointerMove(e: PointerEvent): void {
       adjust.cropDraft = { x, y, w, h, rot: d.rot, flipH: d.flipH, flipV: d.flipV }
     } else {
       const ratio = cropRatioOf(adjust.cropRatio)
-      const imgAspect = resultMap.w / resultMap.h
+      // 与比例换算同源：以变换后源图为准，避免精修位图未回来时用到旧角度尺寸
+      const img = active.value
+      const src =
+        img?.width && img.height
+          ? cropSourceSize(img.width, img.height, d)
+          : { w: resultMap.w, h: resultMap.h }
+      const imgAspect = src.w / Math.max(1, src.h)
       adjust.cropDraft = resizeCrop(d, gesture.handle, nx, ny, ratio, imgAspect, bd)
     }
     drawOverlay()
@@ -1441,25 +1501,34 @@ function onPointerUp(e: PointerEvent): void {
   }
 }
 
-/** 缩放结束后按需请求更高分辨率的精修渲染 */
+/**
+ * 缩放结束后按需重渲：自适应档跟随缩放双向调整（放大补精度、缩小降开销），
+ * 固定档位只向上补到档位上限，不会主动降分辨率。
+ */
 function scheduleHiRes(): void {
   if (settleTimer) window.clearTimeout(settleTimer)
   settleTimer = window.setTimeout(() => {
     settleTimer = null
     if (!resultBmp || !active.value) return
-    // 期望分辨率同样受精修档位封顶：放大到大倍率时若按缩放值计算，
+    // 固定档位的期望分辨率同样受精修档位封顶：放大到大倍率时若按缩放值计算，
     // 每次停顿都会触发一次输出完全相同的全管线渲染（安卓上一次要数秒）
-    const desired = Math.min(
-      perf.value.final,
-      Math.round(Math.max(view.w, view.h) * zoom.value * (view.dpr || 1)),
-    )
+    const adaptive = settings.previewQuality === 'adaptive'
+    const desired = adaptive
+      ? adaptiveLong()
+      : Math.min(
+          perf.value.final,
+          Math.round(Math.max(view.w, view.h) * zoom.value * (view.dpr || 1)),
+        )
     const current = Math.max(resultBmp.width, resultBmp.height)
-    if (desired > current + 100) {
-      rendering.value = true
-      void renderBase(false).finally(() => {
-        rendering.value = false
-      })
-    }
+    // 放大：差出可见的一档才补渲；缩小：明显超出需求才降一档。
+    // 75% 的滞回避免在阈值附近反复重渲（安卓上一次全管线要数秒）
+    const needMore = desired > current + (adaptive ? 80 : 100)
+    const needLess = adaptive && desired < current * 0.75
+    if (!needMore && !needLess) return
+    rendering.value = true
+    void renderBase(false).finally(() => {
+      rendering.value = false
+    })
   }, 280)
 }
 
