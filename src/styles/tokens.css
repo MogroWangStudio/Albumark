@@ -36,6 +36,7 @@
     'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', system-ui,
     sans-serif;
   --font: var(--font-fallback);
+  /* 等宽只用于代码类文本（文件名模板 / 路径 / URL / 文件名列表），不用于界面文案 */
   --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 
   /* 界面字号缩放（设置档位 0.9–1.25）：所有 UI 字号与控件高度乘此系数，

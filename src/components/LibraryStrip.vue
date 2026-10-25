@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, toRaw, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, toRaw, watch } from 'vue'
 import {
   CheckSquare,
   Copy,
@@ -44,6 +44,11 @@ const geoSig = computed(() =>
   ),
 )
 let thumbTimer: number | null = null
+/** 缩略图是否已被几何合成覆盖：清除裁剪 / 边框后要回到原图缩略图 */
+const geoThumbs = new Set<string>()
+onBeforeUnmount(() => {
+  if (thumbTimer) window.clearTimeout(thumbTimer)
+})
 watch(geoSig, () => {
   if (thumbTimer) window.clearTimeout(thumbTimer)
   thumbTimer = window.setTimeout(async () => {
@@ -54,9 +59,22 @@ watch(geoSig, () => {
         .effectiveLayers(item.id)
         .filter((l): l is BorderLayer => l.type === 'border' && l.visible)
         .map((l) => toRaw(l))
-      if (!crop && !borders.length) continue
+      if (!crop && !borders.length) {
+        // 曾经按裁剪 / 边框合成过的缩略图必须换回原图，
+        // 否则取消裁剪后照片条仍显示裁剪后的画面
+        if (!geoThumbs.has(item.id)) continue
+        const blob = await composeThumb(item.blob, undefined, [])
+        if (blob) {
+          images.setThumb(item.id, blob)
+          geoThumbs.delete(item.id)
+        }
+        continue
+      }
       const blob = await composeThumb(item.blob, crop, borders)
-      if (blob) images.setThumb(item.id, blob)
+      if (blob) {
+        images.setThumb(item.id, blob)
+        geoThumbs.add(item.id)
+      }
     }
   }, 500)
 })

@@ -395,7 +395,7 @@ const previewRef = ref<InstanceType<typeof PreviewCanvas> | null>(null)
 /** 顶栏「工作区」：回到工作区页面并关闭当前项目 */
 function openWorkspace(): void {
   view.value = 'main'
-  if (ws.inProject) ws.closeProject()
+  if (ws.inProject) void ws.closeProject()
 }
 
 onMounted(async () => {

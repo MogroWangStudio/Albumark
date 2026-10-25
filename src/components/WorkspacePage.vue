@@ -82,15 +82,16 @@ async function create(): Promise<void> {
   if (ok) newName.value = ''
 }
 
-function confirmRemove(): void {
+async function confirmRemove(): Promise<void> {
   const t = removeTarget.value
   removeTarget.value = null
   if (!t) return
   const meta = ws.projects.find((p) => p.id === t.id)
   if (!meta) return
-  // 项目没了，它那份水印配置也不该留在本地等被别处读走
+  // 先确认项目真的进了回收站，再清它那份水印配置：
+  // 删除失败时配置应当原样保留，否则用户重试时水印已经找不回来了
+  if (!(await ws.removeProject(meta))) return
   wm.forgetProject(meta.id)
-  void ws.removeProject(meta)
 }
 
 function fmtDate(t: number): string {

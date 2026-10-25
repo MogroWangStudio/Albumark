@@ -227,7 +227,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   /** 切换到某个已记录的工作目录并扫描其中的项目。 */
   async function useDir(meta: WorkDirMeta): Promise<void> {
     dir.value = meta
-    if (current.value) closeProject()
+    if (current.value) await closeProject()
     else await scanProjects()
     // 打开着项目时走的是 closeProject，不会经过 scanProjects 的落盘分支；
     // 这里补一次，保证「上次使用的目录」真的被记住——否则重启会退回上一个目录，
@@ -416,26 +416,45 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     images.setItems([])
   }
 
-  function closeProject(): void {
+  /**
+   * 关闭当前项目。清单必须在这里落盘：scheduleSave 有 400ms 防抖，
+   * 刚导入照片就点「工作区」退出时，定时器会被取消而记录从此丢失——
+   * 照片文件还在 images/ 里，但重新打开项目就看不到它们了。
+   */
+  async function closeProject(): Promise<void> {
     hydrateSeq++
+    if (saveTimer) {
+      window.clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    if (fsAvailable && manifest.value && current.value?.path) {
+      const path = current.value.path
+      try {
+        await fs.writeJsonFile(await fs.joinPath(path, MANIFEST), manifest.value)
+      } catch {
+        /* 写盘失败不阻塞关闭，否则用户会被困在当前项目里 */
+      }
+    }
     current.value = null
     manifest.value = null
     images.clear()
     void scanProjects()
   }
 
-  /** 删除项目：移入回收站（桌面系统回收站 / 安卓应用内 trash 文件夹）。UI 层负责确认。 */
-  async function removeProject(meta: ProjectMeta): Promise<void> {
-    if (!fsAvailable) return
-    if (current.value?.path === meta.path) closeProject()
+  /** 删除项目：移入回收站（桌面系统回收站 / 安卓应用内 trash 文件夹）。UI 层负责确认。
+   *  返回是否真的删掉了：失败时项目原样保留，调用方不应清理它的附属数据。 */
+  async function removeProject(meta: ProjectMeta): Promise<boolean> {
+    if (!fsAvailable) return false
+    if (current.value?.path === meta.path) await closeProject()
     try {
       await fs.trashPath(meta.path)
     } catch {
       toast('无法移入回收站，项目保持原样', 'error')
       await scanProjects()
-      return
+      return false
     }
     await scanProjects()
+    return true
   }
 
   /* ---------- 图片进出项目 ---------- */

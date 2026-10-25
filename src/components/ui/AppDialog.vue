@@ -1,7 +1,8 @@
 <script setup lang="ts">
+import { onBeforeUnmount, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     open: boolean
     title: string
@@ -13,12 +14,38 @@ withDefaults(
 const emit = defineEmits<{
   close: []
 }>()
+
+/** Esc 关闭：全局 Esc 只处理页面级浮层，对话框自己收口，键盘用户不再被卡住 */
+function onKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape') {
+    e.stopPropagation()
+    emit('close')
+  }
+}
+
+watch(
+  () => props.open,
+  (v) => {
+    if (v) document.addEventListener('keydown', onKey, true)
+    else document.removeEventListener('keydown', onKey, true)
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => document.removeEventListener('keydown', onKey, true))
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="dialog">
-      <div v-if="open" class="overlay" @click.self="emit('close')">
+      <div
+        v-if="open"
+        class="overlay"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="title"
+        @click.self="emit('close')"
+      >
         <div class="panel" :style="{ maxWidth: `${width}px` }">
           <header>
             <h2>{{ title }}</h2>

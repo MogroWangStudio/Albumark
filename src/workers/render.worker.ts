@@ -37,9 +37,18 @@ function measureCtx(): OffscreenCanvasRenderingContext2D {
 }
 
 self.addEventListener('message', (e: MessageEvent<{ job: RenderJob }>) => {
-  void handle(e.data.job).catch((err) => {
-    // 任务失败必须回报，否则主线程的 pending 永远挂起、渲染静默冻结
-    post({ id: e.data.job.id, err: err instanceof Error ? err.message : String(err) })
+  const job = e.data.job
+  void handle(job).catch((err) => {
+    // 任务失败必须回报，否则主线程的 pending 永远挂起、渲染静默冻结。
+    // 源位图是 transfer 进来的，不还回去主线程就永久失去了它——后续渲染
+    // 只能重新解码整张照片（安卓上一次要数秒）。已 detach 时 transfer 会抛错，
+    // 那就退回纯错误回报。
+    const message = err instanceof Error ? err.message : String(err)
+    try {
+      post({ id: job.id, err: message, srcBack: job.bitmap }, [job.bitmap])
+    } catch {
+      post({ id: job.id, err: message })
+    }
   })
 })
 

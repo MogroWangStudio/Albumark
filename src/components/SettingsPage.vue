@@ -654,7 +654,9 @@ async function relaunchOobe(): Promise<void> {
   color: var(--accent);
   font-weight: 600;
 }
-/* 每款的缩略示意：一眼能认出的静止标记，不在这里跑动画 */
+/* 每款的缩略示意：一眼能认出的静止标记，不在这里跑动画。
+   下面三处 radial-gradient 是「快门环 / 显影光晕 / 闪光斑」的图形本体，
+   各自只为一个功能形状存在，不是给卡片铺氛围的渐变 */
 .st-default .st-thumb::after {
   content: '';
   position: absolute;

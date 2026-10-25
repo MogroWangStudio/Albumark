@@ -238,7 +238,12 @@ export const useImagesStore = defineStore('images', () => {
 
   function patchItem(id: string, patch: Partial<ImageItem>): void {
     const item = items.value.find((i) => i.id === id)
-    if (item) Object.assign(item, patch)
+    if (!item) return
+    // 带新缩略图覆盖时释放旧对象 URL：relink、并发补齐同图都会重复生成缩略图
+    if (patch.thumbUrl && patch.thumbUrl !== item.thumbUrl && item.thumbUrl) {
+      URL.revokeObjectURL(item.thumbUrl)
+    }
+    Object.assign(item, patch)
   }
 
   /** 替换缩略图（几何合成结果由调用方生成），并释放旧的对象 URL */

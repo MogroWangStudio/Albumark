@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import {
   Brush,
   FolderOpen,
@@ -14,6 +14,7 @@ import {
 import LogoText from '@/components/brand/LogoText.vue'
 import { isMacDesktop, isTauri } from '@/core/platform'
 import { useHistoryStore } from '@/stores/history'
+import { toast } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const emit = defineEmits<{
@@ -60,6 +61,65 @@ async function onMaximize(): Promise<void> {
 function onClose(): void {
   win?.close()
 }
+
+/* ---------- logo 彩蛋：2 秒内连点 5 次，随机触发一个小惊喜 ---------- */
+/** 视觉彩蛋与文案彩蛋各占一半，且不与上一次同类 */
+const EGG_TRIGGER = 5
+const EGG_WINDOW = 2000
+const eggAnims = ['bounce', 'spin', 'wiggle'] as const
+const eggLines = [
+  '第 5 张底片，往往是最好的一张',
+  '连点五次的手速，适合去按快门',
+  '水印已盖好，今日辑录顺利',
+  '胶片会褪色，水印不会',
+  '暗房灯已亮，慢慢冲',
+  '辑印虽小，方寸有印',
+]
+const eggAnim = ref<(typeof eggAnims)[number] | ''>('')
+let eggCount = 0
+let eggAt = 0
+let eggCleaner = 0
+let eggRaf = 0
+let lastEggKind = ''
+let lastEggAnim: (typeof eggAnims)[number] | '' = ''
+
+function playEgg(): void {
+  // 同名动画类需先摘掉再挂回才能重播（800ms 清理兜底，不依赖 animationend）
+  eggAnim.value = ''
+  cancelAnimationFrame(eggRaf)
+  eggRaf = requestAnimationFrame(() => {
+    const pool = eggAnims.filter((a) => a !== lastEggAnim)
+    const next = pool[Math.floor(Math.random() * pool.length)]
+    lastEggAnim = next
+    eggAnim.value = next
+  })
+  clearTimeout(eggCleaner)
+  eggCleaner = window.setTimeout(() => (eggAnim.value = ''), 800)
+}
+
+function onLogoClick(): void {
+  const now = performance.now()
+  if (now - eggAt > EGG_WINDOW) eggCount = 0
+  eggAt = now
+  if (++eggCount < EGG_TRIGGER) return
+  eggCount = 0
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  // 减弱动效时只出文案：此时不能再参与「不与上次同类」的翻转，
+  // 否则会翻成不会播放的动效彩蛋，看起来像什么都没发生
+  let kind: 'anim' | 'line' = reduce || Math.random() >= 0.5 ? 'line' : 'anim'
+  if (!reduce && kind === lastEggKind) kind = kind === 'anim' ? 'line' : 'anim'
+  lastEggKind = kind
+  if (kind === 'anim') {
+    playEgg()
+    return
+  }
+  toast(eggLines[Math.floor(Math.random() * eggLines.length)])
+}
+
+onUnmounted(() => {
+  clearTimeout(eggCleaner)
+  cancelAnimationFrame(eggRaf)
+})
 </script>
 
 <template>
@@ -72,8 +132,9 @@ function onClose(): void {
         @pointerdown="pressed = true"
         @pointerup="pressed = false"
         @pointerleave="pressed = false"
+        @click="onLogoClick"
       >
-        <LogoText class="logo" />
+        <LogoText class="logo" :class="eggAnim ? `egg-${eggAnim}` : undefined" />
       </button>
       <button
         v-if="ws.inProject || ws.dir"
@@ -222,6 +283,64 @@ function onClose(): void {
   height: 18px;
   width: auto;
   display: block;
+}
+/* ---------- logo 彩蛋动画：点按自带能量，允许一点过冲 ---------- */
+.logo.egg-bounce {
+  animation: egg-bounce 640ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.logo.egg-spin {
+  animation: egg-spin 700ms cubic-bezier(0.45, 0, 0.2, 1);
+}
+.logo.egg-wiggle {
+  animation: egg-wiggle 620ms cubic-bezier(0.36, 0, 0.2, 1);
+}
+@keyframes egg-bounce {
+  0% {
+    transform: scale(1);
+  }
+  28% {
+    transform: scale(1.18) translateY(-2px);
+  }
+  52% {
+    transform: scale(0.94);
+  }
+  74% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes egg-spin {
+  from {
+    transform: rotateY(0);
+  }
+  to {
+    transform: rotateY(360deg);
+  }
+}
+@keyframes egg-wiggle {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  20% {
+    transform: rotate(-7deg);
+  }
+  45% {
+    transform: rotate(5.5deg);
+  }
+  68% {
+    transform: rotate(-3deg);
+  }
+  85% {
+    transform: rotate(1.5deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .logo[class*='egg-'] {
+    animation: none;
+  }
 }
 .ws-chip {
   display: inline-flex;

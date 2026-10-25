@@ -23,31 +23,44 @@ export interface AssetPayload {
  * 渲染完成后随结果原样归还（srcBack），避免重复解码。
  */
 export class RenderClient {
-  private worker: Worker
+  private worker: Worker | null = null
   private seq = 0
   private pending = new Map<number, Pending>()
+  /** worker 已崩溃：下一次请求前重建，否则每个任务都要空等看门狗超时 */
+  private dead = false
 
   constructor() {
-    this.worker = new Worker(new URL('../workers/render.worker.ts', import.meta.url), {
+    this.spawn()
+  }
+
+  private spawn(): void {
+    const worker = new Worker(new URL('../workers/render.worker.ts', import.meta.url), {
       type: 'module',
     })
-    this.worker.addEventListener(
+    worker.addEventListener(
       'message',
       (e: MessageEvent<{ id: number } & RenderReply>) => {
         const { id, err, ...rest } = e.data
         const p = this.pending.get(id)
-        if (p) {
-          this.pending.delete(id)
-          if (err !== undefined) p.reject(new Error(`渲染失败：${err}`))
-          else p.resolve(rest as RenderReply)
+        if (!p) return
+        this.pending.delete(id)
+        if (err !== undefined) {
+          // 失败任务仍会归还源位图：主线程侧不再使用它，必须释放，
+          // 否则每失败一次就泄漏一张全尺寸位图
+          ;(rest as { srcBack?: ImageBitmap }).srcBack?.close()
+          p.reject(new Error(`渲染失败：${err}`))
+        } else {
+          p.resolve(rest as RenderReply)
         }
       },
     )
-    this.worker.addEventListener('error', (err) => {
+    worker.addEventListener('error', (err) => {
+      this.dead = true
       const pending = [...this.pending.values()]
       this.pending.clear()
       for (const p of pending) p.reject(err)
     })
+    this.worker = worker
   }
 
   /** 无回应看门狗：worker 被系统回收 / 线程卡死时，任务永不回报会让渲染
@@ -56,6 +69,12 @@ export class RenderClient {
 
   private request(job: Omit<RenderJob, 'id'>, transfer: Transferable[]): Promise<RenderReply> {
     const id = ++this.seq
+    if (this.dead || !this.worker) {
+      // 旧 worker 已终止（其错误事件已拒绝过在途任务）：换一个新的再发
+      this.worker?.terminate()
+      this.dead = false
+      this.spawn()
+    }
     return new Promise((resolve, reject) => {
       let settled = false
       const watchdog = setTimeout(() => {
@@ -78,7 +97,7 @@ export class RenderClient {
           reject(e)
         },
       })
-      this.worker.postMessage({ job: { ...job, id } }, transfer)
+      this.worker?.postMessage({ job: { ...job, id } }, transfer)
     })
   }
 
@@ -132,7 +151,9 @@ export class RenderClient {
     const pending = [...this.pending.values()]
     this.pending.clear()
     for (const p of pending) p.reject(new Error('渲染器已关闭'))
-    this.worker.terminate()
+    this.worker?.terminate()
+    this.worker = null
+    this.dead = false
   }
 }
 
