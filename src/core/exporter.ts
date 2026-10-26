@@ -5,6 +5,7 @@ import type { Adjustments, Crop } from '@/types/adjust'
 import type { AssetPayload } from './renderer'
 import { RenderClient } from './renderer'
 import { resolveTokens } from './tokens'
+import { withExif } from './exifWrite'
 
 export interface ExportPayload {
   layers: WatermarkLayer[]
@@ -22,6 +23,8 @@ export interface ExportPayload {
   pattern: string
   /** 输出格式：JPG（有损，质量生效）或 PNG（无损） */
   format: 'jpg' | 'png'
+  /** JPG 导出时把源照片的 EXIF 修补后写回导出文件（PNG 不含此能力） */
+  keepExif: boolean
 }
 
 function pad(n: number, width: number): string {
@@ -87,7 +90,7 @@ export async function runExport(
             ? { ...l, content: resolveTokens(l.content, item.exif, item.baseName) }
             : l,
         )
-        const { bytes } = await client.renderImage(
+        const { bytes: rendered, width, height } = await client.renderImage(
           item.blob,
           payload.assets,
           layers,
@@ -97,6 +100,11 @@ export async function runExport(
           payload.crops[item.id],
           payload.format,
         )
+        // 画布编码不携带元数据：需要保留时从源文件取 EXIF 段，修补后拼回
+        const bytes =
+          payload.keepExif && payload.format === 'jpg'
+            ? await withExif(rendered, item.blob, width, height)
+            : rendered
         let name = buildFilename(payload.pattern, item, i, items.length, payload.format)
         let n = 2
         while (used.has(name)) name = name.replace(/\.(jpg|png)$/, `-${n++}$&`)

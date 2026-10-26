@@ -4,6 +4,7 @@ import { FolderOpen, Package } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
+import AppSwitch from '@/components/ui/AppSwitch.vue'
 import { TOKENS } from '@/core/tokens'
 import { isCapacitor, isTauri } from '@/core/platform'
 import { useExportStore } from '@/stores/export'
@@ -97,6 +98,13 @@ async function start(): Promise<void> {
         :format="(v) => `${v}%`"
         @reset="ex.quality = 90"
       />
+      <div v-if="ex.format === 'jpg'" class="switch-row">
+        <div class="text">
+          <span class="fl">保留 EXIF 元数据</span>
+          <p class="mode-hint">拍摄机型、参数、时间与 GPS 位置等信息将写入导出文件</p>
+        </div>
+        <AppSwitch v-model="ex.keepExif" />
+      </div>
       <div class="field">
         <span class="fl">图像长边像素</span>
         <div class="long-edge">
@@ -205,6 +213,16 @@ async function start(): Promise<void> {
 .fl {
   font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
+}
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+}
+.switch-row .text {
+  min-width: 0;
 }
 .mode-hint {
   margin: 0;

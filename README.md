@@ -4,7 +4,7 @@
 
 **轻量 · 本地优先的图像批量水印与快速辑录工具**
 
-v1.5.2（2026-10-25） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· Capacitor（安卓端）
+v1.6.0（2026-10-27） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· Capacitor（安卓端）
 
 </div>
 
@@ -150,6 +150,10 @@ v1.5.2（2026-10-25） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· 
   手指位置跟随），纵向滑动仍可滚屏；触屏下滑杆两端留边距、拇指与数值热区放大，
   曲线画布在底部抽屉布局下缩小居中，色带 / 折叠头 / 重置按钮的触控目标同步放大
 - 图像格式 **JPG**（质量可调）或 **PNG**（无损）；长边限制（原图 / 2560 / 1920 / 1280 px）
+- **保留 EXIF 元数据**（JPG）：把源照片的拍摄机型、参数、时间、GPS、版权等信息
+  写回导出文件——方向按导出结果归一为正立、宽高同步为实际输出尺寸、
+  加水印前的原图内嵌缩略图自动剥离；含 GPS 等隐私信息，开关默认开启、
+  可在导出面板一键关闭。PNG 不携带 EXIF，开关随之隐藏
 - 文件名模板：`{name}` 原名、`{index}` 序号、`{date}` 日期 + EXIF 令牌，自动去重
 - 导出方式：**ZIP 压缩包**（全平台）或**文件夹逐张写入**（桌面自选目录；
   安卓写入公共 Documents/Albumark/ 下按时间命名的文件夹），并行渲染 + 进度条
@@ -187,7 +191,7 @@ v1.5.2（2026-10-25） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· 
 
 ```
 src/
-├─ core/        # 引擎：exif（EXIF 解析）· jpeg（JPEG 头部尺寸探测）· tokens（令牌替换）
+├─ core/        # 引擎：exif（EXIF 解析）· exifWrite（导出回写 EXIF）· jpeg（JPEG 头部尺寸探测）· tokens（令牌替换）
 │               # adjust（像素管线）· layout（图层几何 / 锚点）· draw（水印绘制）
 │               # renderer（Worker 通道）· exporter（并行导出 + ZIP）· platform（Tauri/Web 能力适配）
 │               # fs（跨平台文件系统抽象：Tauri / Capacitor）· spring（弹簧动画）
@@ -256,9 +260,10 @@ npx cap open android   # 在 Android Studio 中构建运行
   **`修复已损坏提示.command`**，按提示完成即可；
 - **终端命令**：`xattr -cr /Applications/Albumark.app`
 
-## 已知限制（v1.5.2 · 2026-10-25）
+## 已知限制（v1.6.0 · 2026-10-27）
 
-- 仅支持 JPG 输入；导出为重编码 JPG / PNG，**不回写 EXIF**（如需保留元数据请期待后续版本）
+- 仅支持 JPG 输入；导出为重编码 JPG / PNG——JPG 可保留原 EXIF 元数据（不含 XMP），
+  PNG 不携带；Exif 段结构异常的源文件会宁缺毋滥地跳过回写
 - 安卓端无系统回收站，删除移入应用数据目录内的回收站文件夹；「链接源文件」入库方式仅在桌面端可用
 - 大体积 ZIP（数百张以上）在浏览器端会占用较多内存；桌面端后续改为流式写盘
 - 读取系统字体依赖 Chromium 内核的 Local Font Access（WebView2 等），
@@ -281,7 +286,7 @@ npx cap open android   # 在 Android Studio 中构建运行
   macOS 原生窗控 · 启动动画八款 / 随机 / 时长与预览（v1.5.0）**
 - [x] 自适应预览分辨率 · 拉直在选框缩放 / 换比例后不再重置（v1.5.1）
 - [x] 连点 Logo 随机彩蛋 · 退出项目不再丢清单 / 缩略图与 worker 资源清理（v1.5.2）
-- [ ] EXIF 回写（导出保留原元数据）
+- [x] **导出保留 EXIF 元数据**（方向 / 尺寸按导出结果校正，剥离原图内嵌缩略图）（v1.6.0）
 - [ ] RAW / HEIC 输入
 - [ ] 选区式局部应用
 - [ ] 安卓原生分享与相册写入

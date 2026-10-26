@@ -19,6 +19,8 @@ export const useExportStore = defineStore('export', () => {
   const pattern = ref('{name}')
   const format = ref<'jpg' | 'png'>('jpg')
   const mode = ref<'zip' | 'folder'>('zip')
+  /** JPG 导出保留源照片 EXIF（方向、尺寸已按导出结果校正；缩略图不带出） */
+  const keepExif = ref(true)
 
   const phase = ref<'idle' | 'running' | 'done'>('idle')
   const done = ref(0)
@@ -79,6 +81,7 @@ export const useExportStore = defineStore('export', () => {
           longEdge: longEdge.value,
           pattern: pattern.value,
           format: format.value,
+          keepExif: keepExif.value,
         },
         Math.max(1, (navigator.hardwareConcurrency || 4) - 1),
         (d, t, name) => {
@@ -136,6 +139,7 @@ export const useExportStore = defineStore('export', () => {
     pattern,
     format,
     mode,
+    keepExif,
     phase,
     done,
     total,
