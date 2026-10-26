@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
   appId: 'com.mws.albumark',
-  appName: '辑印',
+  appName: 'Albumark',
   webDir: 'dist',
   plugins: {
     // Capacitor 8 SystemBars：页面确定使用 viewport-fit=cover，

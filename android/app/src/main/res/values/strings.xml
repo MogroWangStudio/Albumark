@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">辑印</string>
-    <string name="title_activity_main">辑印</string>
+    <string name="app_name">Albumark</string>
+    <string name="title_activity_main">Albumark</string>
     <string name="package_name">com.mws.albumark</string>
     <string name="custom_url_scheme">com.mws.albumark</string>
 </resources>

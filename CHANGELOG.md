@@ -23,6 +23,9 @@
 
 ### 变更
 
+- **安卓端应用名改为 Albumark**：启动器图标名称与任务切换里的 Activity 标题
+  由「辑印」改为 **Albumark**（`strings.xml` 与 Capacitor 配置同步更新）；
+  包名与 URL Scheme（`com.mws.albumark`）保持不变
 - 版本号 **1.6.0**（2026-10-27；package.json / tauri.conf.json / Cargo.toml /
   Android versionName 1.6.0、versionCode 14）
 
