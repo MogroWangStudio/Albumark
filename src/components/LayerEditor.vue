@@ -17,6 +17,7 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
+import FontPickerDialog from '@/components/FontPickerDialog.vue'
 import { TOKENS, missingTokens } from '@/core/tokens'
 import { renderTemplateThumb } from '@/core/sample'
 import { toast } from '@/stores/toast'
@@ -49,7 +50,7 @@ const replaceTargetId = ref<string | null>(null)
 const showSave = ref(false)
 const saveName = ref('')
 const contentEl = ref<HTMLTextAreaElement | null>(null)
-const showCustomFont = ref(false)
+const fontPickerOpen = ref(false)
 
 const selectedText = computed(() =>
   wm.selected?.type === 'text' ? (wm.selected as TextLayer) : null,
@@ -324,26 +325,14 @@ function insertToken(key: string): void {
   }
 }
 
-/* 自定义字体：字体列表由 fonts store 提供（系统扫描或兜底清单），也支持手动键入名称 */
-const manualFontName = ref('')
-function openCustomFont(): void {
-  showCustomFont.value = true
-  void fonts.ensureFonts()
-}
-async function scanFonts(): Promise<void> {
-  await fonts.ensureFonts()
-  if (fonts.denied) toast('无法访问系统字体，可手动输入名称', 'error')
-  else if (!fonts.fonts.length) toast('没有扫描到系统字体，可手动输入名称')
-}
-function applyCustomFont(): void {
+/* 字体选择窗口：全量系统字体按语言分类浏览，也支持键入清单外的名称 */
+function onFontPicked(family: string): void {
   const t = selectedText.value
-  const name = manualFontName.value.trim()
-  if (!t || !name) return
-  wm.update(t.id, { fontFamily: `"${name}"` })
-  showCustomFont.value = false
-  manualFontName.value = ''
-  toast(`已使用字体「${name}」`, 'success')
+  if (t) wm.update(t.id, { fontFamily: `"${family}"` })
 }
+
+/** 窗口高亮当前字体：水印值带引号包裹，去掉后与清单比对 */
+const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"/g, '') ?? '')
 </script>
 
 <template>
@@ -432,35 +421,40 @@ function applyCustomFont(): void {
           </button>
         </div>
 
-        <label class="field">
+        <div class="field">
           <span>字体</span>
-          <select
-            class="select"
-            :value="isCustomFont ? '__current__' : selectedText!.fontFamily"
-            @focus="fonts.ensureFonts()"
-            @pointerdown="fonts.ensureFonts()"
-            @change="
-              ($event.target as HTMLSelectElement).value === '__custom__'
-                ? openCustomFont()
-                : wm.update(selectedText!.id, { fontFamily: ($event.target as HTMLSelectElement).value })
-            "
-          >
-            <option v-if="isCustomFont" value="__current__">
-              自定义：{{ selectedText!.fontFamily.replace(/"/g, '') }}
-            </option>
-            <option :value="DEFAULT_FONT">系统默认</option>
-            <optgroup
-              v-for="g in fonts.grouped()"
-              :key="g.category"
-              :label="FONT_CATEGORY_LABELS[g.category]"
+          <div class="font-row">
+            <select
+              class="select"
+              :value="isCustomFont ? '__current__' : selectedText!.fontFamily"
+              @focus="fonts.ensureFonts()"
+              @pointerdown="fonts.ensureFonts()"
+              @change="wm.update(selectedText!.id, { fontFamily: ($event.target as HTMLSelectElement).value })"
             >
-              <option v-for="f in g.items" :key="f.family" :value="`&quot;${f.family}&quot;`">
-                {{ f.family }}
+              <option v-if="isCustomFont" value="__current__">
+                自定义：{{ selectedText!.fontFamily.replace(/"/g, '') }}
               </option>
-            </optgroup>
-            <option value="__custom__">手动输入字体名…</option>
-          </select>
-        </label>
+              <option :value="DEFAULT_FONT">系统默认</option>
+              <optgroup
+                v-for="g in fonts.grouped()"
+                :key="g.category"
+                :label="FONT_CATEGORY_LABELS[g.category]"
+              >
+                <option v-for="f in g.items" :key="f.family" :value="`&quot;${f.family}&quot;`">
+                  {{ f.family }}
+                </option>
+              </optgroup>
+            </select>
+            <button
+              class="pick-btn"
+              title="浏览全部字体"
+              aria-label="浏览全部字体"
+              @click="fontPickerOpen = true"
+            >
+              <Type :size="15" />
+            </button>
+          </div>
+        </div>
         <AppSlider
           :model-value="selectedText!.fontWeight"
           :min="100"
@@ -472,23 +466,7 @@ function applyCustomFont(): void {
           @reset="wm.update(selectedText!.id, { fontWeight: 600 })"
         />
         <p v-if="fonts.loading" class="hint">正在读取系统字体…</p>
-        <p v-else-if="fonts.denied" class="hint">浏览器未授权读取系统字体，以下为常用字体清单，也可手动键入。</p>
-        <div v-if="showCustomFont" class="custom-font">
-          <input
-            v-model="manualFontName"
-            class="text-input"
-            list="local-font-list"
-            placeholder="输入系统已安装的字体名称"
-            spellcheck="false"
-            @keyup.enter="applyCustomFont"
-          />
-          <datalist id="local-font-list">
-            <option v-for="f in fonts.fonts" :key="f.family" :value="f.family" />
-          </datalist>
-          <AppButton size="sm" @click="scanFonts">重新扫描</AppButton>
-          <AppButton size="sm" variant="primary" @click="applyCustomFont">应用</AppButton>
-          <AppButton size="sm" variant="ghost" @click="showCustomFont = false">取消</AppButton>
-        </div>
+        <p v-else-if="fonts.denied" class="hint">浏览器未授权读取系统字体，以下为常用字体清单，也可在字体窗口中键入名称。</p>
         <div class="row-inline">
           <span class="fl">颜色</span>
           <input
@@ -872,6 +850,12 @@ function applyCustomFont(): void {
         </div>
       </div>
     </AppDialog>
+    <FontPickerDialog
+      :open="fontPickerOpen"
+      :current="currentFontName"
+      @close="fontPickerOpen = false"
+      @select="onFontPicked"
+    />
   </div>
 </template>
 
@@ -1017,10 +1001,35 @@ function applyCustomFont(): void {
   margin-top: 1px;
   color: var(--accent);
 }
-.custom-font {
+.font-row {
   display: flex;
   gap: 6px;
-  margin: 8px 0;
+}
+.font-row .select {
+  flex: 1;
+  min-width: 0;
+}
+.pick-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--text-2);
+  transition: color var(--dur-hover) var(--ease-soft), border-color var(--dur-hover) var(--ease-soft),
+    background var(--dur-hover) var(--ease-soft);
+}
+.pick-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.pick-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
 }
 .layers {
   list-style: none;

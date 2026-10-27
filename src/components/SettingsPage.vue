@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ArrowLeft, Check, Download, ExternalLink, HardDrive, LoaderCircle, Play, Shuffle } from 'lucide-vue-next'
+import { ArrowLeft, Check, Download, ExternalLink, HardDrive, LoaderCircle, Play, Shuffle, Type } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import BootScreen from '@/components/BootScreen.vue'
+import FontPickerDialog from '@/components/FontPickerDialog.vue'
 import LogoMark from '@/components/brand/LogoMark.vue'
 import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platform'
 import {
@@ -120,9 +121,14 @@ const minZoomModel = computed({
 })
 
 const hasCustomFont = computed(() => !!settings.fontFamily)
+const fontPickerOpen = ref(false)
 
 function onFontFocus(): void {
   void fonts.ensureFonts()
+}
+
+function onFontPicked(family: string): void {
+  settings.fontFamily = family
 }
 
 /* ---------- 检查更新与自动更新 ---------- */
@@ -249,24 +255,34 @@ async function relaunchOobe(): Promise<void> {
           <div class="text">
             <span class="label">显示字体</span>
           </div>
-          <select
-            class="select"
-            :value="settings.fontFamily"
-            @focus="onFontFocus"
-            @pointerdown="onFontFocus"
-            @change="settings.fontFamily = ($event.target as HTMLSelectElement).value"
-          >
-            <option value="">系统默认</option>
-            <optgroup
-              v-for="g in fonts.grouped()"
-              :key="g.category"
-              :label="FONT_CATEGORY_LABELS[g.category as FontCategory]"
+          <div class="font-row">
+            <select
+              class="select"
+              :value="settings.fontFamily"
+              @focus="onFontFocus"
+              @pointerdown="onFontFocus"
+              @change="settings.fontFamily = ($event.target as HTMLSelectElement).value"
             >
-              <option v-for="f in g.items" :key="f.family" :value="f.family">
-                {{ f.family }}
-              </option>
-            </optgroup>
-          </select>
+              <option value="">系统默认</option>
+              <optgroup
+                v-for="g in fonts.grouped()"
+                :key="g.category"
+                :label="FONT_CATEGORY_LABELS[g.category as FontCategory]"
+              >
+                <option v-for="f in g.items" :key="f.family" :value="f.family">
+                  {{ f.family }}
+                </option>
+              </optgroup>
+            </select>
+            <button
+              class="pick-btn"
+              title="浏览全部字体"
+              aria-label="浏览全部字体"
+              @click="fontPickerOpen = true"
+            >
+              <Type :size="15" />
+            </button>
+          </div>
           <p v-if="fonts.loading" class="note">正在读取系统字体…</p>
           <p v-else-if="fonts.denied && hasCustomFont" class="note">
             浏览器未授权读取系统字体，列表为常用字体清单。
@@ -463,6 +479,12 @@ async function relaunchOobe(): Promise<void> {
       :duration="settings.bootDuration"
       preview
     />
+    <FontPickerDialog
+      :open="fontPickerOpen"
+      :current="settings.fontFamily"
+      @close="fontPickerOpen = false"
+      @select="onFontPicked"
+    />
   </div>
 </template>
 
@@ -561,6 +583,37 @@ async function relaunchOobe(): Promise<void> {
   align-items: center;
   gap: 8px;
   flex: none;
+}
+.font-row {
+  display: flex;
+  gap: 6px;
+}
+.font-row .select {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+.pick-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--control-h);
+  height: var(--control-h);
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  color: var(--text-2);
+  transition: color var(--dur-hover) var(--ease-soft), border-color var(--dur-hover) var(--ease-soft),
+    background var(--dur-hover) var(--ease-soft);
+}
+.pick-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.pick-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
 }
 .select {
   width: 100%;
