@@ -5,6 +5,7 @@ import LayerEditor from '@/components/LayerEditor.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { type AssetMap } from '@/core/draw'
+import { backgroundAspect, layoutBackgroundFrame } from '@/core/bg'
 import { loadSampleBitmap, paintComposed, SAMPLE_VARIANTS, type SampleOrientation } from '@/core/sample'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { resolveTokens, SAMPLE_EXIF } from '@/core/tokens'
@@ -12,7 +13,7 @@ import { toast } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
-import type { WatermarkLayer } from '@/types/watermark'
+import type { BackgroundLayer, WatermarkLayer } from '@/types/watermark'
 
 const emit = defineEmits<{ back: [] }>()
 
@@ -132,6 +133,12 @@ async function setOrientation(vertical: boolean): Promise<void> {
 
 /** 最近一次绘制到画布的映射（设备像素），命中测试与拖拽换算用 */
 const vmap = { scale: 1, ox: 0, oy: 0, dpr: 1 }
+/** 水印坐标系尺寸：背景水印时为整幅画布（与导出一致），其余为照片区域 */
+const wmSpace = { w: 1920, h: 1080 }
+
+function hasVisibleBackground(): boolean {
+  return wm.editTarget().some((l) => l.type === 'background' && l.visible)
+}
 
 let mctx: CanvasRenderingContext2D | null = null
 function measureContext(): CanvasRenderingContext2D {
@@ -148,13 +155,26 @@ function resolvedLayers(): WatermarkLayer[] {
   )
 }
 
-/** 含边框扩展的最终画布尺寸（照片区域仍是样张尺寸，随横 / 竖屏切换） */
+/** 含边框 / 背景外扩的最终画布尺寸（照片区域仍是样张尺寸，随横 / 竖屏切换） */
 const frameSize = computed(() => {
+  const layers = wm.editTarget()
+  // 背景水印决定画布：按其布局参数扩展（与导出同一 layoutBackgroundFrame）
+  const bg = layers.find((l): l is BackgroundLayer => l.type === 'background' && l.visible)
+  if (bg) {
+    const layout = layoutBackgroundFrame(
+      bg,
+      sampleW.value,
+      sampleH.value,
+      backgroundAspect(bg, sampleW.value, sampleH.value),
+      1,
+    )
+    return { w: layout.frameW, h: layout.frameH }
+  }
   let l = 0
   let r = 0
   let t = 0
   let b = 0
-  for (const layer of wm.editTarget()) {
+  for (const layer of layers) {
     if (layer.type === 'border' && layer.visible) {
       l += layer.left
       r += layer.right
@@ -197,21 +217,24 @@ function redraw(): void {
     assetBmps,
   )
   const { photoX, photoY } = composed
+  const bgMode = hasVisibleBackground()
+  wmSpace.w = bgMode ? composed.frameW : sampleW.value
+  wmSpace.h = bgMode ? composed.frameH : sampleH.value
 
-  // 选中图层：描边框 + 锚点十字，画在照片区域坐标系（边框层全画布，不画锚点）
+  // 选中图层：描边框 + 锚点十字，画在水印坐标系（背景模式 = 画布，其余 = 照片区域）
   // 强调色随主题取自令牌
   const sel = wm.selected
-  if (sel && sel.type !== 'border') {
+  if (sel && sel.type !== 'border' && sel.type !== 'background') {
     const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#ffa72f'
     ctx.save()
-    ctx.translate(photoX, photoY)
-    const box = measureLayer(sel, sampleW.value, sampleH.value, measureContext())
+    if (!bgMode) ctx.translate(photoX, photoY)
+    const box = measureLayer(sel, wmSpace.w, wmSpace.h, measureContext())
     ctx.strokeStyle = accent
     ctx.globalAlpha = 0.95
     ctx.lineWidth = 1.5 / fit
     ctx.setLineDash([5 / fit, 4 / fit])
     ctx.strokeRect(box.cx - box.w / 2, box.cy - box.h / 2, box.w, box.h)
-    const a = anchorPoint(sel.anchor, sampleW.value, sampleH.value)
+    const a = anchorPoint(sel.anchor, wmSpace.w, wmSpace.h)
     ctx.setLineDash([])
     ctx.globalAlpha = 0.75
     ctx.lineWidth = 1 / fit
@@ -226,9 +249,9 @@ function redraw(): void {
     ctx.restore()
   }
   vmap.scale = fit
-  // 指针换算基于照片区域原点（水印定位坐标系）
-  vmap.ox = ox + photoX * fit
-  vmap.oy = oy + photoY * fit
+  // 指针换算基于水印坐标系原点（背景模式 = 画布原点，其余 = 照片区域原点）
+  vmap.ox = ox + (bgMode ? 0 : photoX * fit)
+  vmap.oy = oy + (bgMode ? 0 : photoY * fit)
   vmap.dpr = dpr
 }
 
@@ -245,9 +268,12 @@ function scheduleRedraw(): void {
 
 async function syncAssets(): Promise<void> {
   const list = wm.editTarget()
-  const needed = new Set(
-    list.filter((l) => l.type === 'image').map((l) => (l as { assetId: string }).assetId),
-  )
+  const needed = new Set<string>()
+  for (const l of list) {
+    if (l.type === 'image') needed.add((l as { assetId: string }).assetId)
+    else if (l.type === 'background' && l.visible && l.source === 'custom' && l.assetId)
+      needed.add(l.assetId)
+  }
   for (const key of [...assetBmps.keys()]) {
     if (!needed.has(key)) {
       assetBmps.get(key)?.close()
@@ -427,11 +453,12 @@ function onPointerDown(e: PointerEvent): void {
   const list = wm.editTarget()
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
-    if (l.type === 'border' || !l.visible) continue
-    const box = measureLayer(l, sampleW.value, sampleH.value, measureContext())
+    // 边框 / 背景层覆盖全画布、无独立位置，只能从图层列表选中
+    if (l.type === 'border' || l.type === 'background' || !l.visible) continue
+    const box = measureLayer(l, wmSpace.w, wmSpace.h, measureContext())
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
-      const c = layerPivot(l, sampleW.value, sampleH.value)
+      const c = layerPivot(l, wmSpace.w, wmSpace.h)
       gesture = {
         type: 'layer',
         id: l.id,
@@ -481,15 +508,15 @@ function onPointerMove(e: PointerEvent): void {
   if (gesture.type === 'layer') {
     const gid = gesture.id
     const layer = wm.editTarget().find((l) => l.id === gid)
-    if (!layer || layer.type === 'border') return
+    if (!layer || layer.type === 'border' || layer.type === 'background') return
     const dpx = ((e.clientX - gesture.startClient.x) * vmap.dpr) / vmap.scale
     const dpy = ((e.clientY - gesture.startClient.y) * vmap.dpr) / vmap.scale
     let cx = gesture.startCx + dpx
     let cy = gesture.startCy + dpy
-    // 吸附样张中线与安全边距（尺寸随横 / 竖屏变化）
+    // 吸附样张中线与安全边距（背景模式下以整幅画布为基准）
     if (settings.wmSnap) {
-      const sw = sampleW.value
-      const sh = sampleH.value
+      const sw = wmSpace.w
+      const sh = wmSpace.h
       const t = 8 / (vmap.scale / vmap.dpr)
       for (const x of [sw / 2, sw * 0.04, sw * 0.96]) {
         if (Math.abs(cx - x) < t) cx = x
@@ -498,7 +525,7 @@ function onPointerMove(e: PointerEvent): void {
         if (Math.abs(cy - y) < t) cy = y
       }
     }
-    const a = anchorPoint(layer.anchor, sampleW.value, sampleH.value)
+    const a = anchorPoint(layer.anchor, wmSpace.w, wmSpace.h)
     wm.update(layer.id, {
       offsetX: Math.round(cx - a.x),
       offsetY: Math.round(cy - a.y),

@@ -16,7 +16,7 @@ import { exifSummaryLine } from '@/core/exif'
 import { composeThumb } from '@/core/compose'
 import { isTauri, pickImagePaths } from '@/core/platform'
 import { croppedSize, isPlainFullCrop } from '@/types/adjust'
-import type { BorderLayer } from '@/types/watermark'
+import type { BackgroundLayer, BorderLayer } from '@/types/watermark'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useWatermarkStore } from '@/stores/watermark'
@@ -31,7 +31,7 @@ const wm = useWatermarkStore()
 
 const emit = defineEmits<{ photoCtx: [e: MouseEvent, id: string] }>()
 
-/* 几何签名：裁剪 / 翻转 / 拉直 / 边框变化后防抖重建缩略图，让图库与输出构图一致 */
+/* 几何签名：裁剪 / 翻转 / 拉直 / 边框 / 背景水印变化后防抖重建缩略图，让图库与输出构图一致 */
 const geoSig = computed(() =>
   JSON.stringify(
     images.items.map((i) => ({
@@ -40,6 +40,11 @@ const geoSig = computed(() =>
         .effectiveLayers(i.id)
         .filter((l) => l.type === 'border' && l.visible)
         .map((l) => toRaw(l)),
+      bg: wm
+        .effectiveLayers(i.id)
+        .filter((l) => l.type === 'background' && l.visible)
+        .map((l) => toRaw(l)),
+      ov: wm.bgOverrideFor(i.id)?.assetId ?? null,
     })),
   ),
 )
@@ -55,12 +60,28 @@ watch(geoSig, () => {
     for (const item of images.items) {
       if (!item.blob) continue
       const crop = adjust.cropOf(item.id)
-      const borders = wm
-        .effectiveLayers(item.id)
+      const layers = wm.effectiveLayers(item.id)
+      const borders = layers
         .filter((l): l is BorderLayer => l.type === 'border' && l.visible)
         .map((l) => toRaw(l))
-      if (!crop && !borders.length) {
-        // 曾经按裁剪 / 边框合成过的缩略图必须换回原图，
+      // 背景水印（含「仅当前照片」覆盖）：素材 blob 惰性还原
+      let background: BackgroundLayer | null = null
+      let bgAsset: Blob | null = null
+      const bgLayer = layers.find((l): l is BackgroundLayer => l.type === 'background' && l.visible)
+      if (bgLayer) {
+        background = structuredClone(toRaw(bgLayer))
+        const ov = wm.bgOverrideFor(item.id)
+        if (ov) {
+          background.source = 'custom'
+          background.assetId = ov.assetId
+        }
+        if (background.source === 'custom' && background.assetId) {
+          const payloads = await wm.assetPayloads([background])
+          bgAsset = payloads.find((p) => p.id === background!.assetId)?.blob ?? null
+        }
+      }
+      if (!crop && !borders.length && !background) {
+        // 曾经按裁剪 / 边框 / 背景合成过的缩略图必须换回原图，
         // 否则取消裁剪后照片条仍显示裁剪后的画面
         if (!geoThumbs.has(item.id)) continue
         const blob = await composeThumb(item.blob, undefined, [])
@@ -70,7 +91,7 @@ watch(geoSig, () => {
         }
         continue
       }
-      const blob = await composeThumb(item.blob, crop, borders)
+      const blob = await composeThumb(item.blob, crop, borders, background, bgAsset)
       if (blob) {
         images.setThumb(item.id, blob)
         geoThumbs.add(item.id)

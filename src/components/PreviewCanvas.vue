@@ -1,10 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch } from 'vue'
 import { ChevronUp, Pipette } from 'lucide-vue-next'
-import type { WatermarkLayer } from '@/types/watermark'
+import type { BackgroundLayer, WatermarkLayer } from '@/types/watermark'
 import { clamp01, CROP_MIN, cropInnerBounds, cropRatioOf, cropRot, cropSourceSize, FULL_CROP, type Crop } from '@/types/adjust'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { drawLayers, type AssetMap } from '@/core/draw'
+import {
+  backgroundAspect,
+  blurRadiusPx,
+  layoutBackgroundFrame,
+  paintPhotoOnBackground,
+  renderBlurredCover,
+  type BgFrameLayout,
+} from '@/core/bg'
 import { renderClient } from '@/core/renderer'
 import { resolveTokens } from '@/core/tokens'
 import { useAdjustStore } from '@/stores/adjust'
@@ -136,6 +144,16 @@ let srcId: string | null = null
 let resultBmp: ImageBitmap | null = null
 /** resultBmp/resultMap 所属的照片：与 active 不一致时交互手势必须停用 */
 let resultId: string | null = null
+/** 照片（不含边框环带）在 resultBmp 中的几何：背景水印的主线程组合用 */
+const resultPhoto = reactive({
+  offset: { x: 0, y: 0 },
+  size: { w: 0, h: 0 },
+  renderScale: 1,
+})
+/** 背景水印组合布局：照片矩形在画布（resultMap 坐标系）中的位置，拖动照片手势用 */
+let bgLayout: BgFrameLayout | null = null
+/** 背景模糊位图缓存：key = 源标识|模糊量|尺寸，拖模糊滑杆时按 LRU 淘汰 */
+const bgBlurCache = new Map<string, OffscreenCanvas>()
 let baseSeq = 0
 let finalTimer: number | null = null
 let settleTimer: number | null = null
@@ -298,6 +316,63 @@ function resolvedLayers(): WatermarkLayer[] {
   )
 }
 
+/* ---------- 背景水印：主线程组合（背景与照片效果不进 Worker，拖动零往返） ---------- */
+
+/** 当前照片生效的可见背景层（含「仅当前照片」覆盖应用）。列表靠前者在上。 */
+function backgroundLayers(): BackgroundLayer[] {
+  const a = active.value
+  const list = resolvedLayers().filter(
+    (l): l is BackgroundLayer => l.type === 'background' && l.visible,
+  )
+  const ov = wm.bgOverrideFor(a?.id ?? null)
+  if (!ov) return list
+  // 覆盖作用于第一层（布局层）：这张照片的背景图改用覆盖素材
+  return list.map((l, i) =>
+    i === 0
+      ? { ...l, source: 'custom' as const, assetId: ov.assetId, aspect: ov.aspect ?? l.aspect }
+      : l,
+  )
+}
+
+/** 背景位图来源：custom 取素材缓存；self 取当前照片（resultBmp 的照片部分）。 */
+function backgroundSource(l: BackgroundLayer): {
+  bmp: ImageBitmap
+  rect?: { x: number; y: number; w: number; h: number }
+} | null {
+  if (l.source === 'custom' && l.assetId) {
+    const bmp = assetBmps.get(l.assetId)
+    return bmp ? { bmp } : null
+  }
+  if (!resultBmp || !resultPhoto.size.w || !resultPhoto.size.h) return null
+  return {
+    bmp: resultBmp,
+    rect: {
+      x: resultPhoto.offset.x,
+      y: resultPhoto.offset.y,
+      w: resultPhoto.size.w,
+      h: resultPhoto.size.h,
+    },
+  }
+}
+
+/** 带缓存的模糊背景：key = 源标识 | 模糊量 | 尺寸，拖滑杆时 LRU 淘汰。 */
+function blurredCover(l: BackgroundLayer, fw: number, fh: number): OffscreenCanvas | null {
+  const src = backgroundSource(l)
+  if (!src) return null
+  const blur = blurRadiusPx(l, fw, fh)
+  const ident = l.source === 'custom' ? `a:${l.assetId}` : `p:${resultId ?? ''}`
+  const key = `${ident}|${blur.toFixed(1)}|${fw}x${fh}`
+  const hit = bgBlurCache.get(key)
+  if (hit) return hit
+  const out = renderBlurredCover(src.bmp, fw, fh, blur, src.rect)
+  if (bgBlurCache.size >= 4) {
+    const oldest = bgBlurCache.keys().next().value as string | undefined
+    if (oldest) bgBlurCache.delete(oldest)
+  }
+  bgBlurCache.set(key, out)
+  return out
+}
+
 /* ---------- 分层渲染：Worker 只负责底图（解码+调节），水印叠加层在主线程 ---------- */
 
 let draftInFlight = false
@@ -356,7 +431,15 @@ function scheduleOverlay(): void {
 
 function hasMissingAssets(): boolean {
   const list = resolvedLayers()
-  return list.some((l) => l.type === 'image' && !assetBmps.has((l as { assetId: string }).assetId))
+  if (list.some((l) => l.type === 'image' && !assetBmps.has((l as { assetId: string }).assetId)))
+    return true
+  for (const l of list) {
+    if (l.type === 'background' && l.visible && l.source === 'custom' && l.assetId) {
+      if (!assetBmps.has(l.assetId)) return true
+    }
+  }
+  const ov = wm.bgOverrideFor(active.value?.id ?? null)
+  return !!ov && !assetBmps.has(ov.assetId)
 }
 
 /**
@@ -405,6 +488,10 @@ function clearResult(): void {
   resultBmp?.close()
   resultBmp = null
   resultId = null
+  resultPhoto.offset = { x: 0, y: 0 }
+  resultPhoto.size = { w: 0, h: 0 }
+  resultPhoto.renderScale = 1
+  bgLayout = null
   resultMap.w = 0
   resultMap.h = 0
   resultMap.scale = 1
@@ -447,16 +534,18 @@ async function renderBase(draft: boolean): Promise<void> {
       ? { x: 0, y: 0, w: 1, h: 1, rot: d?.rot, flipH: d?.flipH, flipV: d?.flipV }
       : adjust.cropOf(a.id)
     const crop = sel ? { ...sel } : undefined
-    // 边框层由 Worker 扩展画布（拍平为纯数据）；裁剪编辑时不加框，保持裁剪框坐标系
-    const borders = adjust.cropMode
+    // 边框与背景层由 Worker 处理（拍平为纯数据）：边框有背景时画环带、
+    // 无背景时扩展画布；背景位图本身预览阶段由主线程组合。裁剪编辑时
+    // 两者都不加，保持裁剪框坐标系
+    const baseLayers = adjust.cropMode
       ? []
       : resolvedLayers()
-          .filter((l) => l.type === 'border')
+          .filter((l) => l.type === 'border' || l.type === 'background')
           .map((l) => structuredClone(toRaw(l)))
     const res = await renderClient.renderPreview(
       bmp,
       [],
-      borders,
+      baseLayers,
       adjust.snapshotFor(a.id),
       maxLong,
       crop,
@@ -473,6 +562,9 @@ async function renderBase(draft: boolean): Promise<void> {
     if (resultBmp) resultBmp.close()
     resultBmp = res.bitmap
     resultId = a.id
+    resultPhoto.offset = { ...res.photoOffset }
+    resultPhoto.size = { ...res.photoSize }
+    resultPhoto.renderScale = res.renderScale
     drawBase()
     drawOverlay()
   } catch (err) {
@@ -557,15 +649,21 @@ function drawRotatedDraft(): void {
   resultMap.scale = scale
   resultMap.ox = ox
   resultMap.oy = oy
+  bgLayout = null
   drawOverlay()
 }
 
 /** 保持素材位图缓存与图层引用一致（异步加载缺失项后重绘叠加层）。 */
-async function syncAssets(): Promise<void> {  const needed = new Set(
-    resolvedLayers()
-      .filter((l) => l.type === 'image')
-      .map((l) => (l as { assetId: string }).assetId),
-  )
+async function syncAssets(): Promise<void> {
+  const needed = new Set<string>()
+  for (const l of resolvedLayers()) {
+    if (l.type === 'image') needed.add((l as { assetId: string }).assetId)
+    else if (l.type === 'background' && l.visible && l.source === 'custom' && l.assetId)
+      needed.add(l.assetId)
+  }
+  // 「仅当前照片」的背景覆盖图同样参与预览组合
+  const ov = wm.bgOverrideFor(active.value?.id ?? null)
+  if (ov) needed.add(ov.assetId)
   let dirty = false
   for (const key of [...assetBmps.keys()]) {
     if (!needed.has(key)) {
@@ -576,7 +674,8 @@ async function syncAssets(): Promise<void> {  const needed = new Set(
   }
   const missing = [...needed].filter((id) => !assetBmps.has(id))
   if (missing.length) {
-    const payloads = await wm.assetPayloads(wm.layers)
+    // 以当前照片实际生效的图层为准收集（独立水印副本可能引用别的素材）
+    const payloads = await wm.assetPayloads(resolvedLayers())
     for (const p of payloads) {
       if (!assetBmps.has(p.id)) {
         try {
@@ -588,10 +687,14 @@ async function syncAssets(): Promise<void> {  const needed = new Set(
     }
     dirty = true
   }
-  if (dirty) drawOverlay()
+  if (dirty) {
+    drawBase()
+    drawOverlay()
+  }
 }
 
-/** 把缓存的结果位图绘制到底图画布，并更新映射。 */
+/** 把缓存的结果位图绘制到底图画布，并更新映射。有背景水印时主线程组合
+ *  背景与照片（Worker 只输出照片 + 边框环带），拖动 / 滑杆即时跟手。 */
 function drawBase(): void {
   const canvas = cvBase.value
   const bmp = resultBmp
@@ -603,30 +706,68 @@ function drawBase(): void {
   if (canvas.height !== ch) canvas.height = ch
   const ctx = canvas.getContext('2d')
   if (!ctx) return
+  // 背景水印布局：画布尺寸与照片矩形由第一个可见背景层决定（与导出一致）
+  const bgList = adjust.cropMode ? [] : backgroundLayers()
+  const layout =
+    bgList.length > 0 && resultPhoto.size.w > 0 && resultPhoto.size.h > 0
+      ? layoutBackgroundFrame(
+          bgList[0],
+          resultPhoto.size.w,
+          resultPhoto.size.h,
+          backgroundAspect(bgList[0], resultPhoto.size.w, resultPhoto.size.h),
+          resultPhoto.renderScale,
+        )
+      : null
+  const W = layout ? layout.frameW : bmp.width
+  const H = layout ? layout.frameH : bmp.height
   // 适应与居中都基于可用区域：面板占住一侧时，中心偏移到剩余空白
-  const fit = Math.min((avail.w * dpr) / bmp.width, (avail.h * dpr) / bmp.height)
+  const fit = Math.min((avail.w * dpr) / W, (avail.h * dpr) / H)
   const scale = fit * zoom.value
-  const ox = avail.x * dpr + (avail.w * dpr - bmp.width * scale) / 2 + pan.x * dpr
-  const oy = avail.y * dpr + (avail.h * dpr - bmp.height * scale) / 2 + pan.y * dpr
+  const ox = avail.x * dpr + (avail.w * dpr - W * scale) / 2 + pan.x * dpr
+  const oy = avail.y * dpr + (avail.h * dpr - H * scale) / 2 + pan.y * dpr
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, cw, ch)
   ctx.imageSmoothingQuality = 'high'
   ctx.translate(ox, oy)
   ctx.scale(scale, scale)
-  // 投影让照片贴在底色上仍有层次（明暗随主题 mode）
+
   const light = document.documentElement.dataset.mode === 'light'
-  ctx.save()
-  ctx.shadowColor = light ? 'rgba(0, 0, 0, 0.2)' : 'rgba(0, 0, 0, 0.55)'
-  ctx.shadowBlur = 22 / scale
-  ctx.shadowOffsetY = 5 / scale
-  ctx.drawImage(bmp, 0, 0)
-  ctx.restore()
+  if (layout) {
+    bgLayout = layout
+    // 背景（列表靠前者更贴近照片 → 从末尾往前铺），模糊位图走缓存
+    for (let i = bgList.length - 1; i >= 0; i--) {
+      const blurred = blurredCover(bgList[i], layout.frameW, layout.frameH)
+      if (blurred) ctx.drawImage(blurred, 0, 0, layout.frameW, layout.frameH)
+    }
+    const borders = resolvedLayers().filter(
+      (l): l is import('@/types/watermark').BorderLayer => l.type === 'border' && l.visible,
+    )
+    paintPhotoOnBackground(
+      ctx,
+      bmp,
+      resultPhoto.size.w,
+      resultPhoto.size.h,
+      layout,
+      bgList[0],
+      borders,
+      resultPhoto.renderScale,
+    )
+  } else {
+    bgLayout = null
+    // 投影让照片贴在底色上仍有层次（明暗随主题 mode）
+    ctx.save()
+    ctx.shadowColor = light ? 'rgba(0, 0, 0, 0.2)' : 'rgba(0, 0, 0, 0.55)'
+    ctx.shadowBlur = 22 / scale
+    ctx.shadowOffsetY = 5 / scale
+    ctx.drawImage(bmp, 0, 0)
+    ctx.restore()
+  }
   // 1px 细描边：极浅照片在纯白底上也能看清边界
   ctx.strokeStyle = light ? 'rgba(0, 0, 0, 0.14)' : 'rgba(255, 255, 255, 0.1)'
   ctx.lineWidth = 1 / scale
-  ctx.strokeRect(0, 0, bmp.width, bmp.height)
-  resultMap.w = bmp.width
-  resultMap.h = bmp.height
+  ctx.strokeRect(0, 0, W, H)
+  resultMap.w = W
+  resultMap.h = H
   resultMap.scale = scale
   resultMap.ox = ox
   resultMap.oy = oy
@@ -702,9 +843,9 @@ function drawOverlay(): void {
     ctx.restore()
   }
 
-  // 选中图层的锚点十字（边框层覆盖全画布、无定位锚点）
+  // 选中图层的锚点十字（边框 / 背景层覆盖全画布、无定位锚点）
   const sel = wm.selected
-  if (sel && sel.type !== 'border') {
+  if (sel && sel.type !== 'border' && sel.type !== 'background') {
     const a = anchorPoint(sel.anchor, resultMap.w, resultMap.h)
     ctx.save()
     ctx.strokeStyle = accentCss()
@@ -970,6 +1111,7 @@ const pointers = new Map<number, PointerState>()
 type Gesture =
   | { type: 'idle' }
   | { type: 'layer'; id: string; startClient: { x: number; y: number }; startCx: number; startCy: number }
+  | { type: 'photo'; id: string; startClient: { x: number; y: number }; startX: number; startY: number }
   | { type: 'pan'; startPan: { x: number; y: number }; startClient: { x: number; y: number } }
   | {
       type: 'pinch'
@@ -1017,7 +1159,7 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
   const xs: number[] = [imgW / 2, imgW * 0.04, imgW * 0.96]
   const ys: number[] = [imgH / 2, imgH * 0.04, imgH * 0.96]
   for (const l of resolvedLayers()) {
-    if (l.id === excludeId || !l.visible || l.type === 'border') continue
+    if (l.id === excludeId || !l.visible || l.type === 'border' || l.type === 'background') continue
     const c = layerPivot(l, imgW, imgH)
     xs.push(c.x)
     ys.push(c.y)
@@ -1301,7 +1443,7 @@ function onPointerDown(e: PointerEvent): void {
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     // 边框层覆盖全画布、无独立位置，只能从图层列表选中
-    if (l.type === 'border' || !l.visible) continue
+    if (l.type === 'border' || l.type === 'background' || !l.visible) continue
     const box = measureLayer(resolvedLayer(l), resultMap.w, resultMap.h, measureContext())
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
@@ -1314,6 +1456,24 @@ function onPointerDown(e: PointerEvent): void {
         startCy: c.y,
       }
       return
+    }
+  }
+  // 背景水印存在时，点按照片区域 = 拖动照片在背景上的位置（背景空白仍平移视图）
+  if (bgLayout) {
+    const r = bgLayout
+    if (p.x >= r.photoX && p.x <= r.photoX + r.photoW && p.y >= r.photoY && p.y <= r.photoY + r.photoH) {
+      const bg = backgroundLayers()[0]
+      if (bg) {
+        wm.selectedId = bg.id
+        gesture = {
+          type: 'photo',
+          id: bg.id,
+          startClient: { x: e.clientX, y: e.clientY },
+          startX: bg.offsetX,
+          startY: bg.offsetY,
+        }
+        return
+      }
     }
   }
   wm.selectedId = null
@@ -1394,13 +1554,52 @@ function onPointerMove(e: PointerEvent): void {
     const cx = Math.min(imgW, Math.max(0, snapped.cx))
     const cy = Math.min(imgH, Math.max(0, snapped.cy))
     const layer = wm.editTarget().find((l) => l.id === gid)
-    if (!layer || layer.type === 'border') return
+    if (!layer || layer.type === 'border' || layer.type === 'background') return
     const a = anchorPoint(layer.anchor, imgW, imgH)
     snapLines.value = snapped.lines.x !== undefined || snapped.lines.y !== undefined ? snapped.lines : null
     wm.update(gid, {
       offsetX: Math.round(cx - a.x),
       offsetY: Math.round(cy - a.y),
     })
+    return
+  }
+
+  if (gesture.type === 'photo') {
+    // 拖动照片在背景上的位置：主线程即时组合，Worker 不参与
+    if (!resultMap.w || !bgLayout) return
+    const dpr = view.dpr || 1
+    const cssPerImg = resultMap.scale / dpr
+    let nx = gesture.startX + (e.clientX - gesture.startClient.x) / cssPerImg
+    let ny = gesture.startY + (e.clientY - gesture.startClient.y) / cssPerImg
+    // 吸附：照片中心贴画布中线与安全线（与水印拖动同一容差与参考线）
+    if (settings.wmSnap) {
+      const thr = 8 / cssPerImg
+      const cx = bgLayout.photoX + bgLayout.photoW / 2 + (nx - gesture.startX)
+      const cy = bgLayout.photoY + bgLayout.photoH / 2 + (ny - gesture.startY)
+      const lines: { x?: number; y?: number } = {}
+      let best = thr
+      for (const x of [bgLayout.frameW / 2, bgLayout.frameW * 0.04, bgLayout.frameW * 0.96]) {
+        const d = Math.abs(cx - x)
+        if (d < best) {
+          best = d
+          nx += x - cx
+          lines.x = x
+        }
+      }
+      best = thr
+      for (const y of [bgLayout.frameH / 2, bgLayout.frameH * 0.04, bgLayout.frameH * 0.96]) {
+        const d = Math.abs(cy - y)
+        if (d < best) {
+          best = d
+          ny += y - cy
+          lines.y = y
+        }
+      }
+      snapLines.value = lines.x !== undefined || lines.y !== undefined ? lines : null
+    }
+    wm.update(gesture.id, { offsetX: Math.round(nx), offsetY: Math.round(ny) })
+    drawBase()
+    drawOverlay()
     return
   }
 
@@ -1450,7 +1649,7 @@ function onPointerUp(e: PointerEvent): void {
   }
 
   if (pointers.size > 0) {
-    if (g.type === 'layer' || g.type === 'pan') {
+    if (g.type === 'layer' || g.type === 'photo' || g.type === 'pan') {
       gesture = { type: 'idle' }
       snapLines.value = null
       scheduleOverlay()
@@ -1542,13 +1741,17 @@ function resetView(): void {
 /* ---------- 渲染调度 ---------- */
 
 // 底图相关变化才走 Worker；水印图层变化只重绘叠加层。
-// 例外：边框层参与画布几何（向外扩展），它的增删改必须走完整渲染
-let lastBorderSig = ""
-function borderSignature(): string {
+// 边框参数与背景层的存在性决定 Worker 输出（扩展画布 vs 环带）；背景层
+// 其余参数只作用于主线程组合，拖动 / 滑杆不需要进 Worker
+let lastBaseSig = ""
+function baseSignature(): string {
   const list = wm.effectiveLayers(active.value?.id ?? null)
-  return JSON.stringify(
+  return JSON.stringify([
     list.filter((l) => l.type === "border").map((l) => toRaw(l)),
-  )
+    list
+      .filter((l) => l.type === "background")
+      .map((l) => ({ id: l.id, visible: l.visible })),
+  ])
 }
 watch(
   [
@@ -1564,11 +1767,11 @@ watch(
   { deep: true },
 )
 watch(
-  [() => wm.layers, () => wm.perImage, () => wm.selectedId],
+  [() => wm.layers, () => wm.perImage, () => wm.bgOverrides, () => wm.selectedId],
   () => {
-    const sig = borderSignature()
-    if (sig !== lastBorderSig) {
-      lastBorderSig = sig
+    const sig = baseSignature()
+    if (sig !== lastBaseSig) {
+      lastBaseSig = sig
       scheduleBase()
     } else {
       scheduleOverlay()

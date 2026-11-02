@@ -71,6 +71,7 @@ const imgH = computed(() => {
       :img-h="imgH"
       :exif="images.active?.exif"
       :base-name="images.active?.baseName"
+      :active-id="activeId"
     />
   </div>
 </template>

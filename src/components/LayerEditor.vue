@@ -8,9 +8,11 @@ import {
   Frame,
   Image as ImageIcon,
   Replace,
+  RotateCcw,
   TriangleAlert,
   Trash2,
   Type,
+  Wallpaper,
 } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
@@ -24,7 +26,14 @@ import { toast } from '@/stores/toast'
 import { useFontsStore, FONT_CATEGORY_LABELS } from '@/stores/fonts'
 import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
-import type { AnchorPreset, BorderLayer, ImageLayer, TextLayer, WatermarkLayer } from '@/types/watermark'
+import type {
+  AnchorPreset,
+  BackgroundLayer,
+  BorderLayer,
+  ImageLayer,
+  TextLayer,
+  WatermarkLayer,
+} from '@/types/watermark'
 import type { ExifSummary } from '@/types/image'
 
 const props = withDefaults(
@@ -37,8 +46,17 @@ const props = withDefaults(
     baseName?: string
     /** 隐藏模板/预设相关入口（工作室里由页面自己管理） */
     showTemplates?: boolean
+    /** 当前照片 id：背景水印的「仅当前照片使用」作用域依赖它（工作室为空） */
+    activeId?: string | null
   }>(),
-  { imgW: 1600, imgH: 1067, exif: undefined, baseName: undefined, showTemplates: true },
+  {
+    imgW: 1600,
+    imgH: 1067,
+    exif: undefined,
+    baseName: undefined,
+    showTemplates: true,
+    activeId: null,
+  },
 )
 
 const wm = useWatermarkStore()
@@ -47,6 +65,8 @@ const fonts = useFontsStore()
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const replaceTargetId = ref<string | null>(null)
+/** 素材选择的用途：给图片水印层换图 / 给背景水印挑背景图 */
+const pickMode = ref<'image' | 'background'>('image')
 const showSave = ref(false)
 const saveName = ref('')
 const contentEl = ref<HTMLTextAreaElement | null>(null)
@@ -60,6 +80,9 @@ const selectedImage = computed(() =>
 )
 const selectedBorder = computed(() =>
   wm.selected?.type === 'border' ? (wm.selected as BorderLayer) : null,
+)
+const selectedBackground = computed(() =>
+  wm.selected?.type === 'background' ? (wm.selected as BackgroundLayer) : null,
 )
 
 /* ---------- 边框四边同步：链接时统一调整，各边不同则自动断开 ---------- */
@@ -228,15 +251,19 @@ const missing = computed(() => {
   return missingTokens(t.content, props.exif, props.baseName)
 })
 
-/* 偏移即固定像素：所有照片上距离一致，不随图片尺寸 / 比例缩放（边框层无偏移） */
-const offX = computed(() => (wm.selected && wm.selected.type !== 'border' ? wm.selected.offsetX : 0))
-const offY = computed(() => (wm.selected && wm.selected.type !== 'border' ? wm.selected.offsetY : 0))
+/* 偏移即固定像素：所有照片上距离一致，不随图片尺寸 / 比例缩放（边框、背景层无此通用偏移） */
+const offX = computed(() =>
+  wm.selected && wm.selected.type !== 'border' && wm.selected.type !== 'background' ? wm.selected.offsetX : 0,
+)
+const offY = computed(() =>
+  wm.selected && wm.selected.type !== 'border' && wm.selected.type !== 'background' ? wm.selected.offsetY : 0,
+)
 function setOffsetX(px: number): void {
-  if (!wm.selected || wm.selected.type === 'border') return
+  if (!wm.selected || wm.selected.type === 'border' || wm.selected.type === 'background') return
   wm.update(wm.selected.id, { offsetX: Math.round(px) })
 }
 function setOffsetY(px: number): void {
-  if (!wm.selected || wm.selected.type === 'border') return
+  if (!wm.selected || wm.selected.type === 'border' || wm.selected.type === 'background') return
   wm.update(wm.selected.id, { offsetY: Math.round(px) })
 }
 
@@ -251,7 +278,13 @@ function setFontPx(px: number): void {
 }
 
 function pickImage(replaceId: string | null): void {
+  pickMode.value = 'image'
   replaceTargetId.value = replaceId
+  fileInput.value?.click()
+}
+
+function pickBackground(): void {
+  pickMode.value = 'background'
   fileInput.value?.click()
 }
 
@@ -261,7 +294,9 @@ async function onImageFile(e: Event): Promise<void> {
   input.value = ''
   if (!file) return
   try {
-    if (replaceTargetId.value) {
+    if (pickMode.value === 'background') {
+      await onBackgroundFile(file)
+    } else if (replaceTargetId.value) {
       await wm.replaceImageFile(replaceTargetId.value, file)
       toast('素材已替换')
     } else {
@@ -272,6 +307,75 @@ async function onImageFile(e: Event): Promise<void> {
   }
   replaceTargetId.value = null
 }
+
+/* ---------- 背景水印：背景图选择与「仅当前照片」作用域 ---------- */
+
+/** 当前照片的背景覆盖（有覆盖 = 自定义背景图仅当前照片使用） */
+const bgOverride = computed(() => wm.bgOverrideFor(props.activeId))
+
+/** 表单展示的背景图名：覆盖优先，其次按层配置（self = 当前照片） */
+const bgSourceName = computed(() => {
+  const bg = selectedBackground.value
+  if (!bg) return ''
+  if (bgOverride.value) return wm.assets[bgOverride.value.assetId]?.name ?? '自定义背景'
+  if (bg.source === 'custom' && bg.assetId) return wm.assets[bg.assetId]?.name ?? '自定义背景'
+  return '当前照片'
+})
+
+const bgIsCustom = computed(() => {
+  const bg = selectedBackground.value
+  return !!bg && (bgOverride.value != null || bg.source === 'custom')
+})
+
+/** 背景素材入库后落到图层（覆盖开启时同步覆盖与 self，见下） */
+async function onBackgroundFile(file: File): Promise<void> {
+  const bg = selectedBackground.value
+  if (!bg) return
+  const assetId = await wm.addBackgroundAsset(file)
+  if (bgOverride.value && props.activeId) {
+    // 覆盖开启中换图：覆盖指向新图，层保持 self（其他照片仍用各自照片）
+    wm.setBgOverride(props.activeId, assetId)
+    wm.update(bg.id, { source: 'self', assetId, aspect: wm.assets[assetId]?.aspect })
+  } else {
+    wm.update(bg.id, { source: 'custom', assetId, aspect: wm.assets[assetId]?.aspect })
+  }
+}
+
+/** 恢复为当前照片：清掉自定义图与覆盖 */
+function bgResetSelf(): void {
+  const bg = selectedBackground.value
+  if (!bg) return
+  if (props.activeId) wm.setBgOverride(props.activeId, null)
+  wm.update(bg.id, { source: 'self' })
+}
+
+const bgPerImageModel = computed({
+  get: () => bgOverride.value != null,
+  set: (on: boolean) => {
+    const bg = selectedBackground.value
+    if (!bg || !props.activeId) return
+    if (on) {
+      // 仅当前照片：覆盖指向层上的自定义图，层回到 self（其余照片用各自照片）
+      if (!bg.assetId) {
+        toast('先选择一张背景图', 'error')
+        return
+      }
+      wm.setBgOverride(props.activeId, bg.assetId)
+      wm.update(bg.id, { source: 'self' })
+    } else {
+      wm.setBgOverride(props.activeId, null)
+      // 关闭恢复为「所有照片」：层上有自定义图就回到 custom
+      if (bg.assetId) wm.update(bg.id, { source: 'custom' })
+    }
+  },
+})
+
+const bgFitModel = computed({
+  get: () => selectedBackground.value?.fit ?? 'background',
+  set: (v: unknown) => {
+    if (selectedBackground.value) wm.update(selectedBackground.value.id, { fit: v as 'background' | 'custom' })
+  },
+})
 
 function layerName(l: WatermarkLayer): string {
   // 自定义名称优先（默认名「文本水印」视为未命名，继续显示内容前缀）
@@ -341,6 +445,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
       <AppButton size="sm" @click="wm.addText()"><Type :size="13" />文本</AppButton>
       <AppButton size="sm" @click="pickImage(null)"><ImageIcon :size="13" />图片 / SVG</AppButton>
       <AppButton size="sm" @click="wm.addBorderLayer()"><Frame :size="13" />边框</AppButton>
+      <AppButton size="sm" @click="wm.addBackgroundLayer()"><Wallpaper :size="13" />背景</AppButton>
     </div>
     <div v-if="showTemplates" class="row">
       <AppButton size="sm" @click="openTplPicker">应用模板</AppButton>
@@ -362,6 +467,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
       >
         <Type v-if="l.type === 'text'" :size="13" class="icon" />
         <Frame v-else-if="l.type === 'border'" :size="13" class="icon" />
+        <Wallpaper v-else-if="l.type === 'background'" :size="13" class="icon" />
         <ImageIcon v-else :size="13" class="icon" />
         <input
           v-if="renamingId === l.id"
@@ -635,6 +741,123 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
       </section>
     </template>
 
+    <!-- 背景水印：照片浮在背景图上，背景可模糊；自定义图可仅当前照片使用 -->
+    <template v-if="selectedBackground">
+      <section>
+        <h3>背景图</h3>
+        <p class="asset-name">{{ bgSourceName }}</p>
+        <div class="row">
+          <AppButton size="sm" @click="pickBackground"><Replace :size="13" />选择图片</AppButton>
+          <AppButton v-if="bgIsCustom" size="sm" @click="bgResetSelf">
+            <RotateCcw :size="13" />恢复当前照片
+          </AppButton>
+        </div>
+        <div v-if="(props.activeId && selectedBackground.source !== 'self') || bgOverride" class="linked-row">
+          <div class="text">
+            <span class="fl">仅当前照片使用</span>
+            <p class="mode-hint">开启后其他照片仍以各自照片作为背景</p>
+          </div>
+          <AppSwitch v-model="bgPerImageModel" />
+        </div>
+      </section>
+      <section>
+        <h3>画布外扩</h3>
+        <AppSegment v-model="bgFitModel" small :options="[
+          { value: 'background', label: '按背景比例' },
+          { value: 'custom', label: '自定义' },
+        ]" />
+        <AppSlider
+          v-if="selectedBackground.fit === 'background'"
+          :model-value="selectedBackground.expand"
+          :min="0"
+          :max="100"
+          label="外扩程度"
+          :format="(v) => `${Math.round(v)}%`"
+          @update:model-value="wm.update(selectedBackground!.id, { expand: $event })"
+          @reset="wm.update(selectedBackground!.id, { expand: 30 })"
+        />
+        <template v-else>
+          <AppSlider
+            :model-value="selectedBackground.expandX"
+            :min="0"
+            :max="60"
+            label="水平外扩"
+            :format="(v) => `${v.toFixed(1)}%`"
+            @update:model-value="wm.update(selectedBackground!.id, { expandX: $event })"
+            @reset="wm.update(selectedBackground!.id, { expandX: 12 })"
+          />
+          <AppSlider
+            :model-value="selectedBackground.expandY"
+            :min="0"
+            :max="60"
+            label="垂直外扩"
+            :format="(v) => `${v.toFixed(1)}%`"
+            @update:model-value="wm.update(selectedBackground!.id, { expandY: $event })"
+            @reset="wm.update(selectedBackground!.id, { expandY: 12 })"
+          />
+        </template>
+      </section>
+      <section>
+        <h3>照片效果</h3>
+        <AppSlider
+          :model-value="selectedBackground.blur"
+          :min="0"
+          :max="100"
+          label="背景高斯模糊"
+          @update:model-value="wm.update(selectedBackground!.id, { blur: $event })"
+          @reset="wm.update(selectedBackground!.id, { blur: 35 })"
+        />
+        <AppSlider
+          :model-value="selectedBackground.photoScale"
+          :min="30"
+          :max="150"
+          label="图片大小"
+          :format="(v) => `${Math.round(v)}%`"
+          @update:model-value="wm.update(selectedBackground!.id, { photoScale: $event })"
+          @reset="wm.update(selectedBackground!.id, { photoScale: 100 })"
+        />
+        <AppSlider
+          :model-value="selectedBackground.radius"
+          :min="0"
+          :max="300"
+          label="图片圆角"
+          :format="(v) => `${Math.round(v)} px`"
+          @update:model-value="wm.update(selectedBackground!.id, { radius: $event })"
+          @reset="wm.update(selectedBackground!.id, { radius: 0 })"
+        />
+        <AppSlider
+          :model-value="selectedBackground.shadow"
+          :min="0"
+          :max="100"
+          label="图片阴影"
+          @update:model-value="wm.update(selectedBackground!.id, { shadow: $event })"
+          @reset="wm.update(selectedBackground!.id, { shadow: 25 })"
+        />
+      </section>
+      <section>
+        <h3>图片位置</h3>
+        <p class="mode-hint">也可以在预览中直接拖动照片调整位置</p>
+        <AppSlider
+          :model-value="selectedBackground.offsetX"
+          :min="-400"
+          :max="400"
+          label="水平"
+          :format="(v) => `${Math.round(v)} px`"
+          @update:model-value="wm.update(selectedBackground!.id, { offsetX: Math.round($event) })"
+          @reset="wm.update(selectedBackground!.id, { offsetX: 0 })"
+        />
+        <AppSlider
+          :model-value="selectedBackground.offsetY"
+          :min="-400"
+          :max="400"
+          label="垂直"
+          :format="(v) => `${Math.round(v)} px`"
+          @update:model-value="wm.update(selectedBackground!.id, { offsetY: Math.round($event) })"
+          @reset="wm.update(selectedBackground!.id, { offsetY: 0 })"
+        />
+      </section>
+    </template>
+
     <!-- 边框层：同步模式下统一调整，断开后四边独立 -->
     <template v-if="selectedBorder">
       <section>
@@ -691,7 +914,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
       </section>
     </template>
 
-    <template v-if="wm.selected && wm.selected.type !== 'border'">
+    <template v-if="wm.selected && wm.selected.type !== 'border' && wm.selected.type !== 'background'">
       <section>
         <h3>位置与变换</h3>
         <p class="anchor-label">定位锚点</p>
@@ -871,6 +1094,12 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
 .linked-row .fl {
   font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
+}
+.mode-hint {
+  margin: 2px 0 0;
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  line-height: 1.5;
 }
 .border-row {
   display: flex;

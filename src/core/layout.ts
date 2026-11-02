@@ -91,14 +91,14 @@ export function textMetrics(l: TextLayer, fontSize: number, ctx: Ctx2D): TextMet
   }
 }
 
-/** 计算图层在图片坐标系中的包围盒（含旋转前的宽高）。边框层为全画布。 */
+/** 计算图层在图片坐标系中的包围盒（含旋转前的宽高）。边框 / 背景层为全画布。 */
 export function measureLayer(
   layer: WatermarkLayer,
   imgW: number,
   imgH: number,
   mctx: Ctx2D,
 ): LayerBox {
-  if (layer.type === 'border') {
+  if (layer.type === 'border' || layer.type === 'background') {
     return { cx: imgW / 2, cy: imgH / 2, w: imgW, h: imgH, rotation: 0 }
   }
   const long = Math.max(imgW, imgH)

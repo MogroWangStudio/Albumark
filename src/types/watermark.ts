@@ -109,7 +109,46 @@ export interface BorderLayer {
   colorLeft: string
 }
 
-export type WatermarkLayer = TextLayer | ImageLayer | BorderLayer
+/**
+ * 背景水印：在图片外部扩展画布并铺一张背景图（装饰性水印），照片浮于
+ * 背景之上。背景图默认取当前照片自身（模糊填充效果），也可指定素材图；
+ * 「仅当前照片使用」的自定义背景由水印 store 的 bgOverrides 按照片 id
+ * 记录，不进图层 JSON。渲染叠放自下而上：背景图 → 照片（可缩放 / 偏移 /
+ * 圆角 / 阴影）→ 边框环带（有背景时边框只画在照片外围，不再扩展画布）
+ * → 文字 / 图片水印。
+ * 列表语义与其他图层一致：靠前者更贴近照片（画在更上层）。
+ */
+export interface BackgroundLayer {
+  id: string
+  type: 'background'
+  name: string
+  visible: boolean
+  /** 背景图来源：self = 当前照片自身；custom = 指定素材图 */
+  source: 'self' | 'custom'
+  /** source 为 custom 时的素材 id 与宽高比（宽/高） */
+  assetId?: string
+  aspect?: number
+  /** 画布外扩模式：background = 按背景图宽高比适配（缺省）；custom = 手动控制横 / 纵外扩 */
+  fit: 'background' | 'custom'
+  /** fit=background：外扩程度 0-100 —— 照片在画布中的面积占比余量 */
+  expand: number
+  /** fit=custom：水平 / 垂直外扩，占照片对应边长的百分比（两侧对称） */
+  expandX: number
+  expandY: number
+  /** 高斯模糊强度 0-100，按画布长边百分比折算模糊半径 */
+  blur: number
+  /** 照片缩放百分比 30-150（100 = 原尺寸），超出画布部分被裁掉 */
+  photoScale: number
+  /** 照片相对画布中心的偏移（像素，原图尺度） */
+  offsetX: number
+  offsetY: number
+  /** 照片圆角（像素，原图尺度），作用于照片 + 边框环带的组合外轮廓 */
+  radius: number
+  /** 照片在背景上的投影强度 0-100 */
+  shadow: number
+}
+
+export type WatermarkLayer = TextLayer | ImageLayer | BorderLayer | BackgroundLayer
 
 export interface SerializedAsset {
   id: string
@@ -161,8 +200,8 @@ function migrateTokens(text: string): string {
 
 /** 旧版百分比坐标 → 锚点 + 偏移 的迁移；文字框锚点缺省跟随定位锚点。 */
 export function migrateLayer<T extends WatermarkLayer>(l: T): T {
-  // 边框层没有锚点 / 偏移几何，原样保留
-  if (l.type === 'border') return l
+  // 边框 / 背景层没有锚点 / 偏移几何，原样保留
+  if (l.type === 'border' || l.type === 'background') return l
   let out = l
   if (!('anchor' in l) || typeof l.anchor !== 'string') {
     const legacy = l as unknown as { x?: number; y?: number }
@@ -195,8 +234,8 @@ export function migrateLayer<T extends WatermarkLayer>(l: T): T {
  * 以标称长边 1000px 折算（百分比数值 ×10），观感接近中等尺寸照片上的原效果。
  */
 export function migrateOffsetsToPx<T extends WatermarkLayer>(l: T): T {
-  // 边框层没有偏移字段
-  if (l.type === 'border') return l
+  // 边框 / 背景层没有偏移字段
+  if (l.type === 'border' || l.type === 'background') return l
   return {
     ...l,
     offsetX: Math.round(l.offsetX * 10),
@@ -207,4 +246,5 @@ export function migrateOffsetsToPx<T extends WatermarkLayer>(l: T): T {
 export type TextLayerPatch = Partial<Omit<TextLayer, 'type'>>
 export type ImageLayerPatch = Partial<Omit<ImageLayer, 'type'>>
 export type BorderLayerPatch = Partial<Omit<BorderLayer, 'type'>>
-export type LayerPatch = TextLayerPatch | ImageLayerPatch | BorderLayerPatch
+export type BackgroundLayerPatch = Partial<Omit<BackgroundLayer, 'type'>>
+export type LayerPatch = TextLayerPatch | ImageLayerPatch | BorderLayerPatch | BackgroundLayerPatch

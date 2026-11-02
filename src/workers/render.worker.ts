@@ -1,7 +1,15 @@
 /// <reference lib="webworker" />
 import { applyAdjustments } from '../core/adjust'
+import {
+  backgroundAspect,
+  blurRadiusPx,
+  layoutBackgroundFrame,
+  paintBorderBand,
+  paintPhotoOnBackground,
+  renderBlurredCover,
+} from '../core/bg'
 import { drawLayers, type AssetMap } from '../core/draw'
-import type { BorderLayer, WatermarkLayer } from '../types/watermark'
+import type { BackgroundLayer, BorderLayer, WatermarkLayer } from '../types/watermark'
 import { isCurvesNeutral, isCurveNeutral, isHslNeutral, type Adjustments, type Crop } from '../types/adjust'
 
 export interface RenderJob {
@@ -116,33 +124,85 @@ async function handle(job: RenderJob): Promise<void> {
     ctx.putImageData(image, 0, 0)
   }
 
-  // 边框水印在调节之后、普通图层之前逐层向外扩展画布；图层列表靠前者更贴近照片。
-  // 边框宽度按取样缩放系数等比折算，保证预览（缩放渲染）与导出的边框比例一致
+  // 背景水印存在时改变整条合成路径：边框从「扩展画布」改为「照片外围环带」，
+  // 背景图铺满最终画布（照片 + 背景外扩），照片带缩放 / 偏移 / 圆角 / 阴影
+  // 浮于其上，文字 / 图片水印在最上层。布局与绘制走 core/bg.ts 共享实现，
+  // 与预览主线程组合、工作室样张保持同一几何。
+  const bgLayers = job.layers.filter((l): l is BackgroundLayer => l.type === 'background' && l.visible)
   const borders = job.layers.filter((l): l is BorderLayer => l.type === 'border' && l.visible)
-  const pictureLayers = job.layers.filter((l) => l.type !== 'border')
+  const pictureLayers = job.layers.filter((l) => l.type !== 'border' && l.type !== 'background')
+  // 预览（want=bitmap）不在 Worker 里合成背景：背景与照片效果由主线程即时
+  // 组合（拖动 / 滑杆零 Worker 往返），Worker 只输出照片 + 边框环带位图；
+  // 导出（jpeg/png）在这里完整合成
+  const composeBg = job.want !== 'bitmap' && bgLayers.length > 0
   const scaled = (v: number): number => (v > 0 ? Math.max(1, Math.round(v * scale)) : 0)
   let framed: OffscreenCanvas = canvas
   let fw = w
   let fh = h
-  for (const b of borders) {
-    const bt = scaled(b.top)
-    const br = scaled(b.right)
-    const bb = scaled(b.bottom)
-    const bl = scaled(b.left)
-    const next = new OffscreenCanvas(fw + bl + br, fh + bt + bb)
-    const nctx = next.getContext('2d') as OffscreenCanvasRenderingContext2D
-    nctx.fillStyle = b.colorTop
-    nctx.fillRect(0, 0, next.width, bt)
-    nctx.fillStyle = b.colorBottom
-    nctx.fillRect(0, fh + bt, next.width, bb)
-    nctx.fillStyle = b.colorLeft
-    nctx.fillRect(0, bt, bl, fh)
-    nctx.fillStyle = b.colorRight
-    nctx.fillRect(fw + bl, bt, br, fh)
-    nctx.drawImage(framed, bl, bt)
-    framed = next
-    fw = next.width
-    fh = next.height
+  let photoOffset = { x: 0, y: 0 }
+
+  if (bgLayers.length > 0) {
+    // 边框环带：贴照片外围，不扩展画布（预览 / 导出同一实现）。
+    // 传入的 canvas 必是 OffscreenCanvas：无边框时原样返回、有边框时返回新画布
+    const band = paintBorderBand(canvas, borders, scale)
+    framed = band as OffscreenCanvas
+    if (composeBg) {
+      // 完整合成（导出）：背景 → 照片（缩放 / 偏移 / 圆角 / 阴影）→ 水印
+      const bg = bgLayers[0]
+      const layout = layoutBackgroundFrame(bg, w, h, backgroundAspect(bg, w, h), scale)
+      const frame = new OffscreenCanvas(layout.frameW, layout.frameH)
+      const fctx = frame.getContext('2d') as OffscreenCanvasRenderingContext2D
+      // 列表靠前者更贴近照片（更上层）：从列表末尾往前画
+      for (let i = bgLayers.length - 1; i >= 0; i--) {
+        const b = bgLayers[i]
+        const src: ImageBitmap | OffscreenCanvas | null =
+          b.source === 'custom' ? (assetCache.get(b.assetId ?? '') ?? null) : canvas
+        if (!src) continue // custom 素材缺失：跳过该层，露出下层或透明
+        const blurred = renderBlurredCover(
+          src,
+          layout.frameW,
+          layout.frameH,
+          blurRadiusPx(b, layout.frameW, layout.frameH),
+        )
+        fctx.drawImage(blurred, 0, 0)
+      }
+      paintPhotoOnBackground(fctx, band, w, h, layout, bg, borders, scale)
+      measureCtx()
+      drawLayers(fctx, layout.frameW, layout.frameH, pictureLayers, assetCache)
+      framed = frame
+      fw = layout.frameW
+      fh = layout.frameH
+      photoOffset = { x: Math.round(layout.photoX), y: Math.round(layout.photoY) }
+    } else {
+      // 预览：输出照片 + 环带位图，几何信息交给主线程组合
+      fw = band.width
+      fh = band.height
+      photoOffset = { x: Math.round((fw - w) / 2), y: Math.round((fh - h) / 2) }
+    }
+  } else {
+    // 无背景水印：边框逐层向外扩展画布，图层列表靠前者更贴近照片。
+    // 边框宽度按取样缩放系数等比折算，保证预览（缩放渲染）与导出的边框比例一致
+    for (const b of borders) {
+      const bt = scaled(b.top)
+      const br = scaled(b.right)
+      const bb = scaled(b.bottom)
+      const bl = scaled(b.left)
+      const next = new OffscreenCanvas(fw + bl + br, fh + bt + bb)
+      const nctx = next.getContext('2d') as OffscreenCanvasRenderingContext2D
+      nctx.fillStyle = b.colorTop
+      nctx.fillRect(0, 0, next.width, bt)
+      nctx.fillStyle = b.colorBottom
+      nctx.fillRect(0, fh + bt, next.width, bb)
+      nctx.fillStyle = b.colorLeft
+      nctx.fillRect(0, bt, bl, fh)
+      nctx.fillStyle = b.colorRight
+      nctx.fillRect(fw + bl, bt, br, fh)
+      nctx.drawImage(framed, bl, bt)
+      framed = next
+      fw = next.width
+      fh = next.height
+      photoOffset = { x: photoOffset.x + bl, y: photoOffset.y + bt }
+    }
   }
 
   const keep = new Set(job.assets.map((x) => x.id))
@@ -165,7 +225,18 @@ async function handle(job: RenderJob): Promise<void> {
 
   if (job.want === 'bitmap') {
     const out = await createImageBitmap(framed)
-    post({ id: job.id, bitmap: out, srcBack: job.bitmap }, [out, job.bitmap])
+    post(
+      {
+        id: job.id,
+        bitmap: out,
+        srcBack: job.bitmap,
+        /** 照片（不含边框环带）在输出位图中的位置与尺寸，预览主线程组合用 */
+        photoOffset,
+        photoSize: { w, h },
+        renderScale: scale,
+      },
+      [out, job.bitmap],
+    )
   } else {
     const type = job.want === 'png' ? 'image/png' : 'image/jpeg'
     const blob = await framed.convertToBlob({ type, quality: job.quality })

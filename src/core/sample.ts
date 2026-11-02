@@ -1,6 +1,14 @@
 import { drawLayers, type AssetMap } from './draw'
+import {
+  backgroundAspect,
+  blurRadiusPx,
+  layoutBackgroundFrame,
+  paintBorderBand,
+  paintPhotoOnBackground,
+  renderBlurredCover,
+} from './bg'
 import { resolveTokens, SAMPLE_EXIF } from './tokens'
-import type { SerializedAsset, WatermarkLayer } from '@/types/watermark'
+import type { BackgroundLayer, SerializedAsset, WatermarkLayer } from '@/types/watermark'
 import landscapeUrl from '@/assets/samples/studio-landscape.jpg'
 import portraitUrl from '@/assets/samples/studio-portrait.jpg'
 
@@ -91,6 +99,8 @@ export interface PaintComposedResult {
  * 把照片与一组水印图层合成绘制到 ctx 上：先按图层列表从外到内画出边框层
  * （列表越靠前越贴近照片），再画照片与文字 / 图片水印。
  * 与渲染 Worker 的画布扩展顺序完全一致。返回照片偏移与最终画布尺寸。
+ * 有背景水印时走另一条路径：背景铺满最终画布、照片带缩放 / 圆角 / 阴影
+ * 浮于其上、边框改为照片外围环带，水印画在最外画布坐标系（与导出一致）。
  */
 export function paintComposed(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -100,10 +110,36 @@ export function paintComposed(
   layers: WatermarkLayer[],
   assets: AssetMap,
 ): PaintComposedResult {
+  const bgLayers = layers.filter(
+    (l): l is BackgroundLayer => l.type === 'background' && l.visible,
+  )
   const borders = layers.filter(
     (l): l is Extract<WatermarkLayer, { type: 'border' }> => l.type === 'border' && l.visible,
   )
-  const others = layers.filter((l) => l.type !== 'border')
+  const others = layers.filter((l) => l.type !== 'border' && l.type !== 'background')
+
+  if (bgLayers.length > 0) {
+    // 背景水印：布局与绘制走 core/bg.ts 共享实现（Worker / 预览 / 样张同源）
+    const bg = bgLayers[0]
+    const layout = layoutBackgroundFrame(bg, baseW, baseH, backgroundAspect(bg, baseW, baseH), 1)
+    const band = paintBorderBand(sampleBmp, borders, 1)
+    // 列表靠前者更贴近照片（更上层）：从列表末尾往前铺
+    for (let i = bgLayers.length - 1; i >= 0; i--) {
+      const b = bgLayers[i]
+      const src: ImageBitmap | OffscreenCanvas | null =
+        b.source === 'custom' ? (assets.get(b.assetId ?? '') ?? null) : sampleBmp
+      if (!src) continue
+      ctx.drawImage(
+        renderBlurredCover(src, layout.frameW, layout.frameH, blurRadiusPx(b, layout.frameW, layout.frameH)),
+        0,
+        0,
+      )
+    }
+    paintPhotoOnBackground(ctx, band, baseW, baseH, layout, bg, borders, 1)
+    drawLayers(ctx, layout.frameW, layout.frameH, others, assets)
+    return { photoX: layout.photoX, photoY: layout.photoY, frameW: layout.frameW, frameH: layout.frameH }
+  }
+
   let extL = 0
   let extT = 0
   let extR = 0
@@ -211,7 +247,7 @@ export async function renderTemplateThumb(
   const resolved = layers.map((l) =>
     l.type === 'text' ? { ...l, content: resolveTokens(l.content, SAMPLE_EXIF, '样张') } : l,
   )
-  // 先算含边框的最终画布尺寸，再按容器适应。
+  // 先算含边框 / 背景外扩的最终画布尺寸，再按容器适应。
   // 基准尺寸以样张位图自身为准：素材换了尺寸也不会错位
   const sample = await ensureThumbSample()
   const baseW = sample.width
@@ -228,8 +264,15 @@ export async function renderTemplateThumb(
       extB += l.bottom
     }
   }
-  const frameW = baseW + extL + extR
-  const frameH = baseH + extT + extB
+  let frameW = baseW + extL + extR
+  let frameH = baseH + extT + extB
+  // 背景水印决定画布尺寸（照片浮于背景之上，与导出同一布局）
+  const bg = resolved.find((l): l is BackgroundLayer => l.type === 'background' && l.visible)
+  if (bg) {
+    const layout = layoutBackgroundFrame(bg, baseW, baseH, backgroundAspect(bg, baseW, baseH), 1)
+    frameW = layout.frameW
+    frameH = layout.frameH
+  }
   const fit = Math.min(cw / frameW, ch / frameH)
   ctx.translate((cw - frameW * fit) / 2, (ch - frameH * fit) / 2)
   ctx.scale(fit, fit)

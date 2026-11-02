@@ -23,6 +23,7 @@ interface EditState {
   crops: Record<string, Crop>
   layers: WatermarkLayer[]
   wmPerImage: Record<string, WatermarkLayer[]>
+  wmBgOverrides: Record<string, string>
 }
 
 interface Entry {
@@ -74,13 +75,19 @@ export const useHistoryStore = defineStore('history', () => {
       crops: clone(adjust.crops),
       layers: clone(wm.layers),
       wmPerImage: clone(wm.perImage),
+      wmBgOverrides: clone(wm.bgOverrides),
     }
   }
 
   /** 比对两份快照，判断这次改动属于哪一类编辑 */
   function labelFor(a: EditState, b: EditState): string {
     if (!same(a.crops, b.crops)) return '裁剪'
-    if (!same(a.layers, b.layers) || !same(a.wmPerImage, b.wmPerImage)) return '水印'
+    if (
+      !same(a.layers, b.layers) ||
+      !same(a.wmPerImage, b.wmPerImage) ||
+      !same(a.wmBgOverrides, b.wmBgOverrides)
+    )
+      return '水印'
     if (!same(a.values, b.values) || !same(a.perImage, b.perImage)) return '调节'
     return '编辑'
   }
@@ -122,7 +129,7 @@ export const useHistoryStore = defineStore('history', () => {
   function restore(s: EditState): void {
     applying = true
     adjust.restoreState({ values: s.values, perImage: s.perImage, crops: s.crops })
-    wm.restoreState(s.layers, s.wmPerImage)
+    wm.restoreState(s.layers, s.wmPerImage, s.wmBgOverrides)
     wm.setEditContext(images.activeId)
     // 正在裁剪页时把草稿同步到回填后的裁剪，避免预览与实际状态脱节
     if (adjust.cropMode) {
@@ -181,7 +188,7 @@ export const useHistoryStore = defineStore('history', () => {
     current.value = { state: snapshot(), label: '编辑' }
   }
 
-  // 编辑相关的五个数据源：任意一个变化都记一步（连续操作按停顿合并）
+  // 编辑相关的数据源：任意一个变化都记一步（连续操作按停顿合并）
   watch(
     [
       () => adjust.values,
@@ -189,6 +196,7 @@ export const useHistoryStore = defineStore('history', () => {
       () => adjust.crops,
       () => wm.layers,
       () => wm.perImage,
+      () => wm.bgOverrides,
     ],
     schedule,
     { deep: true },

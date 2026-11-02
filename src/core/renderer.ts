@@ -8,6 +8,12 @@ interface RenderReply {
   width?: number
   height?: number
   srcBack: ImageBitmap
+  /** 照片（不含边框环带）在输出位图中的位置（位图像素） */
+  photoOffset?: { x: number; y: number }
+  /** 照片在输出位图中的尺寸（位图像素） */
+  photoSize?: { w: number; h: number }
+  /** 本次渲染的取样缩放系数（长边上限折算），供 px 参数等比换算 */
+  renderScale?: number
   err?: string
 }
 
@@ -101,7 +107,8 @@ export class RenderClient {
     })
   }
 
-  /** 预览渲染：返回合成结果位图，源位图随 srcBack 归还以供复用。 */
+  /** 预览渲染：返回合成结果位图，源位图随 srcBack 归还以供复用。
+   *  含背景水印时位图为「照片 + 边框环带」，几何信息随结果返回供主线程组合。 */
   async renderPreview(
     src: ImageBitmap,
     assets: AssetPayload[],
@@ -109,13 +116,25 @@ export class RenderClient {
     adjustments: Adjustments,
     maxSize: number,
     crop?: Crop,
-  ): Promise<{ bitmap: ImageBitmap; srcBack: ImageBitmap }> {
+  ): Promise<{
+    bitmap: ImageBitmap
+    srcBack: ImageBitmap
+    photoOffset: { x: number; y: number }
+    photoSize: { w: number; h: number }
+    renderScale: number
+  }> {
     const res = await this.request(
       { bitmap: src, assets, layers, adjustments, crop, maxSize, quality: 0.92, want: 'bitmap' },
       [src],
     )
     if (!res.bitmap) throw new Error('预览渲染失败')
-    return { bitmap: res.bitmap, srcBack: res.srcBack }
+    return {
+      bitmap: res.bitmap,
+      srcBack: res.srcBack,
+      photoOffset: res.photoOffset ?? { x: 0, y: 0 },
+      photoSize: res.photoSize ?? { w: res.bitmap.width, h: res.bitmap.height },
+      renderScale: res.renderScale ?? 1,
+    }
   }
 
   /** 编码渲染：解码源图并输出 JPEG / PNG 字节。 */

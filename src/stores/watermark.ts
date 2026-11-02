@@ -4,6 +4,7 @@ import { uid } from '@/core/id'
 import { blobToDataUrl, dataUrlToBlob, rasterizeSvg } from '@/core/svg'
 import type {
   AnchorPreset,
+  BackgroundLayer,
   BorderLayer,
   ImageLayer,
   LayerPatch,
@@ -50,6 +51,8 @@ const PROJECT_SCOPE_PREFIX = 'p:'
 interface StoredWatermark {
   layers: WatermarkLayer[]
   assets?: SerializedAsset[]
+  /** 照片 id → 「仅当前照片使用」的自定义背景素材 id */
+  bgOverrides?: Record<string, string>
 }
 
 /** 锚点九宫格的默认边距（像素）。 */
@@ -108,6 +111,27 @@ export function makeBorderLayer(patch: Partial<BorderLayer> = {}): BorderLayer {
   }
 }
 
+export function makeBackgroundLayer(patch: Partial<BackgroundLayer> = {}): BackgroundLayer {
+  return {
+    id: uid(),
+    type: 'background',
+    name: '背景水印',
+    visible: true,
+    source: 'self',
+    fit: 'background',
+    expand: 30,
+    expandX: 12,
+    expandY: 12,
+    blur: 35,
+    photoScale: 100,
+    offsetX: 0,
+    offsetY: 0,
+    radius: 0,
+    shadow: 25,
+    ...patch,
+  }
+}
+
 export const useWatermarkStore = defineStore('watermark', () => {
   /** 工作区 store：作用域直接从它推导（store 间单向依赖，workspace 不回引水印） */
   const ws = useWorkspaceStore()
@@ -132,6 +156,8 @@ export const useWatermarkStore = defineStore('watermark', () => {
   const scopeKey = ref('')
   /** 逐图独立水印是会话级数据，按作用域暂存：切换项目再切回来仍然保留 */
   const perImageByScope = new Map<string, Record<string, WatermarkLayer[]>>()
+  /** 照片 id → 「仅当前照片使用」的自定义背景素材 id（背景水印的逐图作用域） */
+  const bgOverrides = ref<Record<string, string>>({})
 
   /** 进入工作室：快照一份当前项目的水印作为草稿，工作室的全部编辑都只作用于草稿 */
   function enterStudio(): void {
@@ -235,6 +261,45 @@ export const useWatermarkStore = defineStore('watermark', () => {
     selectedId.value = layer.id
   }
 
+  function addBackgroundLayer(patch: Partial<BackgroundLayer> = {}): void {
+    const layer = makeBackgroundLayer(patch)
+    // 背景层渲染时统一垫底，列表放末尾（最底层）最直观
+    editTarget().push(layer)
+    selectedId.value = layer.id
+  }
+
+  /** 为背景水印挑选素材：只入库素材，不建图层（区别于图片水印的 addImageFile） */
+  async function addBackgroundAsset(file: File): Promise<string> {
+    const prep = await prepImageFile(file)
+    const asset: WatermarkAsset = {
+      id: uid(),
+      name: file.name,
+      blob: prep.blob,
+      dataUrl: await blobToDataUrl(prep.blob),
+      aspect: prep.aspect,
+    }
+    assets.value[asset.id] = asset
+    schedulePersist()
+    return asset.id
+  }
+
+  /** 「仅当前照片使用」的自定义背景：写入 / 清除某张照片的覆盖 */
+  function setBgOverride(imageId: string, assetId: string | null): void {
+    const next = { ...bgOverrides.value }
+    if (assetId) next[imageId] = assetId
+    else delete next[imageId]
+    bgOverrides.value = next
+    if (!studioActive.value) schedulePersist()
+  }
+
+  /** 某张照片的背景覆盖（渲染 / 导出取自定义背景的唯一入口） */
+  function bgOverrideFor(imageId: string | null): { assetId: string; aspect?: number } | null {
+    if (!imageId) return null
+    const assetId = bgOverrides.value[imageId]
+    if (!assetId) return null
+    return { assetId, aspect: assets.value[assetId]?.aspect }
+  }
+
   async function prepImageFile(file: File): Promise<{ blob: Blob; aspect: number }> {
     if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) {
       return rasterizeSvg(file)
@@ -310,18 +375,44 @@ export const useWatermarkStore = defineStore('watermark', () => {
     return toRaw(list).map((l) => structuredClone(toRaw(l)))
   }
 
+  /** 给一组图层副本应用背景覆盖：第一个可见背景层改用覆盖素材 */
+  function withBackgroundOverride(list: WatermarkLayer[], assetId: string): WatermarkLayer[] {
+    for (const l of list) {
+      if (l.type === 'background' && l.visible) {
+        l.source = 'custom'
+        l.assetId = assetId
+        l.aspect = assets.value[assetId]?.aspect ?? l.aspect
+        break // 布局与渲染取列表第一个可见背景层
+      }
+    }
+    return list
+  }
+
   /** 全部照片独立水印的纯数据快照，供导出 Worker 使用 */
   function perImageSnapshot(): Record<string, WatermarkLayer[]> {
     const out: Record<string, WatermarkLayer[]> = {}
     for (const [id, list] of Object.entries(perImage.value)) {
-      out[id] = structuredClone(toRaw(list))
+      const copy = structuredClone(toRaw(list))
+      out[id] = bgOverrides.value[id] ? withBackgroundOverride(copy, bgOverrides.value[id]) : copy
+    }
+    // 「仅当前照片使用」的自定义背景：生成完整图层副本（背景层替换素材），
+    // 复用 perImageLayers 通道带到导出，exporter 无需感知覆盖机制
+    for (const [id, assetId] of Object.entries(bgOverrides.value)) {
+      if (id in out) continue
+      out[id] = withBackgroundOverride(structuredClone(toRaw(layers.value)), assetId)
     }
     return out
   }
 
   /** 收集图层引用到的素材（惰性把 dataUrl 还原成 Blob 供 Worker 使用）。 */
   async function assetPayloads(layerList: WatermarkLayer[]): Promise<{ id: string; blob: Blob }[]> {
-    const ids = new Set(layerList.filter((l) => l.type === 'image').map((l) => l.assetId))
+    const ids = new Set<string>()
+    for (const l of layerList) {
+      if (l.type === 'image') ids.add(l.assetId)
+      else if (l.type === 'background' && l.source === 'custom' && l.assetId) ids.add(l.assetId)
+    }
+    // 「仅当前照片」的背景覆盖图同样要给 Worker
+    for (const assetId of Object.values(bgOverrides.value)) ids.add(assetId)
     const out: { id: string; blob: Blob }[] = []
     for (const id of ids) {
       const a = assets.value[id]
@@ -381,7 +472,13 @@ export const useWatermarkStore = defineStore('watermark', () => {
   /** 序列化一组图层（连同它们引用的素材）：模板保存与目录持久化共用 */
   function serializeList(list: WatermarkLayer[]): { layers: WatermarkLayer[]; assets: SerializedAsset[] } {
     const raw = toRaw(list)
-    const used = new Set(raw.filter((l) => l.type === 'image').map((l) => (l as ImageLayer).assetId))
+    const used = new Set<string>()
+    for (const l of raw) {
+      if (l.type === 'image') used.add((l as ImageLayer).assetId)
+      else if (l.type === 'background' && l.source === 'custom' && l.assetId) used.add(l.assetId)
+    }
+    // 背景「仅当前照片」覆盖引用的素材一并序列化，否则持久化后图就丢了
+    for (const assetId of Object.values(bgOverrides.value)) used.add(assetId)
     const assetsOut: SerializedAsset[] = []
     for (const a of Object.values(assets.value)) {
       if (used.has(a.id)) assetsOut.push({ id: a.id, name: a.name, dataUrl: a.dataUrl, aspect: a.aspect })
@@ -496,6 +593,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
       // 素材缓存是会话级的：同 id 已经加载过就不覆盖
       if (!assets.value[a.id]) assets.value[a.id] = { ...a, blob: null }
     }
+    bgOverrides.value = data.bgOverrides ? { ...data.bgOverrides } : {}
   }
 
   let persistTimer: number | null = null
@@ -511,7 +609,11 @@ export const useWatermarkStore = defineStore('watermark', () => {
     if (!layers.value.length && !readStored(scopeKey.value)) return
     try {
       // 恒写「项目级」水印：正在编辑某张照片的独立水印时，不能把它顶成项目默认
-      window.localStorage.setItem(scopedStorageKey(scopeKey.value), JSON.stringify(serializeList(layers.value)))
+      const payload = serializeList(layers.value)
+      const data: StoredWatermark = Object.keys(bgOverrides.value).length
+        ? { ...payload, bgOverrides: { ...toRaw(bgOverrides.value) } }
+        : payload
+      window.localStorage.setItem(scopedStorageKey(scopeKey.value), JSON.stringify(data))
     } catch {
       /* 素材过大等情况直接放弃持久化 */
     }
@@ -532,6 +634,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
   function restoreState(
     nextLayers: WatermarkLayer[],
     nextPerImage: Record<string, WatermarkLayer[]>,
+    nextBgOverrides?: Record<string, string>,
   ): void {
     layers.value = nextLayers.map((l) => migrateLayer(deepClone(l)))
     const im: Record<string, WatermarkLayer[]> = {}
@@ -539,6 +642,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
       im[id] = list.map((l) => migrateLayer(deepClone(l)))
     }
     perImage.value = im
+    if (nextBgOverrides) bgOverrides.value = { ...nextBgOverrides }
     selectedId.value = editTarget()[0]?.id ?? null
     schedulePersist()
   }
@@ -566,6 +670,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     scopeKey.value = key
     layers.value = []
     perImage.value = key ? (perImageByScope.get(key) ?? {}) : {}
+    bgOverrides.value = {}
     editId.value = null
     selectedId.value = null
     if (!key) return
@@ -651,6 +756,11 @@ export const useWatermarkStore = defineStore('watermark', () => {
     update,
     addText,
     addBorderLayer,
+    addBackgroundLayer,
+    addBackgroundAsset,
+    setBgOverride,
+    bgOverrideFor,
+    bgOverrides,
     addImageFile,
     replaceImageFile,
     addImageLayer,
