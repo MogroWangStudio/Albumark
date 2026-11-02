@@ -70,6 +70,11 @@ button:hover:not(:disabled):not(.on) {
 button.on {
   background: var(--raised);
   color: var(--text);
+  /* 选中块要在分段底上明确浮出：暗色下 --raised 与容器底（--hover）亮度太接近，
+     细描边勾出边界、微投影提示凸起（浅色主题下描边同样让选中轮廓更清楚） */
+  box-shadow:
+    inset 0 0 0 1px var(--line-strong),
+    0 1px 3px rgba(0, 0, 0, 0.3);
 }
 button:disabled {
   opacity: 0.4;
