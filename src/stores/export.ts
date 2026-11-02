@@ -1,8 +1,8 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { buildZip, runExport } from '@/core/exporter'
-import { writeFilesToPublicFolder } from '@/core/fs'
-import { isCapacitor, isTauri, pickDirectory, revealInFolder, saveZip, writeFilesToDir } from '@/core/platform'
+import { writeFilesToPublicFolder, writeFilesToShareCache } from '@/core/fs'
+import { isCapacitor, isTauri, pickDirectory, revealInFolder, saveZip, shareFiles, writeFilesToDir } from '@/core/platform'
 import type { Crop } from '@/types/adjust'
 import { useAdjustStore } from './adjust'
 import { useImagesStore } from './images'
@@ -18,7 +18,7 @@ export const useExportStore = defineStore('export', () => {
   const longEdge = ref(0) // 0 = 原始尺寸
   const pattern = ref('{name}')
   const format = ref<'jpg' | 'png'>('jpg')
-  const mode = ref<'zip' | 'folder'>('zip')
+  const mode = ref<'zip' | 'folder' | 'share'>('zip')
   /** JPG 导出保留源照片 EXIF（方向、尺寸已按导出结果校正；缩略图不带出） */
   const keepExif = ref(true)
 
@@ -28,6 +28,8 @@ export const useExportStore = defineStore('export', () => {
   const current = ref('')
   const errors = ref<string[]>([])
   const resultPath = ref<string | null>(null)
+  /** 分享模式导出结果的 file:// URI，完成后可再次调起分享面板 */
+  const shareUris = ref<string[]>([])
 
   const progress = computed(() => (total.value ? done.value / total.value : 0))
 
@@ -35,8 +37,10 @@ export const useExportStore = defineStore('export', () => {
     if (phase.value === 'running' || !images.items.length) return
     errors.value = []
     resultPath.value = null
+    shareUris.value = []
 
-    if (mode.value === 'folder' && !isTauri && !isCapacitor) {
+    // 分享与文件夹逐张写入都是原生能力，浏览器不支持
+    if (mode.value !== 'zip' && !isTauri && !isCapacitor) {
       toast('浏览器版本仅支持导出 ZIP，已自动切换', 'error')
       mode.value = 'zip'
     }
@@ -100,7 +104,16 @@ export const useExportStore = defineStore('export', () => {
         return
       }
 
-      if (mode.value === 'folder') {
+      if (mode.value === 'share') {
+        // 安卓分享：写入应用缓存（不留公共目录副本），导出完成即调起系统分享面板
+        const list = [...outputs.entries()].map(([name, bytes]) => ({ name, bytes }))
+        shareUris.value = await writeFilesToShareCache(list)
+        try {
+          await shareFiles(shareUris.value)
+        } catch {
+          /* 面板被取消或调起失败：照片已导出，可从完成界面再次分享 */
+        }
+      } else if (mode.value === 'folder') {
         const list = [...outputs.entries()].map(([name, bytes]) => ({ name, bytes }))
         if (isTauri && dir) {
           await writeFilesToDir(dir, list)
@@ -127,6 +140,17 @@ export const useExportStore = defineStore('export', () => {
 
   function reset(): void {
     phase.value = 'idle'
+    shareUris.value = []
+  }
+
+  /** 完成界面再次调起分享面板（照片仍在应用缓存，无需重新导出） */
+  async function reshare(): Promise<void> {
+    if (!shareUris.value.length) return
+    try {
+      await shareFiles(shareUris.value)
+    } catch {
+      toast('分享失败，请重试', 'error')
+    }
   }
 
   async function openResult(): Promise<void> {
@@ -146,9 +170,11 @@ export const useExportStore = defineStore('export', () => {
     current,
     errors,
     resultPath,
+    shareUris,
     progress,
     run,
     reset,
+    reshare,
     openResult,
   }
 })

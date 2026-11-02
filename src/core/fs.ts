@@ -197,6 +197,41 @@ export async function writeFilesToPublicFolder(
   return `Documents/Albumark/${sub}`
 }
 
+/**
+ * 安卓分享：把成批文件写入应用缓存 share/ 子目录，返回可直接交给系统分享
+ * 面板的 file:// URI（getUri 对应用内部目录返回本地文件 URI，Share 插件
+ * 再经 FileProvider 转为可授权的 content URI）。写入前清掉上次遗留，
+ * 缓存目录由系统按需回收，不在用户的公共目录留副本。
+ */
+export async function writeFilesToShareCache(
+  files: { name: string; bytes: ArrayBuffer }[],
+): Promise<string[]> {
+  const m = await capacitor()
+  await m.Filesystem.readdir({ path: 'share', directory: m.Directory.Cache })
+    .then((res) =>
+      Promise.all(
+        res.files.map((f) =>
+          m.Filesystem.deleteFile({ path: `share/${f.name}`, directory: m.Directory.Cache }).catch(
+            () => undefined,
+          ),
+        ),
+      ),
+    )
+    .catch(() => undefined) /* 首次分享时目录还不存在，视为已清空 */
+  const uris: string[] = []
+  for (const f of files) {
+    await m.Filesystem.writeFile({
+      path: `share/${f.name}`,
+      directory: m.Directory.Cache,
+      data: bytesToBase64(new Uint8Array(f.bytes)),
+      recursive: true,
+    })
+    const { uri } = await m.Filesystem.getUri({ path: `share/${f.name}`, directory: m.Directory.Cache })
+    uris.push(uri)
+  }
+  return uris
+}
+
 /* ---------- JSON 清单读写 ---------- */
 
 export async function readJsonFile(path: string): Promise<unknown | null> {

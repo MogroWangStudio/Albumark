@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { FolderOpen, Package } from 'lucide-vue-next'
+import { FolderOpen, Package, Share2 } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
@@ -18,6 +18,8 @@ const finished = computed(() => ex.phase === 'done')
 const exportable = computed(() => images.items.some((i) => i.blob))
 /** 文件夹逐张写入：桌面自选目录，安卓写入公共 Documents；浏览器不支持 */
 const canFolder = isTauri || isCapacitor
+/** 系统分享面板：移动端专属 */
+const canShare = isCapacitor
 
 const LONG_EDGE_PRESETS = ['0', '2560', '1920', '1280']
 
@@ -40,8 +42,15 @@ function onCustomLongEdge(e: Event): void {
 
 const modeModel = computed({
   get: () => ex.mode,
-  set: (v: unknown) => (ex.mode = v as 'zip' | 'folder'),
+  set: (v: unknown) => (ex.mode = v as 'zip' | 'folder' | 'share'),
 })
+
+/** 安卓多一项「分享」；桌面与浏览器没有系统分享面板，不占位置 */
+const modeOptions = computed(() => [
+  { value: 'zip', label: 'ZIP 压缩包' },
+  { value: 'folder', label: '文件夹（逐张写入）', disabled: !canFolder },
+  ...(canShare ? [{ value: 'share', label: '分享' }] : []),
+])
 
 const formatModel = computed({
   get: () => ex.format,
@@ -141,16 +150,12 @@ async function start(): Promise<void> {
       </div>
       <div class="field">
         <span class="fl">导出方式</span>
-        <AppSegment
-          v-model="modeModel"
-          small
-          :options="[
-            { value: 'zip', label: 'ZIP 压缩包' },
-            { value: 'folder', label: '文件夹（逐张写入）', disabled: !canFolder },
-          ]"
-        />
+        <AppSegment v-model="modeModel" small :options="modeOptions" />
         <p v-if="modeModel === 'folder'" class="mode-hint">
           {{ isTauri ? '选择一个文件夹，照片逐张写入其中。' : '照片逐张写入公共 Documents/Albumark/ 下的按时间命名的文件夹。' }}
+        </p>
+        <p v-else-if="modeModel === 'share'" class="mode-hint">
+          导出完成后打开系统分享面板，选择应用直接发送，不在公共目录留副本。
         </p>
       </div>
       <AppButton variant="primary" class="start" :disabled="!exportable" @click="start">
@@ -185,6 +190,9 @@ async function start(): Promise<void> {
         <div class="actions">
           <AppButton v-if="ex.resultPath && isTauri" @click="ex.openResult()">
             <FolderOpen :size="15" />打开所在文件夹
+          </AppButton>
+          <AppButton v-if="canShare && ex.shareUris.length" @click="ex.reshare()">
+            <Share2 :size="15" />分享
           </AppButton>
           <AppButton variant="primary" @click="ex.reset()">完成</AppButton>
         </div>

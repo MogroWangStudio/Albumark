@@ -127,6 +127,13 @@ export async function revealInFolder(path: string): Promise<void> {
   await revealItemInDir(path)
 }
 
+/** 安卓调起系统分享面板：files 为 file:// URI 列表（见 fs.writeFilesToShareCache）。 */
+export async function shareFiles(files: string[], dialogTitle = '分享照片'): Promise<void> {
+  if (!isCapacitor || !files.length) return
+  const { Share } = await import('@capacitor/share')
+  await Share.share({ files, dialogTitle })
+}
+
 function downloadBlob(bytes: BlobPart, name: string): void {
   const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }))
   const a = document.createElement('a')
