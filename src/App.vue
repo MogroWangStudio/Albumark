@@ -428,7 +428,8 @@ let capBack: PluginListenerHandle | null = null
 const BACK_EXIT_WINDOW = 2600
 let lastBackAt = 0
 
-/** 安卓原生返回：逐级收起浮层与页面，主界面需两次返回才退出（退出前 flush 数据） */
+/** 安卓原生返回：浮层逐级收起；工作项目内返回 = 保存并回到主菜单（返回链的
+ *  最后一级，需两次返回才退出，退出前 flush 数据） */
 async function onAndroidBack(): Promise<void> {
   if (ctxState.value) {
     ctxState.value = null
@@ -446,8 +447,15 @@ async function onAndroidBack(): Promise<void> {
     view.value = 'main'
     return
   }
-  if (inProject.value && panelOpen.value) {
+  // 工作项目内返回：自动保存项目并退回工作区主菜单（与顶栏「工作区」同一动作）。
+  // 面板是会话状态随项目收起；裁剪草稿按「离开裁剪页」的同一语义先落给当前照片
+  if (inProject.value) {
     panelOpen.value = false
+    if (adjust.cropMode) {
+      adjust.commitCropDraft(images.activeId)
+      adjust.panel = 'adjust'
+    }
+    await ws.closeProject()
     return
   }
   const now = Date.now()
