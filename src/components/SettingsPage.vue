@@ -8,6 +8,8 @@ import AppSwitch from '@/components/ui/AppSwitch.vue'
 import BootScreen from '@/components/BootScreen.vue'
 import FontPickerDialog from '@/components/FontPickerDialog.vue'
 import LogoMark from '@/components/brand/LogoMark.vue'
+import LogoText from '@/components/brand/LogoText.vue'
+import PlainstructMark from '@/components/brand/PlainstructMark.vue'
 import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platform'
 import {
   checkForUpdate,
@@ -190,6 +192,11 @@ const progressText = computed(() =>
 )
 
 const isDownloading = computed(() => updateState.value === 'downloading')
+
+/** 开发者工作室网站（Plainstruct），与项目主页同一外部打开通道 */
+function openStudioSite(): void {
+  void openReleasePage('https://plainstruct.mogrowangstudio.top')
+}
 
 /* ---------- 数据位置（仅桌面） ---------- */
 
@@ -447,6 +454,10 @@ async function relaunchOobe(): Promise<void> {
 
       <section class="group">
         <h2>关于</h2>
+        <!-- 软件文字标识：与顶栏左上角同一品牌资产，居中展示 -->
+        <div class="brand-lockup" aria-hidden="true">
+          <LogoText class="brand-logo" />
+        </div>
         <div class="row">
           <div class="text">
             <span class="label">版本</span>
@@ -492,6 +503,13 @@ async function relaunchOobe(): Promise<void> {
           <AppButton size="sm" variant="ghost" @click="openReleasePage('https://github.com/MogroWangStudio/Albumark')">
             <ExternalLink :size="13" />打开
           </AppButton>
+        </div>
+        <!-- 开发者：Plainstruct 工作室标识，点击打开工作室网站 -->
+        <div class="dev">
+          <span class="dev-label">开发者</span>
+          <button class="studio" title="Plainstruct 工作室" @click="openStudioSite">
+            <PlainstructMark class="studio-logo" />
+          </button>
         </div>
       </section>
     </div>
@@ -904,6 +922,51 @@ async function relaunchOobe(): Promise<void> {
 }
 .update-hint.err {
   color: var(--danger);
+}
+/* 软件文字标识：与顶栏同一品牌资产，居中作为关于板块的开篇 */
+.brand-lockup {
+  display: flex;
+  justify-content: center;
+  margin: 2px 0 14px;
+}
+.brand-logo {
+  height: 22px;
+  width: auto;
+  display: block;
+}
+/* 开发者：Plainstruct 工作室标识，居中收尾，点击打开工作室网站 */
+.dev {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+}
+.dev-label {
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+.studio {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
+}
+.studio:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.studio:active {
+  transform: scale(0.97);
+}
+.studio-logo {
+  height: 15px;
+  width: auto;
+  display: block;
 }
 .spin {
   animation: rotate 0.9s linear infinite;
