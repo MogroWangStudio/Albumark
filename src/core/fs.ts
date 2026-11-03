@@ -62,6 +62,103 @@ export function baseName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path
 }
 
+/** 去掉最后一段的父目录路径（重命名定位父目录用；根路径返回空串） */
+export function parentPath(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean)
+  parts.pop()
+  return parts.join('/')
+}
+
+/** 单个文件的字节大小（导出统计用；路径为 Data 内相对路径或桌面绝对路径） */
+export async function fileSize(path: string, toDocuments = false): Promise<number> {
+  if (isTauri) {
+    const f = await import('@tauri-apps/plugin-fs')
+    const info = await f.stat(path)
+    return info.isFile ? info.size : 0
+  }
+  const m = await capacitor()
+  const st = await m.Filesystem.stat({
+    path,
+    directory: toDocuments ? m.Directory.Documents : m.Directory.Data,
+  })
+  return st.type === 'file' ? Number(st.size ?? 0) : 0
+}
+
+export interface SequentialWriter {
+  write(chunk: Uint8Array): Promise<void>
+  close(): Promise<void>
+}
+
+/**
+ * 打开一个顺序写文件的句柄（流式导出用，避免整包驻留内存）。
+ * 桌面走 plugin-fs 的 create() 文件句柄分块写；安卓首块 writeFile、
+ * 后续 appendFile（base64 分块传输）。toDocuments 选择公共 Documents
+ * （安卓导出目的地），默认应用数据目录。
+ */
+export async function openWriter(path: string, toDocuments = false): Promise<SequentialWriter> {
+  if (isTauri) {
+    const f = await import('@tauri-apps/plugin-fs')
+    const handle = await f.create(path)
+    return {
+      write: async (chunk) => {
+        await handle.write(chunk)
+      },
+      close: () => handle.close(),
+    }
+  }
+  const m = await capacitor()
+  const directory = toDocuments ? m.Directory.Documents : m.Directory.Data
+  let started = false
+  return {
+    write: async (chunk) => {
+      const b64 = bytesToBase64(chunk)
+      if (!started) {
+        started = true
+        await m.Filesystem.writeFile({ path, directory, data: b64, recursive: true })
+      } else {
+        await m.Filesystem.appendFile({ path, directory, data: b64 })
+      }
+    },
+    close: async () => {
+      /* 从未写入过也要落一个空文件，保持目标可见 */
+      if (!started) {
+        started = true
+        await m.Filesystem.writeFile({ path, directory, data: '', recursive: true })
+      }
+    },
+  }
+}
+
+/**
+ * 递归复制整个文件夹（工作项目 / 工作目录导出为文件夹）。
+ * 安卓用 Filesystem.copy 一次整树复制（原生支持跨目录）；
+ * 桌面手写递归 readDir + mkdir + copyFile。
+ */
+export async function copyDir(from: string, to: string, toDocuments = false): Promise<void> {
+  if (isTauri) {
+    const f = await import('@tauri-apps/plugin-fs')
+    const copyTree = async (src: string, dest: string): Promise<void> => {
+      await f.mkdir(dest, { recursive: true })
+      for (const e of await f.readDir(src)) {
+        if (!e.name) continue
+        const s = await joinPath(src, e.name)
+        const d = await joinPath(dest, e.name)
+        if (e.isDirectory) await copyTree(s, d)
+        else await f.copyFile(s, d)
+      }
+    }
+    await copyTree(from, to)
+    return
+  }
+  const m = await capacitor()
+  await m.Filesystem.copy({
+    from,
+    to,
+    directory: m.Directory.Data,
+    toDirectory: toDocuments ? m.Directory.Documents : m.Directory.Data,
+  })
+}
+
 export async function readFile(path: string): Promise<Uint8Array> {
   if (isTauri) {
     const fs = await import('@tauri-apps/plugin-fs')

@@ -9,16 +9,20 @@ import {
   HardDrive,
   Images,
   Layers,
+  MoreHorizontal,
+  Pencil,
   Trash2,
 } from 'lucide-vue-next'
 import LogoMark from '@/components/brand/LogoMark.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
+import AppDropdown from '@/components/ui/AppDropdown.vue'
+import ExportProjectDialog from '@/components/ExportProjectDialog.vue'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
 import { isTauri } from '@/core/platform'
 import { useSettingsStore } from '@/stores/settings'
 import { useWatermarkStore } from '@/stores/watermark'
-import { useWorkspaceStore, type WorkDirMeta } from '@/stores/workspace'
+import { useWorkspaceStore, type ProjectMeta, type WorkDirMeta } from '@/stores/workspace'
 
 /**
  * 工作区页面：OOBE（仅桌面）→ 工作区总览（工作目录列表 + 工作项目卡片）。
@@ -92,6 +96,27 @@ async function confirmRemove(): Promise<void> {
   // 删除失败时配置应当原样保留，否则用户重试时水印已经找不回来了
   if (!(await ws.removeProject(meta))) return
   wm.forgetProject(meta.id)
+}
+
+/* 重命名：目录与项目共用一个对话框，按 kind 分派到对应 action */
+const renameTarget = ref<{ kind: 'project' | 'dir'; meta: ProjectMeta | WorkDirMeta } | null>(null)
+const renameName = ref('')
+/** 导出目标：交给 ExportProjectDialog */
+const exportTarget = ref<{ kind: 'project' | 'dir'; name: string; path: string } | null>(null)
+
+function startRename(kind: 'project' | 'dir', meta: ProjectMeta | WorkDirMeta): void {
+  renameTarget.value = { kind, meta }
+  renameName.value = meta.name
+}
+
+async function confirmRename(): Promise<void> {
+  const t = renameTarget.value
+  if (!t) return
+  const ok =
+    t.kind === 'project'
+      ? await ws.renameProject(t.meta as ProjectMeta, renameName.value)
+      : await ws.renameDir(t.meta as WorkDirMeta, renameName.value)
+  if (ok) renameTarget.value = null
 }
 
 function fmtDate(t: number): string {
@@ -177,13 +202,20 @@ onMounted(() => {
               >
                 <ArrowLeftRight :size="13" />使用
               </button>
-              <button
-                class="dir-rm"
-                title="移除记录（不删除文件）"
-                @click.stop="removeDirTarget = d"
+              <AppDropdown
+                align="right"
+                :items="[
+                  { label: '重命名', action: () => startRename('dir', d) },
+                  { label: '导出…', action: () => (exportTarget = { kind: 'dir', name: d.name, path: d.path }) },
+                  { label: '移除记录', danger: true, action: () => (removeDirTarget = d) },
+                ]"
               >
-                <Trash2 :size="13" />
-              </button>
+                <template #trigger>
+                  <button class="dir-tool" title="目录操作" @click.stop>
+                    <MoreHorizontal :size="13" />
+                  </button>
+                </template>
+              </AppDropdown>
             </li>
           </ul>
           <p v-else class="empty">还没有工作目录</p>
@@ -213,20 +245,36 @@ onMounted(() => {
             </div>
 
             <div v-if="ws.projects.length" class="grid">
-              <button v-for="p in ws.projects" :key="p.id" class="prj-card" @click="ws.openProject(p)">
+              <!-- div[role=button]：卡片内要挂操作菜单，button 不能嵌套 button -->
+              <div
+                v-for="p in ws.projects"
+                :key="p.id"
+                class="prj-card"
+                role="button"
+                tabindex="0"
+                @click="ws.openProject(p)"
+                @keyup.enter="ws.openProject(p)"
+              >
                 <span class="prj-icon"><Images :size="17" /></span>
                 <span class="prj-name">{{ p.name }}</span>
                 <span class="prj-count">{{ p.count }} 张照片</span>
                 <span v-if="p.createdAt" class="prj-date">{{ fmtDate(p.createdAt) }}</span>
-                <span
-                  class="prj-rm"
-                  role="button"
-                  aria-label="删除项目"
-                  @click.stop="removeTarget = { id: p.id, name: p.name }"
+                <AppDropdown
+                  class="prj-menu"
+                  align="right"
+                  :items="[
+                    { label: '重命名', action: () => startRename('project', p) },
+                    { label: '导出…', action: () => (exportTarget = { kind: 'project', name: p.name, path: p.path }) },
+                    { label: '删除', danger: true, action: () => (removeTarget = { id: p.id, name: p.name }) },
+                  ]"
                 >
-                  <Trash2 :size="13" />
-                </span>
-              </button>
+                  <template #trigger>
+                    <span class="prj-rm" role="button" aria-label="项目操作" title="重命名 / 导出 / 删除">
+                      <MoreHorizontal :size="13" />
+                    </span>
+                  </template>
+                </AppDropdown>
+              </div>
             </div>
             <p v-else class="empty">这个目录里还没有工作项目</p>
           </template>
@@ -289,6 +337,28 @@ onMounted(() => {
         </AppButton>
       </div>
     </AppDialog>
+
+    <!-- 重命名：目录与项目共用，确认后磁盘改名并同步记录 -->
+    <AppDialog
+      :open="!!renameTarget"
+      :title="renameTarget?.kind === 'dir' ? '重命名工作目录' : '重命名工作项目'"
+      :width="380"
+      @close="renameTarget = null"
+    >
+      <input
+        v-model="renameName"
+        class="text-input"
+        placeholder="新名称"
+        @keyup.enter="confirmRename"
+      />
+      <div class="confirm-btns">
+        <AppButton variant="ghost" @click="renameTarget = null">取消</AppButton>
+        <AppButton variant="primary" @click="confirmRename"><Pencil :size="13" />重命名</AppButton>
+      </div>
+    </AppDialog>
+
+    <!-- 导出：文件详情 + ZIP/文件夹选择，确认后打包或复制 -->
+    <ExportProjectDialog :open="!!exportTarget" :target="exportTarget" @close="exportTarget = null" />
   </div>
 </template>
 
@@ -458,6 +528,21 @@ onMounted(() => {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
+/* 目录行的操作菜单触发钮：中性悬停（危险动作收进菜单内） */
+.dir-tool {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--text-3);
+  transition: color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
+}
+.dir-tool:hover {
+  color: var(--text);
+  background: var(--hover);
+}
 .mark {
   width: 108px;
   height: auto;
@@ -545,6 +630,7 @@ h1 {
   border: 1px solid var(--line);
   background: var(--bg);
   text-align: left;
+  cursor: pointer;
   transition:
     border-color var(--dur-hover) var(--ease-soft),
     background var(--dur-hover) var(--ease-soft),
@@ -578,28 +664,31 @@ h1 {
   color: var(--text-3);
   opacity: 0.8;
 }
-.prj-rm {
+/* 项目卡右上角的操作菜单：容器负责定位与悬停显现，触发钮只管视觉 */
+.prj-menu {
   position: absolute;
   top: 8px;
   right: 8px;
+  opacity: 0;
+  transition: opacity var(--dur-hover) var(--ease-soft);
+}
+.prj-card:hover .prj-menu {
+  opacity: 1;
+}
+.prj-rm {
   width: 22px;
   height: 22px;
   display: grid;
   place-items: center;
   border-radius: 6px;
   color: var(--text-3);
-  opacity: 0;
   transition:
-    opacity var(--dur-hover) var(--ease-soft),
     color var(--dur-hover) var(--ease-soft),
     background var(--dur-hover) var(--ease-soft);
 }
-.prj-card:hover .prj-rm {
-  opacity: 1;
-}
 .prj-rm:hover {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--text);
+  background: var(--hover);
 }
 .empty {
   color: var(--text-3);

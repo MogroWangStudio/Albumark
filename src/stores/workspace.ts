@@ -286,7 +286,67 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return out
   }
 
-  /* ---------- 工作项目 ---------- */
+  /* ---------- 重命名（磁盘文件夹改名 + 记录重新引导） ---------- */
+
+  /**
+   * 重命名工作项目：文件夹改名，清单内的名称同步更新。项目 id 在
+   * albumark.json 内、与文件夹名无关——水印等按 id 记录的数据不随
+   * 改名丢失；显示名优先取 manifest.name，因此两者都要改。
+   */
+  async function renameProject(meta: ProjectMeta, raw: string): Promise<boolean> {
+    const clean = sanitizeDirName(raw)
+    if (!fsAvailable || !clean || clean === meta.name) return false
+    const nextPath = await fs.joinPath(fs.parentPath(meta.path), clean)
+    if (await fs.exists(nextPath)) {
+      toast('同名文件夹已存在，换一个名字', 'error')
+      return false
+    }
+    try {
+      await fs.renamePath(meta.path, nextPath)
+    } catch {
+      toast('重命名失败，文件夹可能正被占用', 'error')
+      return false
+    }
+    // 清单的 name 写在新路径上：失败不致命（显示回落为文件夹名）
+    const m = (await fs.readJsonFile(await fs.joinPath(nextPath, MANIFEST))) as ProjectManifest | null
+    if (m) {
+      m.name = clean
+      await fs.writeJsonFile(await fs.joinPath(nextPath, MANIFEST), m)
+    }
+    await scanProjects()
+    return true
+  }
+
+  /**
+   * 重命名工作目录：磁盘改名 + workdir.json 记录同步——启动按 path
+   * 精确匹配恢复目录，不同步更新记录会让目录在重启后失联。
+   */
+  async function renameDir(meta: WorkDirMeta, raw: string): Promise<boolean> {
+    const clean = sanitizeDirName(raw)
+    if (!fsAvailable || !clean || clean === meta.name) return false
+    const nextPath = await fs.joinPath(fs.parentPath(meta.path), clean)
+    if (await fs.exists(nextPath)) {
+      toast('同名文件夹已存在，换一个名字', 'error')
+      return false
+    }
+    try {
+      await fs.renamePath(meta.path, nextPath)
+    } catch {
+      toast('重命名失败，文件夹可能正被占用', 'error')
+      return false
+    }
+    dirs.value = dirs.value.map((d) =>
+      d.path === meta.path ? { ...d, path: nextPath, name: clean } : d,
+    )
+    if (dir.value?.path === meta.path) {
+      dir.value = { ...dir.value, path: nextPath, name: clean }
+      // 当前目录下的项目 path 全部随目录变化：重扫拿新路径
+      await scanProjects()
+    } else {
+      await persistDir()
+    }
+    return true
+  }
 
   async function createProject(name: string): Promise<boolean> {
     if (!fsAvailable || !dir.value) return false
@@ -636,6 +696,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     adoptDir,
     scanProjects,
     createProject,
+    renameProject,
+    renameDir,
     openProject,
     openEphemeralProject,
     closeProject,

@@ -93,11 +93,7 @@ export async function saveZip(
   bytes: Uint8Array<ArrayBuffer>,
 ): Promise<string | null> {
   if (isTauri) {
-    const { save } = await import('@tauri-apps/plugin-dialog')
-    const path = await save({
-      defaultPath: suggestedName,
-      filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
-    })
+    const path = await pickSavePath(suggestedName)
     if (!path) return null
     const fs = await import('@tauri-apps/plugin-fs')
     await fs.writeFile(path, bytes)
@@ -105,6 +101,17 @@ export async function saveZip(
   }
   downloadBlob(bytes, suggestedName)
   return null
+}
+
+/** 桌面端「另存为」对话框：只取目标路径（流式导出先拿路径再分块写盘）。 */
+export async function pickSavePath(suggestedName: string): Promise<string | null> {
+  if (!isTauri) return null
+  const { save } = await import('@tauri-apps/plugin-dialog')
+  const path = await save({
+    defaultPath: suggestedName,
+    filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
+  })
+  return path ?? null
 }
 
 export async function fetchImageBlob(url: string): Promise<Blob> {
