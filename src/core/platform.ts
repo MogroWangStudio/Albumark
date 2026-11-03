@@ -71,6 +71,18 @@ export async function pickImagePaths(title = '选择照片'): Promise<string[]> 
   return Array.isArray(paths) ? paths : paths ? [paths] : []
 }
 
+/** 桌面端选择一个 ZIP 归档，返回绝对路径（取消返回 null）。 */
+export async function pickZipPath(title = '导入工作项目'): Promise<string | null> {
+  if (!isTauri) return null
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const path = await open({
+    multiple: false,
+    title,
+    filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
+  })
+  return typeof path === 'string' ? path : null
+}
+
 /** 桌面端读取文件字节。 */
 export async function readFileBytes(path: string): Promise<Uint8Array> {
   const fs = await import('@tauri-apps/plugin-fs')

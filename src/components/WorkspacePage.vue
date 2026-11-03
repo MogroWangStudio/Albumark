@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
+  ArchiveRestore,
   ArrowLeftRight,
   ArrowRight,
   Check,
@@ -18,6 +19,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
 import ExportProjectDialog from '@/components/ExportProjectDialog.vue'
+import ImportProjectDialog from '@/components/ImportProjectDialog.vue'
 import type { ContextMenuItem } from '@/components/AppContextMenu.vue'
 import { useLongPress } from '@/core/longpress'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
@@ -106,6 +108,8 @@ const renameTarget = ref<{ kind: 'project' | 'dir'; meta: ProjectMeta | WorkDirM
 const renameName = ref('')
 /** 导出目标：交给 ExportProjectDialog */
 const exportTarget = ref<{ kind: 'project' | 'dir'; name: string; path: string } | null>(null)
+/** 导入工作项目对话框（ZIP / 桌面端文件夹 → 当前工作目录） */
+const importOpen = ref(false)
 
 function startRename(kind: 'project' | 'dir', meta: ProjectMeta | WorkDirMeta): void {
   renameTarget.value = { kind, meta }
@@ -284,6 +288,9 @@ onMounted(() => {
                 <h1>工作项目</h1>
                 <span class="sec-count">{{ ws.projects.length }}</span>
               </div>
+              <AppButton size="sm" variant="ghost" @click="importOpen = true">
+                <ArchiveRestore :size="13" />导入项目
+              </AppButton>
             </header>
 
             <div class="create">
@@ -421,6 +428,7 @@ onMounted(() => {
 
     <!-- 导出：文件详情 + ZIP/文件夹选择，确认后打包或复制 -->
     <ExportProjectDialog :open="!!exportTarget" :target="exportTarget" @close="exportTarget = null" />
+    <ImportProjectDialog :open="importOpen" @close="importOpen = false" />
   </div>
 </template>
 

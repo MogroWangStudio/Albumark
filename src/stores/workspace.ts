@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
 import * as fs from '@/core/fs'
+import { probeZipManifest, unzipTo } from '@/core/archive'
 import { appDataDir, executableDir, isTauri, pickDirectory } from '@/core/platform'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
@@ -363,6 +364,74 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return true
   }
 
+  /* ---------- 导入工作项目（与导出对称：ZIP / 文件夹 → 当前工作目录） ---------- */
+
+  /** 当前目录内唯一的项目文件夹名：重名自动追加 (2) / (3)… */
+  async function uniqueProjectDir(display: string): Promise<string> {
+    const base = sanitizeDirName(display) || '导入的项目'
+    let name = base
+    for (let i = 2; dir.value && (await fs.exists(await fs.joinPath(dir.value.path, name))); i++) {
+      name = `${base} (${i})`
+    }
+    return name
+  }
+
+  /** 扫描结果里找刚导入的项目（按磁盘路径），找不到就按清单拼一个元信息 */
+  async function findImported(dest: string, m: ProjectManifest, dirName: string): Promise<ProjectMeta> {
+    const hit = projects.value.find((p) => p.path === dest)
+    if (hit) return hit
+    return { id: m.id, name: m.name || dirName, path: dest, createdAt: m.createdAt || 0, count: m.images.length }
+  }
+
+  /**
+   * 导入 ZIP 工作项目：探测清单（兼容「解压软件加壳」的单层包裹）→
+   * 流式解压到当前工作目录（峰值内存 ≈ 单个文件，安卓同样可用）→
+   * 项目 id 重新生成（同一项目多次导入互不干扰），名称与创建时间保留。
+   */
+  async function importProjectZip(
+    file: Blob,
+    fallbackName: string,
+    onProgress?: (done: number, name: string) => void,
+  ): Promise<ProjectMeta> {
+    if (!fsAvailable || !dir.value) throw new Error('尚未打开工作目录')
+    const probe = await probeZipManifest(file)
+    if (!probe) throw new Error('ZIP 里没有找到工作项目（缺少 albumark.json 清单）')
+    let manifest: ProjectManifest
+    try {
+      manifest = JSON.parse(new TextDecoder().decode(probe.bytes)) as ProjectManifest
+    } catch {
+      throw new Error('项目清单格式不正确')
+    }
+    if (!manifest || !Array.isArray(manifest.images)) throw new Error('项目清单格式不正确')
+    manifest.id = uid()
+    const dirName = await uniqueProjectDir(manifest.name || fallbackName)
+    const dest = await fs.joinPath(dir.value.path, dirName)
+    const written = await unzipTo(file, dest, {
+      prefix: probe.prefix,
+      manifestBytes: new TextEncoder().encode(JSON.stringify(manifest)),
+      onProgress,
+    })
+    if (written === 0) throw new Error('ZIP 里没有可导入的文件')
+    await scanProjects()
+    return await findImported(dest, manifest, dirName)
+  }
+
+  /** 导入文件夹工作项目（桌面）：校验清单 → 原样复制 → id 重新生成。 */
+  async function importProjectFolder(srcDir: string): Promise<ProjectMeta> {
+    if (!fsAvailable || !dir.value) throw new Error('尚未打开工作目录')
+    const raw = (await fs.readJsonFile(await fs.joinPath(srcDir, MANIFEST))) as ProjectManifest | null
+    if (!raw || !Array.isArray(raw.images)) {
+      throw new Error('所选文件夹不是工作项目（缺少 albumark.json 清单）')
+    }
+    const manifest: ProjectManifest = { ...raw, id: uid() }
+    const dirName = await uniqueProjectDir(manifest.name || fs.baseName(srcDir))
+    const dest = await fs.joinPath(dir.value.path, dirName)
+    await fs.copyDir(srcDir, dest)
+    await fs.writeJsonFile(await fs.joinPath(dest, MANIFEST), manifest)
+    await scanProjects()
+    return await findImported(dest, manifest, dirName)
+  }
+
   /** 读取单个图片文件，解码出尺寸、缩略图与 EXIF，返回可直接 patchItem 的增量 */
   async function hydrateOne(
     r: Pick<PrjImageRef, 'storedAs' | 'sourcePath'>,
@@ -698,6 +767,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     adoptDir,
     scanProjects,
     createProject,
+    importProjectZip,
+    importProjectFolder,
     renameProject,
     renameDir,
     openProject,
