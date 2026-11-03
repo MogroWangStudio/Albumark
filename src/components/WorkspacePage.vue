@@ -382,15 +382,20 @@ onMounted(() => {
       </div>
     </AppDialog>
 
-    <!-- 删除工作项目：移入回收站 -->
+    <!-- 删除工作项目：桌面移入系统回收站；移动端没有回收站，直接删除并明确警示 -->
     <AppDialog :open="!!removeTarget" title="删除工作项目" :width="380" @close="removeTarget = null">
       <p class="confirm-text">
-        将把文件夹「{{ removeTarget?.name }}」及其中的全部照片移入回收站。确定删除吗？
+        <template v-if="isTauri">
+          将把文件夹「{{ removeTarget?.name }}」及其中的全部照片移入回收站。确定删除吗？
+        </template>
+        <template v-else>
+          移动端没有回收站，项目「{{ removeTarget?.name }}」及其中的全部照片将被<strong>直接删除</strong>，此操作<strong>不可撤销</strong>。
+        </template>
       </p>
       <div class="confirm-btns">
         <AppButton variant="ghost" @click="removeTarget = null">取消</AppButton>
         <AppButton variant="danger" @click="confirmRemove">
-          <Trash2 :size="13" />移入回收站
+          <Trash2 :size="13" />{{ isTauri ? '移入回收站' : '直接删除' }}
         </AppButton>
       </div>
     </AppDialog>

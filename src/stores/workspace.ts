@@ -501,13 +501,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     void scanProjects()
   }
 
-  /** 删除项目：移入回收站（桌面系统回收站 / 安卓应用内 trash 文件夹）。UI 层负责确认。
-   *  返回是否真的删掉了：失败时项目原样保留，调用方不应清理它的附属数据。 */
+  /**
+   * 删除项目：桌面移入系统回收站（可找回）；安卓无系统回收站，直接删除
+   * （UI 确认框已警示不可撤销）。UI 层负责确认。
+   * 返回是否真的删掉了：失败时项目原样保留，调用方不应清理它的附属数据。 */
   async function removeProject(meta: ProjectMeta): Promise<boolean> {
     if (!fsAvailable) return false
     if (current.value?.path === meta.path) await closeProject()
     try {
-      await fs.trashPath(meta.path)
+      await fs.deletePath(meta.path)
     } catch {
       toast('无法移入回收站，项目保持原样', 'error')
       await scanProjects()
@@ -624,7 +626,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  /** 从项目移除图片：复制的源文件移入回收站，清单记录删除。 */
+  /** 从项目移除图片：复制的源文件随平台删除（桌面进回收站 / 安卓直接删除），清单记录删除。 */
   async function removeImage(id: string): Promise<void> {
     images.remove([id])
     if (!manifest.value) return
@@ -634,7 +636,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     manifest.value.images.splice(i, 1)
     if (ref.storedAs && current.value?.path && fsAvailable) {
       await fs
-        .trashPath(await fs.joinPath(current.value.path, 'images', ref.storedAs))
+        .deletePath(await fs.joinPath(current.value.path, 'images', ref.storedAs))
         .catch(() => undefined)
     }
     scheduleSave()

@@ -2,7 +2,8 @@
  * 统一文件系统抽象，workspace 层不再感知平台差异。
  * - 桌面（Tauri）：plugin-fs，路径为绝对路径；回收站走自定义 move_to_trash 命令。
  * - 安卓（Capacitor）：@capacitor/filesystem，全部文件都放在应用数据目录（Directory.Data）
- *   下，路径为相对该根的 POSIX 相对路径；系统没有回收站，删除改移入 Data 下的 trash/。
+ *   下，路径为相对该根的 POSIX 相对路径；系统没有回收站，删除为直接删除
+ *   （UI 层在删除前警示不可撤销）。
  * - 浏览器：无持久文件能力（fsAvailable=false），只支持内存临时项目。
  */
 import { isCapacitor, isTauri } from './platform'
@@ -16,9 +17,6 @@ export interface DirEntry {
 export const fsAvailable = isTauri || isCapacitor
 /** 沙箱文件系统：没有系统目录选择器，「选择工作目录」实为在应用数据目录内命名/发现 */
 export const sandboxedFs = isCapacitor && !isTauri
-
-/** 安卓端应用数据目录内的回收站文件夹 */
-const TRASH_DIR = 'AlbumarkData/trash'
 
 type FsModule = typeof import('@capacitor/filesystem')
 
@@ -251,25 +249,17 @@ export async function renamePath(from: string, to: string): Promise<void> {
 }
 
 /**
- * 移入回收站：桌面端走系统回收站（trash crate）；安卓端没有系统回收站，
- * 移入应用数据目录的 trash/ 文件夹（带时间戳避免重名），可手动找回。
+ * 删除文件 / 文件夹：桌面端移入系统回收站（trash crate，可找回）；
+ * 安卓端没有系统回收站，直接从磁盘删除、不可撤销——删除前的确认
+ * 警示由 UI 层负责（移动端文案明确「直接删除」）。
  */
-export async function trashPath(path: string): Promise<void> {
+export async function deletePath(path: string): Promise<void> {
   if (isTauri) {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('move_to_trash', { path })
     return
   }
-  const m = await capacitor()
-  await m.Filesystem.mkdir({ path: TRASH_DIR, directory: m.Directory.Data, recursive: true })
-  const stamp = Date.now().toString(36)
-  const name = baseName(path)
-  await m.Filesystem.rename({
-    from: path,
-    to: `${TRASH_DIR}/${stamp}-${name}`,
-    directory: m.Directory.Data,
-    toDirectory: m.Directory.Data,
-  })
+  await remove(path, true)
 }
 
 /**

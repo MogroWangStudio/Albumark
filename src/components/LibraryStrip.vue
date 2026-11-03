@@ -151,12 +151,16 @@ async function removeSelected(): Promise<void> {
 /* ---------- 移除确认：单张 / 所选 / 清空都先询问 ---------- */
 
 const confirmState = ref<{ kind: 'one' | 'selected' | 'all'; id?: string; name: string; count: number } | null>(null)
+/** 桌面移入系统回收站可找回；安卓没有系统回收站（浏览器为会话临时项目），
+ *  删除即直接从磁盘移除——警示文案必须如实区分，不能让用户以为还能找回 */
 const confirmText = computed(() => {
   const c = confirmState.value
   if (!c) return ''
-  if (c.kind === 'one') return `移除「${c.name}」？照片将移入回收站，仍可从回收站找回。`
-  if (c.kind === 'selected') return `移除所选的 ${c.count} 张照片？将移入回收站，仍可从回收站找回。`
-  return `清空全部 ${c.count} 张照片？`
+  const permanent = !isTauri
+  const suffix = permanent ? '将被直接删除，此操作不可撤销。' : '将移入回收站，仍可从回收站找回。'
+  if (c.kind === 'one') return `移除「${c.name}」？照片${suffix}`
+  if (c.kind === 'selected') return `移除所选的 ${c.count} 张照片？照片${suffix}`
+  return `清空全部 ${c.count} 张照片？照片${suffix}`
 })
 
 function askRemoveOne(id: string): void {
