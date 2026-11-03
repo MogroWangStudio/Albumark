@@ -21,19 +21,26 @@ function roundRectFill(ctx: Ctx2D, x: number, y: number, w: number, h: number, r
   ctx.fill()
 }
 
+/**
+ * 把文字 / 图片水印画到 ctx 上（边框 / 背景层由调用方处理）。
+ * pxScale：当前画布相对原图的折算系数——offset 是原图尺度固定像素
+ * （与边框宽度、背景偏移同一语义），预览 / 导出的画布尺寸不同时必须换算，
+ * 否则水印偏移会随渲染分辨率漂移、导出与预览不一致。
+ */
 export function drawLayers(
   ctx: Ctx2D,
   imgW: number,
   imgH: number,
   layers: WatermarkLayer[],
   assets: AssetMap,
+  pxScale = 1,
 ): void {
   const long = Math.max(imgW, imgH)
   for (const layer of layers) {
     // 边框层在 Worker 里扩展画布（有背景水印时为照片外围环带）；背景层垫在
     // 照片下方，由 Worker（导出）或预览主线程组合绘制——都不在此处
     if (layer.type === 'border' || layer.type === 'background' || !layer.visible) continue
-    const box = measureLayer(layer, imgW, imgH, ctx)
+    const box = measureLayer(layer, imgW, imgH, ctx, pxScale)
     ctx.save()
     ctx.globalAlpha = layer.opacity / 100
     ctx.globalCompositeOperation =

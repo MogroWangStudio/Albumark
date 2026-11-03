@@ -773,6 +773,25 @@ function drawBase(): void {
   resultMap.oy = oy
 }
 
+/**
+ * 叠加层坐标系相对原图的像素折算：水印 offset 是原图尺度固定像素
+ * （与边框宽度、背景偏移同一语义），绘制 / 命中 / 吸附 / 拖动写入必须
+ * 全部经它换算，否则预览偏移会随渲染分辨率（缩放查看、窗口大小）漂移，
+ * 导出也与所见不一致。正常路径 = 照片的取样缩放系数；裁剪编辑的粗渲
+ * 坐标系基于低清全图，比例随之单独计算。
+ */
+function overlayPxScale(): number {
+  const a = active.value
+  if (adjust.cropMode) {
+    if (cropPreviewBmp && a?.width) {
+      const s = cropSourceSize(a.width, a.height, adjust.cropDraft ?? undefined)
+      return s.w > 0 ? cropPreviewBmp.width / s.w : 1
+    }
+    return 1
+  }
+  return resultPhoto.renderScale || 1
+}
+
 /** 水印叠加层：主线程矢量绘制，拖动时只重绘这一层，不再经过 Worker。 */
 function drawOverlay(): void {
   const canvas = cvOverlay.value
@@ -796,6 +815,7 @@ function drawOverlay(): void {
   ctx.scale(scale, scale)
 
   const layers = resolvedLayers()
+  const pxScale = overlayPxScale()
   const draft = adjust.cropMode ? adjust.cropDraft : null
   if (draft) {
     // 水印画进裁剪框坐标系：预览位置与应用裁剪后完全一致
@@ -808,10 +828,10 @@ function drawOverlay(): void {
     ctx.rect(sx, sy, sw, sh)
     ctx.clip()
     ctx.translate(sx, sy)
-    drawLayers(ctx, sw, sh, layers, assetBmps)
+    drawLayers(ctx, sw, sh, layers, assetBmps, pxScale)
     ctx.restore()
   } else {
-    drawLayers(ctx, resultMap.w, resultMap.h, layers, assetBmps)
+    drawLayers(ctx, resultMap.w, resultMap.h, layers, assetBmps, pxScale)
   }
 
   if (draft) {
@@ -948,7 +968,7 @@ function updateSelRect(): void {
     selRect.value = null
     return
   }
-  const box = measureLayer(sel, resultMap.w, resultMap.h, measureContext())
+  const box = measureLayer(sel, resultMap.w, resultMap.h, measureContext(), overlayPxScale())
   const dpr = view.dpr || 1
   const s = resultMap.scale
   selRect.value = {
@@ -1156,11 +1176,12 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
   const threshold = 8 / cssPerImg // 8 CSS px 容差（图片 px）
   const imgW = resultMap.w
   const imgH = resultMap.h
+  const pxScale = overlayPxScale()
   const xs: number[] = [imgW / 2, imgW * 0.04, imgW * 0.96]
   const ys: number[] = [imgH / 2, imgH * 0.04, imgH * 0.96]
   for (const l of resolvedLayers()) {
     if (l.id === excludeId || !l.visible || l.type === 'border' || l.type === 'background') continue
-    const c = layerPivot(l, imgW, imgH)
+    const c = layerPivot(l, imgW, imgH, pxScale)
     xs.push(c.x)
     ys.push(c.y)
   }
@@ -1444,10 +1465,10 @@ function onPointerDown(e: PointerEvent): void {
     const l = list[i]
     // 边框层覆盖全画布、无独立位置，只能从图层列表选中
     if (l.type === 'border' || l.type === 'background' || !l.visible) continue
-    const box = measureLayer(resolvedLayer(l), resultMap.w, resultMap.h, measureContext())
+    const box = measureLayer(resolvedLayer(l), resultMap.w, resultMap.h, measureContext(), overlayPxScale())
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
-      const c = layerPivot(l, resultMap.w, resultMap.h)
+      const c = layerPivot(l, resultMap.w, resultMap.h, overlayPxScale())
       gesture = {
         type: 'layer',
         id: l.id,
@@ -1557,32 +1578,36 @@ function onPointerMove(e: PointerEvent): void {
     if (!layer || layer.type === 'border' || layer.type === 'background') return
     const a = anchorPoint(layer.anchor, imgW, imgH)
     snapLines.value = snapped.lines.x !== undefined || snapped.lines.y !== undefined ? snapped.lines : null
+    // 定位点与位移都在叠加层坐标系：写入前折算回原图尺度的 offset
+    const pxScale = overlayPxScale()
     wm.update(gid, {
-      offsetX: Math.round(cx - a.x),
-      offsetY: Math.round(cy - a.y),
+      offsetX: Math.round((cx - a.x) / pxScale),
+      offsetY: Math.round((cy - a.y) / pxScale),
     })
     return
   }
 
   if (gesture.type === 'photo') {
-    // 拖动照片在背景上的位置：主线程即时组合，Worker 不参与
+    // 拖动照片在背景上的位置：主线程即时组合，Worker 不参与。
+    // bg.offsetX 是原图尺度像素：屏幕位移与吸附量都按取样系数折算
     if (!resultMap.w || !bgLayout) return
     const dpr = view.dpr || 1
     const cssPerImg = resultMap.scale / dpr
-    let nx = gesture.startX + (e.clientX - gesture.startClient.x) / cssPerImg
-    let ny = gesture.startY + (e.clientY - gesture.startClient.y) / cssPerImg
+    const pxScale = resultPhoto.renderScale || 1
+    let nx = gesture.startX + (e.clientX - gesture.startClient.x) / cssPerImg / pxScale
+    let ny = gesture.startY + (e.clientY - gesture.startClient.y) / cssPerImg / pxScale
     // 吸附：照片中心贴画布中线与安全线（与水印拖动同一容差与参考线）
     if (settings.wmSnap) {
       const thr = 8 / cssPerImg
-      const cx = bgLayout.photoX + bgLayout.photoW / 2 + (nx - gesture.startX)
-      const cy = bgLayout.photoY + bgLayout.photoH / 2 + (ny - gesture.startY)
+      const cx = bgLayout.photoX + bgLayout.photoW / 2 + (nx - gesture.startX) * pxScale
+      const cy = bgLayout.photoY + bgLayout.photoH / 2 + (ny - gesture.startY) * pxScale
       const lines: { x?: number; y?: number } = {}
       let best = thr
       for (const x of [bgLayout.frameW / 2, bgLayout.frameW * 0.04, bgLayout.frameW * 0.96]) {
         const d = Math.abs(cx - x)
         if (d < best) {
           best = d
-          nx += x - cx
+          nx += (x - cx) / pxScale
           lines.x = x
         }
       }
@@ -1591,7 +1616,7 @@ function onPointerMove(e: PointerEvent): void {
         const d = Math.abs(cy - y)
         if (d < best) {
           best = d
-          ny += y - cy
+          ny += (y - cy) / pxScale
           lines.y = y
         }
       }

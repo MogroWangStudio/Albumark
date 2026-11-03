@@ -168,7 +168,8 @@ async function handle(job: RenderJob): Promise<void> {
       }
       paintPhotoOnBackground(fctx, band, w, h, layout, bg, borders, scale)
       measureCtx()
-      drawLayers(fctx, layout.frameW, layout.frameH, pictureLayers, assetCache)
+      // pxScale = scale：水印 offset 是原图尺度像素，与边框 / 背景偏移同样折算
+      drawLayers(fctx, layout.frameW, layout.frameH, pictureLayers, assetCache, scale)
       framed = frame
       fw = layout.frameW
       fh = layout.frameH
@@ -221,7 +222,8 @@ async function handle(job: RenderJob): Promise<void> {
 
   measureCtx()
   const outCtx = framed.getContext('2d') as OffscreenCanvasRenderingContext2D
-  drawLayers(outCtx, fw, fh, pictureLayers, assetCache)
+  // pxScale = scale：水印 offset 是原图尺度像素，预览（缩小渲染）与导出必须同一折算
+  drawLayers(outCtx, fw, fh, pictureLayers, assetCache, scale)
 
   if (job.want === 'bitmap') {
     const out = await createImageBitmap(framed)

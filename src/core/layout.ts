@@ -20,14 +20,18 @@ export function anchorPoint(anchor: string, imgW: number, imgH: number): { x: nu
   return { x: (col / 2) * imgW, y: (row / 2) * imgH }
 }
 
-/** 图层定位点：锚点 + 偏移（像素）。文字框锚点决定文字框的哪个位置对准这个点。 */
+/** 图层定位点：锚点 + 偏移（像素）。文字框锚点决定文字框的哪个位置对准这个点。
+ *  pxScale：当前画布相对原图的折算系数——offset 是原图尺度固定像素
+ *  （与边框宽度、背景偏移同一语义），预览 / 导出的画布尺寸不同时必须换算，
+ *  否则水印偏移会随渲染分辨率漂移、导出与预览不一致。 */
 export function layerPivot(
   l: TextLayer | ImageLayer | { anchor: TextLayer['anchor']; offsetX: number; offsetY: number },
   imgW: number,
   imgH: number,
+  pxScale = 1,
 ): { x: number; y: number } {
   const a = anchorPoint(l.anchor, imgW, imgH)
-  return { x: a.x + l.offsetX, y: a.y + l.offsetY }
+  return { x: a.x + l.offsetX * pxScale, y: a.y + l.offsetY * pxScale }
 }
 
 /** 文字框锚点在框内的位置（top-left = 左上角原点）。缺省按「居中」处理。 */
@@ -91,18 +95,20 @@ export function textMetrics(l: TextLayer, fontSize: number, ctx: Ctx2D): TextMet
   }
 }
 
-/** 计算图层在图片坐标系中的包围盒（含旋转前的宽高）。边框 / 背景层为全画布。 */
+/** 计算图层在图片坐标系中的包围盒（含旋转前的宽高）。边框 / 背景层为全画布。
+ *  pxScale 供 offset 的原图尺度折算（见 layerPivot）。 */
 export function measureLayer(
   layer: WatermarkLayer,
   imgW: number,
   imgH: number,
   mctx: Ctx2D,
+  pxScale = 1,
 ): LayerBox {
   if (layer.type === 'border' || layer.type === 'background') {
     return { cx: imgW / 2, cy: imgH / 2, w: imgW, h: imgH, rotation: 0 }
   }
   const long = Math.max(imgW, imgH)
-  const pivot = layerPivot(layer, imgW, imgH)
+  const pivot = layerPivot(layer, imgW, imgH, pxScale)
 
   if (layer.type === 'image') {
     const h = (layer.scale / 100) * long
