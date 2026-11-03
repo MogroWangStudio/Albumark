@@ -4,7 +4,8 @@ import { APP_VERSION } from './version'
 
 /**
  * GitHub Release 检查与自动更新：
- * - 检查：手动触发，不自动轮询（本地优先，不打扰）
+ * - 检查：手动触发，不自动轮询（本地优先，不打扰）；渠道分稳定（正式 Release）
+ *   与测试（含 Pre-Release）
  * - 更新：流式下载 Release 资产（带进度），平台各自的安装动作——
  *   Windows 便携版写替换脚本自动换新，macOS 打开 DMG，安卓交给系统安装器
  */
@@ -22,16 +23,49 @@ export interface UpdateInfo {
   assets: UpdateAsset[]
 }
 
-const LATEST_API = 'https://api.github.com/repos/MogroWangStudio/Albumark/releases/latest'
+const RELEASES_API = 'https://api.github.com/repos/MogroWangStudio/Albumark/releases'
+const LATEST_API = `${RELEASES_API}/latest`
 
-/** 逐段比较 semver：a 是否比 b 新 */
+/** 更新渠道：stable 只看正式 Release，beta 连 Pre-Release 测试版一起看 */
+export type UpdateChannel = 'stable' | 'beta'
+
+/** 解析版本号：主版本段 + 预发布标签（2.1.0-beta.1 → [2,1,0] + 'beta.1'） */
+function parseVersion(v: string): { core: number[]; pre: string } {
+  const clean = v.replace(/^v/, '')
+  const dash = clean.indexOf('-')
+  if (dash === -1) return { core: clean.split('.').map(Number), pre: '' }
+  return { core: clean.slice(0, dash).split('.').map(Number), pre: clean.slice(dash + 1) }
+}
+
+/** 比较 semver：a 是否比 b 新（支持 2.1.0-beta.1 这类预发布号，规则同 semver） */
 function isNewer(a: string, b: string): boolean {
-  const pa = a.replace(/^v/, '').split('.').map(Number)
-  const pb = b.replace(/^v/, '').split('.').map(Number)
-  for (let i = 0; i < 3; i++) {
-    const x = pa[i] ?? 0
-    const y = pb[i] ?? 0
+  const pa = parseVersion(a)
+  const pb = parseVersion(b)
+  const len = Math.max(pa.core.length, pb.core.length)
+  for (let i = 0; i < len; i++) {
+    const x = pa.core[i] ?? 0
+    const y = pb.core[i] ?? 0
     if (x !== y) return x > y
+  }
+  // 主版本段相同：正式版比预发布新；都是预发布按点段比较（数字段比数值，缺段的更旧）
+  if (!pa.pre || !pb.pre) return !pa.pre && !!pb.pre
+  const sa = pa.pre.split('.')
+  const sb = pb.pre.split('.')
+  for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
+    const x = sa[i]
+    const y = sb[i]
+    if (x === undefined) return false
+    if (y === undefined) return true
+    if (x === y) continue
+    const nx = Number(x)
+    const ny = Number(y)
+    const numCmp = !Number.isNaN(nx) && !Number.isNaN(ny)
+    // semver：数字标识符总比字母标识符新；同为字母按字典序
+    if (numCmp) return nx > ny
+    const xIsNum = !Number.isNaN(Number(x))
+    const yIsNum = !Number.isNaN(Number(y))
+    if (xIsNum !== yIsNum) return xIsNum
+    return x > y
   }
   return false
 }
@@ -49,28 +83,44 @@ async function fetchJson(url: string): Promise<unknown> {
   return await res.json()
 }
 
-/** 查询最新 Release；有新版本时返回更新信息，已是最新返回 null，异常时抛错。 */
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
-  const data = (await fetchJson(LATEST_API)) as {
-    tag_name?: string
-    html_url?: string
-    body?: string
-    draft?: boolean
-    prerelease?: boolean
-    assets?: { name?: string; browser_download_url?: string }[]
+interface ReleaseData {
+  tag_name?: string
+  html_url?: string
+  body?: string
+  draft?: boolean
+  prerelease?: boolean
+  assets?: { name?: string; browser_download_url?: string }[]
+}
+
+/**
+ * 按渠道查询最新版本；有新版本时返回更新信息，已是最新返回 null，异常时抛错。
+ * - 稳定通道：GitHub releases/latest，天然只含正式 Release
+ * - 测试通道：releases 列表取第一条非草稿（正式版或 Pre-Release，列表已按时间倒序）
+ */
+export async function checkForUpdate(channel: UpdateChannel = 'stable'): Promise<UpdateInfo | null> {
+  let release: ReleaseData | undefined
+  if (channel === 'beta') {
+    const list = (await fetchJson(`${RELEASES_API}?per_page=10`)) as ReleaseData[]
+    release = Array.isArray(list) ? list.find((r) => r && !r.draft && r.tag_name) : undefined
+  } else {
+    release = (await fetchJson(LATEST_API)) as ReleaseData
   }
-  if (!data || data.draft || data.prerelease || !data.tag_name) {
+  if (!release || release.draft || !release.tag_name) {
     throw new Error('响应格式异常')
   }
-  const latest = data.tag_name.replace(/^v/, '')
+  // 稳定通道若拿到 Pre-Release 说明响应异常（latest 本不该返回）
+  if (channel === 'stable' && release.prerelease) {
+    throw new Error('响应格式异常')
+  }
+  const latest = release.tag_name.replace(/^v/, '')
   if (!isNewer(latest, APP_VERSION)) return null
-  const assets = (data.assets ?? [])
+  const assets = (release.assets ?? [])
     .filter((a) => a.name && a.browser_download_url)
     .map((a) => ({ name: a.name as string, url: a.browser_download_url as string }))
   return {
     version: latest,
-    url: data.html_url ?? 'https://github.com/MogroWangStudio/Albumark/releases',
-    notes: data.body ?? '',
+    url: release.html_url ?? 'https://github.com/MogroWangStudio/Albumark/releases',
+    notes: release.body ?? '',
     assets,
   }
 }

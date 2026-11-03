@@ -13,6 +13,7 @@ import {
   checkForUpdate,
   downloadAndInstall,
   openReleasePage,
+  type UpdateChannel,
   type UpdateInfo,
 } from '@/core/updater'
 import { toast } from '@/stores/toast'
@@ -27,6 +28,7 @@ import {
   PREVIEW_CUSTOM_MIN,
   PREVIEW_QUALITIES,
   THEMES,
+  UPDATE_CHANNELS,
   pickBootStyle,
   useSettingsStore,
   type BootStyle,
@@ -143,13 +145,29 @@ async function checkUpdate(): Promise<void> {
   updateState.value = 'checking'
   updateInfo.value = null
   try {
-    const info = await checkForUpdate()
+    const info = await checkForUpdate(settings.updateChannel)
     updateInfo.value = info
     updateState.value = info ? 'available' : 'latest'
   } catch {
     updateState.value = 'error'
   }
 }
+
+/* 更新渠道：切换后旧渠道的检查结果不再适用，复位等待重新检查 */
+const channelModel = computed({
+  get: () => settings.updateChannel,
+  set: (v: unknown) => {
+    settings.updateChannel = v as UpdateChannel
+    updateState.value = 'idle'
+    updateInfo.value = null
+  },
+})
+
+const channelDesc = computed(() =>
+  settings.updateChannel === 'beta'
+    ? '同时检查 Pre-Release 测试版，可能不稳定'
+    : '仅检查正式发布的版本',
+)
 
 async function installUpdate(): Promise<void> {
   if (!updateInfo.value || updateState.value === 'downloading') return
@@ -458,6 +476,13 @@ async function relaunchOobe(): Promise<void> {
               </AppButton>
             </template>
           </div>
+        </div>
+        <div class="row">
+          <div class="text">
+            <span class="label">更新通道</span>
+            <p class="desc">{{ channelDesc }}</p>
+          </div>
+          <AppSegment v-model="channelModel" :options="UPDATE_CHANNELS" small />
         </div>
         <div class="row">
           <div class="text">

@@ -2,6 +2,7 @@ import { ref, watchEffect } from 'vue'
 import { defineStore } from 'pinia'
 import { registerPlugin } from '@capacitor/core'
 import { isCapacitor, isTauri } from '@/core/platform'
+import type { UpdateChannel } from '@/core/updater'
 
 export type ThemeMode = 'auto' | 'dark' | 'light' | 'darkroom' | 'cyanotype' | 'paper' | 'gallery'
 /**
@@ -25,6 +26,12 @@ export const PREVIEW_QUALITIES: { value: PreviewQuality; label: string }[] = [
 /** 自定义预览精度的取值范围（精修长边像素） */
 export const PREVIEW_CUSTOM_MIN = 600
 export const PREVIEW_CUSTOM_MAX = 2400
+
+/** 更新渠道选项：设置页分段控件与存档校验共用同一份清单 */
+export const UPDATE_CHANNELS: { value: UpdateChannel; label: string }[] = [
+  { value: 'stable', label: '稳定通道' },
+  { value: 'beta', label: '测试通道' },
+]
 
 export interface ThemeDef {
   id: ThemeMode
@@ -162,6 +169,8 @@ export interface AppSettings {
   previewQualityValue: number
   /** 水印拖动吸附与参考线 */
   wmSnap: boolean
+  /** 更新渠道：stable 只看正式 Release，beta 连 Pre-Release 一起看 */
+  updateChannel: UpdateChannel
   /** 软件数据目录（桌面端 OOBE 设置；空 = 便携版 exe 根目录） */
   dataDir: string
   /** 首次启动引导已完成 */
@@ -181,6 +190,7 @@ const DEFAULTS: AppSettings = {
   previewQuality: 'high',
   previewQualityValue: 1200,
   wmSnap: true,
+  updateChannel: 'stable',
   dataDir: '',
   // 非桌面端没有本地数据目录概念，直接跳过引导
   oobeDone: !isTauri,
@@ -205,6 +215,10 @@ function load(): AppSettings {
       data.previewQualityValue = Number.isFinite(pq)
         ? Math.min(PREVIEW_CUSTOM_MAX, Math.max(PREVIEW_CUSTOM_MIN, Math.round(pq / 50) * 50))
         : DEFAULTS.previewQualityValue
+      // 更新渠道：未知值回落稳定通道
+      if (!UPDATE_CHANNELS.some((c) => c.value === data.updateChannel)) {
+        data.updateChannel = DEFAULTS.updateChannel
+      }
       return data
     }
   } catch {
@@ -232,6 +246,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const previewQuality = ref<PreviewQuality>(initial.previewQuality)
   const previewQualityValue = ref(initial.previewQualityValue)
   const wmSnap = ref(initial.wmSnap)
+  const updateChannel = ref<UpdateChannel>(initial.updateChannel)
   const dataDir = ref(initial.dataDir)
   const oobeDone = ref(initial.oobeDone)
 
@@ -253,6 +268,7 @@ export const useSettingsStore = defineStore('settings', () => {
           previewQuality: previewQuality.value,
           previewQualityValue: previewQualityValue.value,
           wmSnap: wmSnap.value,
+          updateChannel: updateChannel.value,
           dataDir: dataDir.value,
           oobeDone: oobeDone.value,
         }),
@@ -322,6 +338,7 @@ export const useSettingsStore = defineStore('settings', () => {
     previewQuality,
     previewQualityValue,
     wmSnap,
+    updateChannel,
     dataDir,
     oobeDone,
   }
