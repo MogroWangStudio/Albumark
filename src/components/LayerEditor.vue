@@ -441,7 +441,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
 
 <template>
   <div class="panel-scroll">
-    <div class="row">
+    <div class="row adds">
       <AppButton size="sm" @click="wm.addText()"><Type :size="13" />文本</AppButton>
       <AppButton size="sm" @click="pickImage(null)"><ImageIcon :size="13" />图片 / SVG</AppButton>
       <AppButton size="sm" @click="wm.addBorderLayer()"><Frame :size="13" />边框</AppButton>
@@ -1182,6 +1182,12 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
+}
+/* 新增水印动作组：四种类型两行两列等宽排列——内容水印（文本 / 图片）
+   与画布装饰（边框 / 背景）各占一行，窄面板 / 大字号下也不会溢出或孤行 */
+.row.adds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
 }
 .flex {
   flex: 1;
