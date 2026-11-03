@@ -6,6 +6,7 @@ import {
   Eye,
   EyeOff,
   Frame,
+  GripVertical,
   Image as ImageIcon,
   Replace,
   RotateCcw,
@@ -399,6 +400,78 @@ function commitRename(): void {
   renamingId.value = null
 }
 
+/* ---------- 图层拖拽排序：按住手柄 1:1 跟手，其余项平滑让位，松手一步提交 ----------
+   拖拽期间不改数组（store 顺序保持不动），被拖项与让位项都用 transform 位移；
+   松手时一次性 moveTo——key 复用下 DOM 重排与 transform 清除同帧完成，
+   被拖项从拖放位置经 160ms 过渡滑进最终位置，不跳变 */
+
+const listEl = ref<HTMLUListElement | null>(null)
+const dragId = ref<string | null>(null)
+const dragFrom = ref(0)
+const dragTo = ref(0)
+const dragDy = ref(0)
+/** 行高（含列表间距）：拖起时按相邻项 offsetTop 实测 */
+const rowH = ref(1)
+
+let dragPointer = -1
+let dragStartY = 0
+
+function onDragStart(e: PointerEvent, index: number, id: string): void {
+  const list = listEl.value
+  if (!list) return
+  const items = [...list.children] as HTMLElement[]
+  const item = items[index]
+  const next = items[index + 1]
+  rowH.value = next ? next.offsetTop - item.offsetTop : item.offsetHeight
+  dragPointer = e.pointerId
+  dragStartY = e.clientY
+  dragFrom.value = index
+  dragTo.value = index
+  dragDy.value = 0
+  dragId.value = id
+  // capture 在手柄自身：move/up 持续派发到这里，指针离开手柄也不断线；
+  // 个别环境指针可能已失活，失败时降级为手柄就近跟踪，不让手势崩掉
+  try {
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  } catch {
+    /* 指针不活跃：忽略，跟随手柄本身的 move 即可 */
+  }
+  // 拖起与跨行落位各一次轻震：因果明确、不喧宾夺主
+  navigator.vibrate?.(10)
+}
+
+function onDragMove(e: PointerEvent): void {
+  if (dragId.value === null || e.pointerId !== dragPointer) return
+  const n = editLayers.value.length
+  // 夹在列表范围内：不拖出首尾之外
+  const raw = e.clientY - dragStartY
+  dragDy.value = Math.min((n - 1 - dragFrom.value) * rowH.value, Math.max(-dragFrom.value * rowH.value, raw))
+  const to = Math.min(n - 1, Math.max(0, dragFrom.value + Math.round(dragDy.value / rowH.value)))
+  if (to !== dragTo.value) {
+    dragTo.value = to
+    navigator.vibrate?.(5)
+  }
+}
+
+function onDragEnd(e: PointerEvent): void {
+  if (dragId.value === null || e.pointerId !== dragPointer) return
+  const from = dragFrom.value
+  const to = dragTo.value
+  dragPointer = -1
+  dragId.value = null
+  if (to !== from) wm.moveTo(from, to)
+}
+
+/** 非拖拽项在拖拽期间的让位位移：被跨过的项向目标方向平移一行 */
+function shiftOf(index: number): number {
+  if (dragId.value === null) return 0
+  const from = dragFrom.value
+  const to = dragTo.value
+  if (from < to && index > from && index <= to) return -rowH.value
+  if (to < from && index >= to && index < from) return rowH.value
+  return 0
+}
+
 async function saveTemplate(): Promise<void> {
   const name = saveName.value.trim()
   if (!name) return
@@ -457,14 +530,25 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
       <AppButton size="sm" variant="ghost" @click="showSave = false">取消</AppButton>
     </div>
 
-    <ul class="layers" v-if="editLayers.length">
+    <ul class="layers" ref="listEl" v-if="editLayers.length">
       <li
         v-for="(l, i) in editLayers"
         :key="l.id"
         class="layer"
-        :class="{ active: l.id === wm.selectedId }"
+        :class="{ active: l.id === wm.selectedId, dragging: l.id === dragId }"
+        :style="dragId !== null ? { transform: `translateY(${l.id === dragId ? dragDy : shiftOf(i)}px)` } : undefined"
         @click="wm.selectedId = l.id"
       >
+        <button
+          class="drag"
+          aria-label="拖动调整顺序"
+          @pointerdown="onDragStart($event, i, l.id)"
+          @pointermove="onDragMove"
+          @pointerup="onDragEnd"
+          @pointercancel="onDragEnd"
+        >
+          <GripVertical :size="13" />
+        </button>
         <Type v-if="l.type === 'text'" :size="13" class="icon" />
         <Frame v-else-if="l.type === 'border'" :size="13" class="icon" />
         <Wallpaper v-else-if="l.type === 'background'" :size="13" class="icon" />
@@ -1281,13 +1365,50 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
   padding: 5px 8px;
   border-radius: 8px;
   cursor: pointer;
-  transition: background var(--dur-hover) var(--ease-soft);
+  /* 让位与落位都走同一过渡：拖拽中其余项平移一行、松手后被拖项滑进新位置 */
+  transition:
+    background var(--dur-hover) var(--ease-soft),
+    transform 160ms var(--ease-soft);
+}
+/* 拖拽中的被拖项 1:1 跟手，不参与过渡 */
+.layer.dragging {
+  position: relative;
+  z-index: 1;
+  transition: none;
+  background: var(--raised);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.28);
+}
+@media (prefers-reduced-motion: reduce) {
+  .layer {
+    transition: background var(--dur-hover) var(--ease-soft);
+  }
 }
 .layer:hover {
   background: var(--hover);
 }
 .layer.active {
   background: var(--accent-soft);
+}
+/* 拖拽手柄：touch-action none 让触屏拖动不被滚动接管 */
+.drag {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  align-self: stretch;
+  margin-left: -2px;
+  color: var(--text-3);
+  cursor: grab;
+  touch-action: none;
+  opacity: 0.7;
+  transition: color var(--dur-hover) var(--ease-soft), opacity var(--dur-hover) var(--ease-soft);
+}
+.drag:hover {
+  color: var(--text);
+  opacity: 1;
+}
+.drag:active {
+  cursor: grabbing;
 }
 .layer .icon {
   color: var(--text-3);

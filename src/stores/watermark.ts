@@ -360,6 +360,14 @@ export const useWatermarkStore = defineStore('watermark', () => {
     list.splice(j, 0, l)
   }
 
+  /** 一步移动到目标位置（拖拽排序提交用）；越界或原地返回 */
+  function moveTo(from: number, to: number): void {
+    const list = editTarget()
+    if (from < 0 || from >= list.length || to < 0 || to >= list.length || from === to) return
+    const [l] = list.splice(from, 1)
+    list.splice(to, 0, l)
+  }
+
   /** 点击九宫格：设为定位锚点，偏移重置为该角落的默认边距；文字框锚点跟随（向图内展开）。 */
   function positionPreset(anchor: AnchorPreset): void {
     if (!selectedId.value) return
@@ -766,6 +774,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
     addImageLayer,
     remove,
     move,
+    moveTo,
     positionPreset,
     plainLayers,
     perImageSnapshot,
