@@ -1,27 +1,16 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
-import { Folder } from 'lucide-vue-next'
 import LayerEditor from '@/components/LayerEditor.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import { croppedSize } from '@/types/adjust'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useWatermarkStore } from '@/stores/watermark'
-import { useWorkspaceStore } from '@/stores/workspace'
 
 /** 悬浮面板的水印页：单独水印开关 + 图层编辑器，工作室入口在主窗口顶栏 */
 const images = useImagesStore()
 const wm = useWatermarkStore()
 const adjust = useAdjustStore()
-const ws = useWorkspaceStore()
-
-/** 作用域提示：这份水印只属于当前工作项目，切换到别的项目不会带过去 */
-const scopeName = computed(() => ws.current?.name ?? '未打开项目')
-const scopeHint = computed(() =>
-  ws.current
-    ? `水印只作用于工作项目「${ws.current.name}」，同目录的其他项目与其他工作目录都不受影响`
-    : '尚未打开工作项目，水印配置无处存放',
-)
 
 const activeId = computed(() => images.active?.id ?? null)
 const individual = computed(() => wm.isIndividual(activeId.value))
@@ -58,7 +47,6 @@ const imgH = computed(() => {
   <div class="panel-scroll">
     <div class="head">
       <h1>水印</h1>
-      <span class="scope" :title="scopeHint"><Folder :size="10" />{{ scopeName }}</span>
       <span class="fl">单独水印这张照片</span>
       <AppSwitch
         :model-value="individual"
@@ -95,26 +83,5 @@ const imgH = computed(() => {
   text-align: right;
   font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
-}
-/* 作用域徽标：目录名过长时省略，完整说明在悬停提示里 */
-.scope {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  max-width: 92px;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: var(--hover);
-  color: var(--text-3);
-  font-size: calc(10.5px * var(--ui-zoom, 1));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: none;
-}
-.scope svg {
-  flex: none;
-  opacity: 0.8;
 }
 </style>
