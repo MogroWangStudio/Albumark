@@ -110,7 +110,6 @@ async function start(): Promise<void> {
       <div v-if="ex.format === 'jpg'" class="switch-row">
         <div class="text">
           <span class="fl">保留 EXIF 元数据</span>
-          <p class="mode-hint">拍摄机型、参数、时间与 GPS 位置等信息将写入导出文件</p>
         </div>
         <AppSwitch v-model="ex.keepExif" />
       </div>
