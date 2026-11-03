@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
-import { FolderOpen, Package, Share2 } from 'lucide-vue-next'
+import { computed, nextTick, ref, watch } from 'vue'
+import { Check, FolderOpen, Images, Package, Share2 } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
@@ -15,7 +15,12 @@ const images = useImagesStore()
 
 const running = computed(() => ex.phase === 'running')
 const finished = computed(() => ex.phase === 'done')
-const exportable = computed(() => images.items.some((i) => i.blob))
+const exportable = computed(() => {
+  if (ex.scope === 'picked') {
+    return ex.pickedCount > 0 && images.items.some((i) => i.blob && ex.picked.has(i.id))
+  }
+  return images.items.some((i) => i.blob)
+})
 /** 文件夹逐张写入：桌面自选目录，安卓写入公共 Documents；浏览器不支持 */
 const canFolder = isTauri || isCapacitor
 /** 系统分享面板：移动端专属 */
@@ -57,6 +62,25 @@ const formatModel = computed({
   set: (v: unknown) => (ex.format = v as 'jpg' | 'png'),
 })
 
+/* ---------- 导出范围：全部 / 自选（缩略图网格勾选） ---------- */
+
+const scopeModel = computed({
+  get: () => ex.scope,
+  set: (v: unknown) => (ex.scope = v as 'all' | 'picked'),
+})
+
+// 切到自选时先全选：用户只需取消不要的，比从零勾选省力
+watch(
+  () => ex.scope,
+  (v) => {
+    if (v === 'picked' && ex.pickedCount === 0) ex.pickAll()
+  },
+)
+
+const scopeCountText = computed(() =>
+  ex.scope === 'picked' ? `已选 ${ex.pickedCount} / ${images.items.length} 张` : `共 ${images.items.length} 张`,
+)
+
 /* ---------- 文件名模板：点按令牌插入光标处 ---------- */
 
 const patternEl = ref<HTMLInputElement | null>(null)
@@ -87,6 +111,38 @@ async function start(): Promise<void> {
       <h1>导出</h1>
     </div>
     <template v-if="!running && !finished">
+      <div class="field">
+        <div class="scope-head">
+          <span class="fl">导出范围</span>
+          <span class="scope-count">{{ scopeCountText }}</span>
+        </div>
+        <AppSegment
+          v-model="scopeModel"
+          small
+          :options="[
+            { value: 'all', label: '全部照片' },
+            { value: 'picked', label: '自选' },
+          ]"
+        />
+        <!-- 自选网格：点击缩略图勾选 / 取消，超出面板高度内部滚动 -->
+        <div v-if="ex.scope === 'picked'" class="pick-grid">
+          <button
+            v-for="it in images.items"
+            :key="it.id"
+            class="pick-cell"
+            :class="{ on: ex.picked.has(it.id) }"
+            :title="it.baseName || it.name"
+            @click="ex.togglePick(it.id)"
+          >
+            <img v-if="it.thumbUrl" :src="it.thumbUrl" alt="" />
+            <span v-else class="no-thumb"><Images :size="14" /></span>
+            <span class="tick"><Check :size="11" /></span>
+          </button>
+        </div>
+        <p v-if="ex.scope === 'picked' && ex.pickedCount === 0" class="mode-hint">
+          尚未选择照片，点击上方缩略图勾选要导出的图片。
+        </p>
+      </div>
       <div class="field">
         <span class="fl">图像格式</span>
         <AppSegment
@@ -220,6 +276,79 @@ async function start(): Promise<void> {
 .fl {
   font-size: calc(12px * var(--ui-zoom, 1));
   color: var(--text-2);
+}
+/* 导出范围：标题行计数 + 自选缩略图网格 */
+.scope-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.scope-count {
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.pick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  gap: 6px;
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 2px;
+  margin: 0 -2px;
+}
+.pick-cell {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--hover);
+  cursor: pointer;
+  opacity: 0.45;
+  /* 未选中的淡显 + 选中态描边：一眼分清哪些会导出 */
+  transition: opacity var(--dur-hover) var(--ease-soft), box-shadow var(--dur-hover) var(--ease-soft),
+    transform 90ms ease-out;
+}
+.pick-cell:active {
+  transform: scale(0.94);
+}
+.pick-cell.on {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.pick-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.pick-cell .no-thumb {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+}
+.pick-cell .tick {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  /* deslop-ignore-next-line 19 勾选徽标取圆形：多选控件的通用语言，与开关圆点一致 */
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast, #1a1a1a);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity var(--dur-hover) var(--ease-soft), transform var(--dur-hover) var(--ease-soft);
+}
+.pick-cell.on .tick {
+  opacity: 1;
+  transform: scale(1);
 }
 .switch-row {
   display: flex;

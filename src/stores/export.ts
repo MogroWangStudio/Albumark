@@ -21,6 +21,25 @@ export const useExportStore = defineStore('export', () => {
   const mode = ref<'zip' | 'folder' | 'share'>('zip')
   /** JPG 导出保留源照片 EXIF（方向、尺寸已按导出结果校正；缩略图不带出） */
   const keepExif = ref(true)
+  /** 导出范围：all = 项目全部照片；picked = 手动勾选的子集 */
+  const scope = ref<'all' | 'picked'>('all')
+  /** 自选勾选的照片 id（scope = picked 时生效；会话级状态，不持久化） */
+  const picked = ref<Set<string>>(new Set())
+
+  /** 勾选/取消一张照片 */
+  function togglePick(id: string): void {
+    const next = new Set(picked.value)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    picked.value = next
+  }
+
+  /** 切到自选时的默认：先全选，用户再取消不要的，比从零勾选省力 */
+  function pickAll(): void {
+    picked.value = new Set(images.items.map((i) => i.id))
+  }
+
+  const pickedCount = computed(() => picked.value.size)
 
   const phase = ref<'idle' | 'running' | 'done'>('idle')
   const done = ref(0)
@@ -38,6 +57,14 @@ export const useExportStore = defineStore('export', () => {
     errors.value = []
     resultPath.value = null
     shareUris.value = []
+
+    // 自选范围：只导出勾选的照片（空选在面板上已禁用，这里防御兜底）
+    const list =
+      scope.value === 'picked' ? images.items.filter((i) => picked.value.has(i.id)) : images.items
+    if (!list.length) {
+      toast('没有选择要导出的照片', 'error')
+      return
+    }
 
     // 分享与文件夹逐张写入都是原生能力，浏览器不支持
     if (mode.value !== 'zip' && !isTauri && !isCapacitor) {
@@ -60,7 +87,7 @@ export const useExportStore = defineStore('export', () => {
     }
 
     phase.value = 'running'
-    total.value = images.items.length
+    total.value = list.length
     done.value = 0
     current.value = ''
 
@@ -73,7 +100,7 @@ export const useExportStore = defineStore('export', () => {
       const crops: Record<string, Crop> = {}
       for (const [id, c] of Object.entries(adjust.crops)) crops[id] = { ...c }
       const outputs = await runExport(
-        images.items,
+        list,
         {
           layers: wm.plainLayers(),
           adjustments: adjust.snapshotFor(null),
@@ -164,6 +191,11 @@ export const useExportStore = defineStore('export', () => {
     format,
     mode,
     keepExif,
+    scope,
+    picked,
+    pickedCount,
+    togglePick,
+    pickAll,
     phase,
     done,
     total,
