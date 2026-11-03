@@ -47,7 +47,7 @@ const imgH = computed(() => {
   <div class="panel-scroll">
     <div class="head">
       <h1>水印</h1>
-      <span class="fl">单独水印这张照片</span>
+      <span class="fl">水印仅适用于此图片</span>
       <AppSwitch
         :model-value="individual"
         :disabled="!activeId"
