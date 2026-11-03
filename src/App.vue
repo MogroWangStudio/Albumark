@@ -30,6 +30,7 @@ import { isCapacitor, isTauri, pickImagePaths } from '@/core/platform'
 import { projectMomentum, springTo, type SpringHandle } from '@/core/spring'
 import { baseName } from '@/core/fs'
 import { toast } from '@/stores/toast'
+import { closeCtxMenu, ctxMenu, openCtxMenu } from '@/stores/ctxMenu'
 import { useAdjustStore } from '@/stores/adjust'
 import { useAdjustPresetsStore } from '@/stores/adjustPresets'
 import { useHistoryStore } from '@/stores/history'
@@ -334,14 +335,15 @@ const panelBottomInset = computed(() => {
   return Math.min(vh * 0.46, 430) + 30
 })
 
-/* ---------- 自定义右键菜单 ---------- */
-
-const ctxState = ref<{ x: number; y: number; items: ContextMenuItem[] } | null>(null)
+/* ---------- 自定义右键菜单 ----------
+   菜单状态在 stores/ctxMenu.ts 共享：右键（预览 / 缩略图）与移动端
+   长按（工作区目录 / 项目）走同一个全局实例，安卓返回键与 Escape
+   的关闭处理也只看它。 */
 
 function openContextMenu(e: MouseEvent, items: ContextMenuItem[]): void {
   e.preventDefault()
   e.stopPropagation()
-  ctxState.value = { x: e.clientX, y: e.clientY, items }
+  openCtxMenu(e.clientX, e.clientY, items)
 }
 
 /** 全局兜底：除文本编辑场景外一律禁用原生右键菜单 */
@@ -431,8 +433,8 @@ let lastBackAt = 0
 /** 安卓原生返回：浮层逐级收起；工作项目内返回 = 保存并回到主菜单（返回链的
  *  最后一级，需两次返回才退出，退出前 flush 数据） */
 async function onAndroidBack(): Promise<void> {
-  if (ctxState.value) {
-    ctxState.value = null
+  if (ctxMenu.value) {
+    closeCtxMenu()
     return
   }
   if (importPreviewOpen.value) {
@@ -490,8 +492,8 @@ function onKeydown(e: KeyboardEvent): void {
   const typing =
     !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
   if (e.key === 'Escape') {
-    if (ctxState.value) {
-      ctxState.value = null
+    if (ctxMenu.value) {
+      closeCtxMenu()
       return
     }
     if (view.value === 'studio' || view.value === 'settings') {
@@ -653,10 +655,7 @@ onBeforeUnmount(() => {
       @close="importPreviewOpen = false"
       @confirm="confirmImport"
     />
-    <AppContextMenu
-      :state="ctxState"
-      @close="ctxState = null"
-    />
+    <AppContextMenu :state="ctxMenu" @close="closeCtxMenu" />
     <ToastHost />
 
     <input

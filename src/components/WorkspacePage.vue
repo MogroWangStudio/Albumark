@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -18,8 +18,11 @@ import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
 import ExportProjectDialog from '@/components/ExportProjectDialog.vue'
+import type { ContextMenuItem } from '@/components/AppContextMenu.vue'
+import { useLongPress } from '@/core/longpress'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
 import { isTauri } from '@/core/platform'
+import { openCtxMenu } from '@/stores/ctxMenu'
 import { useSettingsStore } from '@/stores/settings'
 import { useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore, type ProjectMeta, type WorkDirMeta } from '@/stores/workspace'
@@ -119,6 +122,54 @@ async function confirmRename(): Promise<void> {
   if (ok) renameTarget.value = null
 }
 
+/* 移动端长按菜单：触屏上 ⋯ 按钮不可见（hover 永不出现），长按是唯一入口。
+   菜单项与桌面下拉一致；目录的「删除」沿用「移除记录」语义（不删文件），
+   正在使用中的目录没有「打开」 */
+const coarseQuery = window.matchMedia('(pointer: coarse)')
+const isCoarse = ref(coarseQuery.matches)
+function onCoarseChange(e: MediaQueryListEvent): void {
+  isCoarse.value = e.matches
+}
+
+function openProjectMenu(p: ProjectMeta, x: number, y: number): void {
+  const items: ContextMenuItem[] = [
+    { label: '打开', action: () => void ws.openProject(p) },
+    { label: '重命名', action: () => startRename('project', p) },
+    { label: '导出…', action: () => (exportTarget.value = { kind: 'project', name: p.name, path: p.path }) },
+    { label: '删除', danger: true, action: () => (removeTarget.value = { id: p.id, name: p.name }) },
+  ]
+  openCtxMenu(x, y, items)
+}
+
+function openDirMenu(d: WorkDirMeta, x: number, y: number): void {
+  const items: ContextMenuItem[] = []
+  if (ws.dir?.path !== d.path) items.push({ label: '打开', action: () => void ws.useDir(d) })
+  items.push(
+    { label: '重命名', action: () => startRename('dir', d) },
+    { label: '导出…', action: () => (exportTarget.value = { kind: 'dir', name: d.name, path: d.path }) },
+    { label: '移除记录', danger: true, action: () => (removeDirTarget.value = d) },
+  )
+  openCtxMenu(x, y, items)
+}
+
+const dirPress = useLongPress((e) => {
+  const row = (e.target as HTMLElement | null)?.closest?.('[data-dir-path]') as HTMLElement | null
+  const d = ws.dirs.find((x) => x.path === row?.dataset.dirPath)
+  if (d) openDirMenu(d, e.clientX, e.clientY)
+})
+const prjPress = useLongPress((e) => {
+  const card = (e.target as HTMLElement | null)?.closest?.('[data-prj-id]') as HTMLElement | null
+  const p = ws.projects.find((x) => x.id === card?.dataset.prjId)
+  if (p) openProjectMenu(p, e.clientX, e.clientY)
+})
+
+onMounted(() => {
+  coarseQuery.addEventListener('change', onCoarseChange)
+})
+onBeforeUnmount(() => {
+  coarseQuery.removeEventListener('change', onCoarseChange)
+})
+
 function fmtDate(t: number): string {
   if (!t) return ''
   const d = new Date(t)
@@ -184,6 +235,8 @@ onMounted(() => {
               :key="d.path"
               class="dir-row"
               :class="{ active: ws.dir?.path === d.path }"
+              :data-dir-path="d.path"
+              v-on="dirPress"
             >
               <span class="dir-icon">
                 <Check v-if="ws.dir?.path === d.path" :size="14" />
@@ -203,6 +256,7 @@ onMounted(() => {
                 <ArrowLeftRight :size="13" />使用
               </button>
               <AppDropdown
+                v-if="!isCoarse"
                 align="right"
                 :items="[
                   { label: '重命名', action: () => startRename('dir', d) },
@@ -252,14 +306,17 @@ onMounted(() => {
                 class="prj-card"
                 role="button"
                 tabindex="0"
+                :data-prj-id="p.id"
                 @click="ws.openProject(p)"
                 @keyup.enter="ws.openProject(p)"
+                v-on="prjPress"
               >
                 <span class="prj-icon"><Images :size="17" /></span>
                 <span class="prj-name">{{ p.name }}</span>
                 <span class="prj-count">{{ p.count }} 张照片</span>
                 <span v-if="p.createdAt" class="prj-date">{{ fmtDate(p.createdAt) }}</span>
                 <AppDropdown
+                  v-if="!isCoarse"
                   class="prj-menu"
                   align="right"
                   :items="[
