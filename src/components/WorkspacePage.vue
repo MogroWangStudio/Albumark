@@ -268,10 +268,12 @@ onMounted(() => {
                   { label: '移除记录', danger: true, action: () => (removeDirTarget = d) },
                 ]"
               >
+                <!-- span 触发器：AppDropdown 外层已有 button，slot 内不可再嵌 button，
+                     也不能裸 @click.stop——冒泡被截断菜单永远打不开（与项目卡触发器同构） -->
                 <template #trigger>
-                  <button class="dir-tool" title="目录操作" @click.stop>
+                  <span class="dir-tool" role="button" title="目录操作">
                     <MoreHorizontal :size="13" />
-                  </button>
+                  </span>
                 </template>
               </AppDropdown>
             </li>
