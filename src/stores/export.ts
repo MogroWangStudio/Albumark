@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { buildZip, runExport } from '@/core/exporter'
+import { buildZip, estimateExportBytes, runExport } from '@/core/exporter'
 import { writeFilesToPublicFolder, writeFilesToShareCache } from '@/core/fs'
 import { isCapacitor, isTauri, pickDirectory, revealInFolder, saveZip, shareFiles, writeFilesToDir } from '@/core/platform'
 import type { Crop } from '@/types/adjust'
@@ -52,6 +52,60 @@ export const useExportStore = defineStore('export', () => {
 
   const progress = computed(() => (total.value ? done.value / total.value : 0))
 
+  /** 按当前设置组装导出载荷（真实导出与大小估算共用同一份配置） */
+  async function buildPayload() {
+    // 素材按「全局 + 各照片独立水印」引用的并集收集
+    const perImageLayers = wm.perImageSnapshot()
+    const allLayers = [...wm.plainLayers(), ...Object.values(perImageLayers).flat()]
+    const assets = await wm.assetPayloads(allLayers)
+    // 裁剪对象来自响应式存储，传 Worker 前拍平为纯数据
+    const crops: Record<string, Crop> = {}
+    for (const [id, c] of Object.entries(adjust.crops)) crops[id] = { ...c }
+    return {
+      layers: wm.plainLayers(),
+      adjustments: adjust.snapshotFor(null),
+      perImage: adjust.perImageSnapshot(),
+      crops,
+      perImageLayers,
+      assets,
+      quality: quality.value,
+      longEdge: longEdge.value,
+      pattern: pattern.value,
+      format: format.value,
+      keepExif: keepExif.value,
+    }
+  }
+
+  /** 范围内的照片列表（自选时按勾选过滤） */
+  function scopedItems() {
+    return scope.value === 'picked' ? images.items.filter((i) => picked.value.has(i.id)) : images.items
+  }
+
+  /* ---------- 大小预估：抽样实算 + 压缩率外推 ---------- */
+
+  const estimate = ref<number | null>(null)
+  const estimating = ref(false)
+  let estimateSeq = 0
+
+  async function refreshEstimate(): Promise<void> {
+    const seq = ++estimateSeq
+    const list = scopedItems()
+    if (!list.length || !list.some((i) => i.blob)) {
+      estimate.value = null
+      estimating.value = false
+      return
+    }
+    estimating.value = true
+    try {
+      const est = await estimateExportBytes(list, await buildPayload())
+      if (seq === estimateSeq) estimate.value = est
+    } catch {
+      if (seq === estimateSeq) estimate.value = null
+    } finally {
+      if (seq === estimateSeq) estimating.value = false
+    }
+  }
+
   async function run(): Promise<void> {
     if (phase.value === 'running' || !images.items.length) return
     errors.value = []
@@ -59,8 +113,7 @@ export const useExportStore = defineStore('export', () => {
     shareUris.value = []
 
     // 自选范围：只导出勾选的照片（空选在面板上已禁用，这里防御兜底）
-    const list =
-      scope.value === 'picked' ? images.items.filter((i) => picked.value.has(i.id)) : images.items
+    const list = scopedItems()
     if (!list.length) {
       toast('没有选择要导出的照片', 'error')
       return
@@ -92,28 +145,9 @@ export const useExportStore = defineStore('export', () => {
     current.value = ''
 
     try {
-      // 素材按「全局 + 各照片独立水印」引用的并集收集
-      const perImageLayers = wm.perImageSnapshot()
-      const allLayers = [...wm.plainLayers(), ...Object.values(perImageLayers).flat()]
-      const assets = await wm.assetPayloads(allLayers)
-      // 裁剪对象来自响应式存储，传 Worker 前拍平为纯数据
-      const crops: Record<string, Crop> = {}
-      for (const [id, c] of Object.entries(adjust.crops)) crops[id] = { ...c }
       const outputs = await runExport(
         list,
-        {
-          layers: wm.plainLayers(),
-          adjustments: adjust.snapshotFor(null),
-          perImage: adjust.perImageSnapshot(),
-          crops,
-          perImageLayers,
-          assets,
-          quality: quality.value,
-          longEdge: longEdge.value,
-          pattern: pattern.value,
-          format: format.value,
-          keepExif: keepExif.value,
-        },
+        await buildPayload(),
         Math.max(1, (navigator.hardwareConcurrency || 4) - 1),
         (d, t, name) => {
           done.value = d
@@ -196,6 +230,9 @@ export const useExportStore = defineStore('export', () => {
     pickedCount,
     togglePick,
     pickAll,
+    estimate,
+    estimating,
+    refreshEstimate,
     phase,
     done,
     total,

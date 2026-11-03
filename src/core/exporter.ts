@@ -132,3 +132,56 @@ export function buildZip(files: Map<string, ArrayBuffer>): Uint8Array<ArrayBuffe
   for (const [name, bytes] of files) data[name] = new Uint8Array(bytes)
   return zipSync(data, { level: 0 }) as Uint8Array<ArrayBuffer>
 }
+
+/**
+ * 估算导出总大小：均匀抽样（不超过 sampleCount 张）用与真实导出完全相同的
+ * 管线渲染编码——水印 / 裁剪 / 调节 / EXIF 拼回全部生效——再按「样本输出
+ * 字节 ÷ 源图字节」的压缩率外推全部范围的总和。范围内照片不超过样本数时
+ * 全量实算、无外推误差。没有可估样本（源文件全缺失）返回 null。
+ */
+export async function estimateExportBytes(
+  items: ImageItem[],
+  payload: ExportPayload,
+  sampleCount = 5,
+): Promise<number | null> {
+  const estimable = items.filter((i) => i.blob)
+  if (!estimable.length) return null
+  // 均匀取样覆盖大小分布；样本按各自完整配置（独立水印 / 裁剪）实算
+  const stride = Math.ceil(estimable.length / Math.min(sampleCount, estimable.length))
+  const samples = estimable.filter((_, i) => i % stride === 0)
+  const client = new RenderClient()
+  let ratioSum = 0
+  try {
+    for (const item of samples) {
+      const blob = item.blob
+      if (!blob) continue
+      const baseLayers = payload.perImageLayers[item.id] ?? payload.layers
+      const layers = baseLayers.map((l) =>
+        l.type === 'text'
+          ? { ...l, content: resolveTokens(l.content, item.exif, item.baseName) }
+          : l,
+      )
+      const { bytes: rendered, width, height } = await client.renderImage(
+        blob,
+        payload.assets,
+        layers,
+        payload.perImage[item.id] ?? payload.adjustments,
+        payload.longEdge,
+        payload.quality / 100,
+        payload.crops[item.id],
+        payload.format,
+      )
+      const bytes =
+        payload.keepExif && payload.format === 'jpg'
+          ? await withExif(rendered, blob, width, height)
+          : rendered
+      const src = blob.size || 1
+      ratioSum += bytes.byteLength / src
+    }
+  } finally {
+    client.terminate()
+  }
+  const avgRatio = ratioSum / samples.length
+  const srcTotal = estimable.reduce((n, i) => n + (i.blob?.size ?? 0), 0)
+  return Math.round(srcTotal * avgRatio)
+}

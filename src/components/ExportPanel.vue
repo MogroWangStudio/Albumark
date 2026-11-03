@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Check, FolderOpen, Images, Package, Share2 } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
@@ -79,6 +79,40 @@ watch(
 
 const scopeCountText = computed(() =>
   ex.scope === 'picked' ? `已选 ${ex.pickedCount} / ${images.items.length} 张` : `共 ${images.items.length} 张`,
+)
+
+/* ---------- 大小预估：设置 / 范围 / 照片清单变化后防抖重算 ---------- */
+
+function fmtSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${bytes} B`
+}
+
+const estimateText = computed(() =>
+  ex.estimating ? '估算中…' : ex.estimate != null ? `约 ${fmtSize(ex.estimate)}` : '',
+)
+
+let estimateTimer = 0
+function scheduleEstimate(): void {
+  window.clearTimeout(estimateTimer)
+  // 质量滑杆拖动会连续触发：停顿后才发起抽样渲染，避免估算排队堆积
+  estimateTimer = window.setTimeout(() => void ex.refreshEstimate(), 500)
+}
+onMounted(() => scheduleEstimate())
+watch(
+  () => [
+    ex.scope,
+    ex.picked,
+    ex.format,
+    ex.quality,
+    ex.longEdge,
+    ex.keepExif,
+    images.items.length,
+    images.items.map((i) => i.id).join(','),
+  ],
+  scheduleEstimate,
 )
 
 /* ---------- 文件名模板：点按令牌插入光标处 ---------- */
@@ -213,6 +247,9 @@ async function start(): Promise<void> {
           导出完成后打开系统分享面板，选择应用直接发送，不在公共目录留副本。
         </p>
       </div>
+      <p v-if="estimateText" class="estimate" :class="{ computing: ex.estimating }" aria-live="polite">
+        预计大小<strong>{{ estimateText }}</strong>
+      </p>
       <AppButton variant="primary" class="start" :disabled="!exportable" @click="start">
         <Package :size="15" />开始导出
       </AppButton>
@@ -365,6 +402,27 @@ async function start(): Promise<void> {
   font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
   line-height: 1.5;
+}
+/* 大小预估：抽样实算的近似值，随设置变化防抖刷新 */
+.estimate {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: calc(12px * var(--ui-zoom, 1));
+  color: var(--text-2);
+}
+.estimate strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  font-weight: 600;
+}
+.estimate.computing strong {
+  color: var(--text-3);
+  font-weight: 400;
 }
 .dest {
   margin: 6px 0 0;
