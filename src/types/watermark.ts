@@ -143,6 +143,12 @@ export interface BackgroundLayer {
   expandY: number
   /** 高斯模糊强度 0-100，按画布长边百分比折算模糊半径 */
   blur: number
+  /**
+   * 颜色遮罩：铺在背景图之上、照片之下的纯色叠层。
+   * overlayOpacity 0 = 关闭（缺省，兼容旧数据）；颜色为任意 CSS hex。
+   */
+  overlayColor?: string
+  overlayOpacity?: number
   /** 照片缩放百分比 30-150（100 = 原尺寸），超出画布部分被裁掉 */
   photoScale: number
   /** 照片相对画布中心的偏移（像素，原图尺度） */

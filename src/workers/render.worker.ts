@@ -5,6 +5,7 @@ import {
   blurRadiusPx,
   layoutBackgroundFrame,
   paintBorderBand,
+  paintOverlay,
   paintPhotoOnBackground,
   renderBlurredCover,
 } from '../core/bg'
@@ -165,6 +166,7 @@ async function handle(job: RenderJob): Promise<void> {
           blurRadiusPx(b, layout.frameW, layout.frameH),
         )
         fctx.drawImage(blurred, 0, 0)
+        paintOverlay(fctx, b, layout.frameW, layout.frameH)
       }
       paintPhotoOnBackground(fctx, band, w, h, layout, bg, borders, scale)
       measureCtx()

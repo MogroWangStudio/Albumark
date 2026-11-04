@@ -4,6 +4,7 @@ import {
   blurRadiusPx,
   layoutBackgroundFrame,
   paintBorderBand,
+  paintOverlay,
   paintPhotoOnBackground,
   renderBlurredCover,
 } from './bg'
@@ -134,6 +135,7 @@ export function paintComposed(
         0,
         0,
       )
+      paintOverlay(ctx, b, layout.frameW, layout.frameH)
     }
     paintPhotoOnBackground(ctx, band, baseW, baseH, layout, bg, borders, 1)
     drawLayers(ctx, layout.frameW, layout.frameH, others, assets)

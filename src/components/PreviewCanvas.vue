@@ -9,6 +9,7 @@ import {
   backgroundAspect,
   blurRadiusPx,
   layoutBackgroundFrame,
+  paintOverlay,
   paintPhotoOnBackground,
   renderBlurredCover,
   type BgFrameLayout,
@@ -734,10 +735,12 @@ function drawBase(): void {
   const light = document.documentElement.dataset.mode === 'light'
   if (layout) {
     bgLayout = layout
-    // 背景（列表靠前者更贴近照片 → 从末尾往前铺），模糊位图走缓存
+    // 背景（列表靠前者更贴近照片 → 从末尾往前铺），模糊位图走缓存；
+    // 每层铺完后叠各自的颜色遮罩（照片之下）
     for (let i = bgList.length - 1; i >= 0; i--) {
       const blurred = blurredCover(bgList[i], layout.frameW, layout.frameH)
       if (blurred) ctx.drawImage(blurred, 0, 0, layout.frameW, layout.frameH)
+      paintOverlay(ctx, bgList[i], layout.frameW, layout.frameH)
     }
     const borders = resolvedLayers().filter(
       (l): l is import('@/types/watermark').BorderLayer => l.type === 'border' && l.visible,

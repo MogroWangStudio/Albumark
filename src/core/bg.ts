@@ -34,6 +34,20 @@ export function backgroundAspect(bg: BackgroundLayer, photoW: number, photoH: nu
 }
 
 /**
+ * 在已铺好的背景图上叠加颜色遮罩（背景水印的可选色调层，照片之下）。
+ * 透明度为 0 时不绘制——缺省/旧数据无此字段即无遮罩。
+ */
+export function paintOverlay(ctx: BgCtx, bg: BackgroundLayer, frameW: number, frameH: number): void {
+  const opacity = (bg.overlayOpacity ?? 0) / 100
+  if (opacity <= 0 || !bg.overlayColor) return
+  ctx.save()
+  ctx.globalAlpha = opacity
+  ctx.fillStyle = bg.overlayColor
+  ctx.fillRect(0, 0, frameW, frameH)
+  ctx.restore()
+}
+
+/**
  * 画幅比例预设（fit=background 时可选）：free = 按背景图比例（原有行为）；
  * 其余表示画幅形状，**方向跟随照片**——横照片取预设的横版（4:5 → 5:4），
  * 竖照片取竖版（4:5 → 4:5），符合摄影画幅的方向直觉。

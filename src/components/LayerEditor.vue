@@ -387,6 +387,21 @@ const bgRatioModel = computed({
   },
 })
 
+/* 背景颜色遮罩：开关 = 不透明度是否大于 0；开启时给一个看得到的起点，
+   关闭时保留颜色只归零不透明度（再次开启回到原色调） */
+const bgOverlayOn = computed(() => (selectedBackground.value?.overlayOpacity ?? 0) > 0)
+function setOverlayOn(on: unknown): void {
+  if (!selectedBackground.value) return
+  if (on) {
+    wm.update(selectedBackground.value.id, {
+      overlayColor: selectedBackground.value.overlayColor ?? '#000000',
+      overlayOpacity: 35,
+    })
+  } else {
+    wm.update(selectedBackground.value.id, { overlayOpacity: 0 })
+  }
+}
+
 function layerName(l: WatermarkLayer): string {
   // 自定义名称优先（默认名「文本水印」视为未命名，继续显示内容前缀）
   if (l.name.trim() && l.name !== '文本水印') return l.name
@@ -898,6 +913,40 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
             :format="(v) => `${v.toFixed(1)}%`"
             @update:model-value="wm.update(selectedBackground!.id, { expandY: $event })"
             @reset="wm.update(selectedBackground!.id, { expandY: 12 })"
+          />
+        </template>
+      </section>
+      <section>
+        <h3>背景遮罩</h3>
+        <div class="switch-row">
+          <div class="text">
+            <span class="fl">颜色遮罩</span>
+            <p class="mode-hint">在背景图上叠一层纯色，压暗或统一背景色调；照片不受影响</p>
+          </div>
+          <AppSwitch
+            :model-value="bgOverlayOn"
+            @update:model-value="setOverlayOn($event)"
+          />
+        </div>
+        <template v-if="bgOverlayOn">
+          <div class="row-inline">
+            <span class="fl">遮罩颜色</span>
+            <span class="flex" />
+            <input
+              type="color"
+              class="color"
+              :value="selectedBackground.overlayColor ?? '#000000'"
+              @input="wm.update(selectedBackground!.id, { overlayColor: ($event.target as HTMLInputElement).value })"
+            />
+          </div>
+          <AppSlider
+            :model-value="selectedBackground.overlayOpacity ?? 0"
+            :min="0"
+            :max="100"
+            label="遮罩不透明度"
+            :format="(v) => `${Math.round(v)}%`"
+            @update:model-value="wm.update(selectedBackground!.id, { overlayOpacity: $event })"
+            @reset="wm.update(selectedBackground!.id, { overlayOpacity: 35 })"
           />
         </template>
       </section>
