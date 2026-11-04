@@ -4,7 +4,8 @@
    默认深色纯黑；主题由设置写入 <html data-theme="…"> 并同步 data-mode="light|dark"
    供 JS 判断明暗（画布投影、安卓状态栏等），auto 模式由 JS 跟随系统。
    个性主题取自摄影与印相工艺：暗房（安全灯下的相纸台）、蓝晒（普鲁士蓝印相）、
-   纸墨（宣纸与朱砂）、画廊（展墙与黄铜牌）。 */
+   红外（Aerochrome 品红幻影）、银盐（硒调灰紫）、纸墨（宣纸与朱砂）、
+   画廊（展墙与黄铜牌）、银版（达盖尔钴蓝）、叶绿素（叶片印相）。 */
 
 :root {
   color-scheme: dark;
@@ -152,6 +153,60 @@
   --shadow-panel: 0 6px 22px rgba(2, 8, 14, 0.45);
 }
 
+/* 红外：红外胶片（Aerochrome）把叶绿素反射成的那一抹品红。深酒红底、品红强调。 */
+:root[data-theme='infrared'] {
+  color-scheme: dark;
+  --bg: #180d12;
+  --canvas: #120a0e;
+  --surface: rgba(56, 30, 42, 0.82);
+  --surface-solid: #2c1a23;
+  --panel: #1f1319;
+  --raised: #38222d;
+  --hover: rgba(244, 200, 216, 0.06);
+  --active: rgba(244, 200, 216, 0.1);
+  --text: #f2e6ec;
+  --text-2: #b299a6;
+  --text-3: #826876;
+  --line: rgba(240, 210, 224, 0.09);
+  --line-strong: rgba(240, 210, 224, 0.18);
+  --accent: #d0608a;
+  --accent-strong: #b64e78;
+  --accent-contrast: #2a0714;
+  --accent-soft: rgba(208, 96, 138, 0.16);
+  --danger: #e0503f;
+  --ok: #7fc9a2;
+  --shadow-2: 0 8px 28px rgba(10, 2, 6, 0.55);
+  --shadow-3: 0 18px 56px rgba(10, 2, 6, 0.65);
+  --shadow-panel: 0 6px 22px rgba(10, 2, 6, 0.45);
+}
+
+/* 银盐：硒调过的相纸。冷黑底上一点灰紫，是定影后的余韵。 */
+:root[data-theme='silver'] {
+  color-scheme: dark;
+  --bg: #0f1012;
+  --canvas: #0a0b0d;
+  --surface: rgba(40, 42, 48, 0.8);
+  --surface-solid: #26282e;
+  --panel: #1a1c20;
+  --raised: #2e3138;
+  --hover: rgba(220, 214, 230, 0.06);
+  --active: rgba(220, 214, 230, 0.1);
+  --text: #eceaf0;
+  --text-2: #a8a6b2;
+  --text-3: #767482;
+  --line: rgba(226, 222, 236, 0.09);
+  --line-strong: rgba(226, 222, 236, 0.18);
+  --accent: #a583a0;
+  --accent-strong: #8e6d89;
+  --accent-contrast: #1f1420;
+  --accent-soft: rgba(165, 131, 160, 0.16);
+  --danger: #d96078;
+  --ok: #82c29a;
+  --shadow-2: 0 8px 28px rgba(4, 4, 8, 0.55);
+  --shadow-3: 0 18px 56px rgba(4, 4, 8, 0.65);
+  --shadow-panel: 0 6px 22px rgba(4, 4, 8, 0.45);
+}
+
 /* 纸墨：宣纸、墨字、一枚朱砂印。暖米纸底、朱红强调。 */
 :root[data-theme='paper'] {
   color-scheme: light;
@@ -204,6 +259,60 @@
   --shadow-2: 0 8px 28px rgba(58, 46, 26, 0.14);
   --shadow-3: 0 18px 56px rgba(58, 46, 26, 0.18);
   --shadow-panel: 0 6px 22px rgba(58, 46, 26, 0.11);
+}
+
+/* 银版：达盖尔银版画。冷银灰的镜面上，一点钴蓝的反光。 */
+:root[data-theme='daguerre'] {
+  color-scheme: light;
+  --bg: #f1f2f4;
+  --canvas: #e7e9ec;
+  --surface: rgba(250, 251, 253, 0.85);
+  --surface-solid: #fafbfd;
+  --panel: #f5f7f9;
+  --raised: #ffffff;
+  --hover: rgba(38, 50, 66, 0.05);
+  --active: rgba(38, 50, 66, 0.09);
+  --text: #1f2530;
+  --text-2: #5d6878;
+  --text-3: #8f9aab;
+  --line: rgba(40, 52, 70, 0.12);
+  --line-strong: rgba(40, 52, 70, 0.22);
+  --accent: #4a6fa5;
+  --accent-strong: #3a5a8c;
+  --accent-contrast: #f5f9ff;
+  --accent-soft: rgba(74, 111, 165, 0.13);
+  --danger: #b23a48;
+  --ok: #4d7d5c;
+  --shadow-2: 0 8px 28px rgba(40, 48, 62, 0.14);
+  --shadow-3: 0 18px 56px rgba(40, 48, 62, 0.18);
+  --shadow-panel: 0 6px 22px rgba(40, 48, 62, 0.11);
+}
+
+/* 叶绿素：叶绿素印相——影像直接晒在叶片上。米绿纸底、叶绿强调。 */
+:root[data-theme='chlorophyll'] {
+  color-scheme: light;
+  --bg: #f0f1e6;
+  --canvas: #e5e8d6;
+  --surface: rgba(250, 251, 242, 0.85);
+  --surface-solid: #fafbf2;
+  --panel: #f5f7ea;
+  --raised: #fffef8;
+  --hover: rgba(56, 70, 32, 0.05);
+  --active: rgba(56, 70, 32, 0.09);
+  --text: #27301c;
+  --text-2: #66704f;
+  --text-3: #96a07e;
+  --line: rgba(60, 74, 36, 0.12);
+  --line-strong: rgba(60, 74, 36, 0.22);
+  --accent: #5d7a3a;
+  --accent-strong: #4c6530;
+  --accent-contrast: #f7fbef;
+  --accent-soft: rgba(93, 122, 58, 0.14);
+  --danger: #ad3f50;
+  --ok: #3f8a68;
+  --shadow-2: 0 8px 28px rgba(52, 62, 28, 0.15);
+  --shadow-3: 0 18px 56px rgba(52, 62, 28, 0.19);
+  --shadow-panel: 0 6px 22px rgba(52, 62, 28, 0.12);
 }
 
 @media (prefers-reduced-transparency: reduce) {

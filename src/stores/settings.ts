@@ -4,7 +4,18 @@ import { registerPlugin } from '@capacitor/core'
 import { isCapacitor, isTauri } from '@/core/platform'
 import type { UpdateChannel } from '@/core/updater'
 
-export type ThemeMode = 'auto' | 'dark' | 'light' | 'darkroom' | 'cyanotype' | 'paper' | 'gallery'
+export type ThemeMode =
+  | 'auto'
+  | 'dark'
+  | 'light'
+  | 'darkroom'
+  | 'cyanotype'
+  | 'infrared'
+  | 'silver'
+  | 'paper'
+  | 'gallery'
+  | 'daguerre'
+  | 'chlorophyll'
 /**
  * 预览渲染质量：自适应 / 五档预设 / custom（自定义档位）。
  * 自适应按当前缩放实时决定渲染分辨率：放大补精度，缩小降分辨率；
@@ -44,7 +55,7 @@ export interface ThemeDef {
   swatch: { bg: string; canvas: string; accent: string; text: string; text2: string }
 }
 
-/** 全部主题：auto/dark/light 之外，四款取自摄影与印相工艺 */
+/** 全部主题：auto/dark/light 之外，八款取自摄影与印相工艺 */
 export const THEMES: ThemeDef[] = [
   {
     id: 'auto',
@@ -88,6 +99,20 @@ export const THEMES: ThemeDef[] = [
     swatch: { bg: '#0d1b28', canvas: '#081420', accent: '#5fa8cc', text: '#dde9f3', text2: '#5e7c93' },
   },
   {
+    id: 'infrared',
+    label: '红外',
+    hint: '红外胶片的品红幻影',
+    mode: 'dark',
+    swatch: { bg: '#180d12', canvas: '#120a0e', accent: '#d0608a', text: '#f2e6ec', text2: '#826876' },
+  },
+  {
+    id: 'silver',
+    label: '银盐',
+    hint: '硒调银盐相纸的冷黑与灰紫',
+    mode: 'dark',
+    swatch: { bg: '#0f1012', canvas: '#0a0b0d', accent: '#a583a0', text: '#eceaf0', text2: '#767482' },
+  },
+  {
     id: 'paper',
     label: '纸墨',
     hint: '宣纸、墨字、一枚朱砂印',
@@ -100,6 +125,20 @@ export const THEMES: ThemeDef[] = [
     hint: '展墙、卡纸与黄铜牌',
     mode: 'light',
     swatch: { bg: '#efebe3', canvas: '#e5e0d5', accent: '#86641f', text: '#221d15', text2: '#9a9080' },
+  },
+  {
+    id: 'daguerre',
+    label: '银版',
+    hint: '达盖尔银版：冷银灰上一点钴蓝',
+    mode: 'light',
+    swatch: { bg: '#f1f2f4', canvas: '#e7e9ec', accent: '#4a6fa5', text: '#1f2530', text2: '#8f9aab' },
+  },
+  {
+    id: 'chlorophyll',
+    label: '叶绿素',
+    hint: '叶片上晒出的绿影',
+    mode: 'light',
+    swatch: { bg: '#f0f1e6', canvas: '#e5e8d6', accent: '#5d7a3a', text: '#27301c', text2: '#96a07e' },
   },
 ]
 
