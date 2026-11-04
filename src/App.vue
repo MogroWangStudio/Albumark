@@ -430,8 +430,9 @@ let capBack: PluginListenerHandle | null = null
 const BACK_EXIT_WINDOW = 2600
 let lastBackAt = 0
 
-/** 安卓原生返回：浮层逐级收起；工作项目内返回 = 保存并回到主菜单（返回链的
- *  最后一级，需两次返回才退出，退出前 flush 数据） */
+/** 安卓原生返回：浮层逐级收起；工作项目内返回 = 保存并回到主菜单；工作区
+ *  分页逐级回退（项目页 → 目录页），目录页为最后一级——需两次返回才退出，
+ *  退出前 flush 数据 */
 async function onAndroidBack(): Promise<void> {
   if (ctxMenu.value) {
     closeCtxMenu()
@@ -460,6 +461,12 @@ async function onAndroidBack(): Promise<void> {
     await ws.closeProject()
     return
   }
+  // 工作区分页返回：项目页 → 目录页（倒数第二级）；目录页是最后一级，
+  // 落入下面的两次返回退出流程（与页面提示一致：侧滑两次退出）
+  if (ws.subPage === 'projects') {
+    ws.gotoSubPage('dirs')
+    return
+  }
   const now = Date.now()
   if (now - lastBackAt < BACK_EXIT_WINDOW) {
     wm.flushPersist()
@@ -469,7 +476,7 @@ async function onAndroidBack(): Promise<void> {
     return
   }
   lastBackAt = now
-  toast('再按一次返回键退出')
+  toast('再侧滑一次退出应用')
 }
 
 /** 防抖保存的兜底：切后台/页面隐藏时立即写出，防止 400ms 窗口内被系统杀掉丢数据 */

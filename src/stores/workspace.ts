@@ -97,6 +97,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   const inProject = computed(() => current.value !== null)
 
+  /** 工作区的两级页面：工作目录列表页 / 工作项目列表页。安卓返回键按此逐级回退，
+   *  项目页是最后一级——再返回即进入「两次返回退出」流程（见 App 的返回链） */
+  const subPage = ref<'dirs' | 'projects'>('dirs')
+  function gotoSubPage(p: 'dirs' | 'projects'): void {
+    subPage.value = p
+  }
+
   /* ---------- 软件数据目录 ---------- */
 
   /** 桌面端数据根目录：OOBE 选择的目录，或便携版 exe 所在目录（再兜底系统数据目录）。 */
@@ -171,6 +178,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const cur = store.current ? dirs.value.find((d) => d.path === store.current) : undefined
     if (cur) {
       dir.value = cur
+      // 上次使用过目录：直接落在工作项目页（常用路径优先，返回可看目录页）
+      subPage.value = 'projects'
       await scanProjects()
       return
     }
@@ -756,6 +765,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     importMode,
     loading,
     inProject,
+    subPage,
+    gotoSubPage,
     defaultDataDir,
     probeDefaultDataDir,
     dataRoot,

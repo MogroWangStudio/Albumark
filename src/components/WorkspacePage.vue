@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
+  ArrowLeft,
   ArchiveRestore,
   ArrowLeftRight,
   ArrowRight,
@@ -63,14 +64,19 @@ function finishOobe(): void {
 const newDirName = ref('')
 const removeDirTarget = ref<WorkDirMeta | null>(null)
 
-/** 安卓沙箱：在应用数据目录下新建命名工作目录；桌面：系统选择器（允许已有项目） */
+/** 安卓沙箱：在应用数据目录下新建命名工作目录；桌面：系统选择器（允许已有项目）。
+ *  成功后直接进入工作项目页——目录页的任务（建目录）已完成 */
 async function addDir(): Promise<void> {
   if (sandboxedFs) {
     const ok = await ws.createDir(newDirName.value)
-    if (ok) newDirName.value = ''
+    if (ok) {
+      newDirName.value = ''
+      ws.gotoSubPage('projects')
+    }
     return
   }
-  await ws.addDir()
+  const ok = await ws.addDir()
+  if (ok) ws.gotoSubPage('projects')
 }
 
 function confirmRemoveDir(): void {
@@ -111,6 +117,35 @@ const exportTarget = ref<{ kind: 'project' | 'dir'; name: string; path: string }
 /** 导入工作项目对话框（ZIP / 桌面端文件夹 → 当前工作目录） */
 const importOpen = ref(false)
 
+/* ---------- 两级页面：工作目录页 ⇄ 工作项目页 ---------- */
+
+/** 切换方向决定过渡编排：进项目页推入、回目录页弹出，路径对称可回放 */
+const navDir = ref<'push' | 'pop'>('push')
+watch(
+  () => ws.subPage,
+  (v) => {
+    navDir.value = v === 'projects' ? 'push' : 'pop'
+  },
+)
+
+/** 点击目录行 / 「使用」：切换到该目录并进入工作项目页。
+ *  ⋯ 触发器与其下拉面板上的点击不算「进入目录」——不能在这里
+ *  @click.stop 截断（会连带拦掉下拉组件自身的 toggle，菜单打不开） */
+function onDirRowClick(d: WorkDirMeta, e: MouseEvent): void {
+  const t = e.target as HTMLElement | null
+  if (t?.closest('.dir-tool, .dropdown-menu')) return
+  enterDir(d)
+}
+
+function enterDir(d: WorkDirMeta): void {
+  if (ws.dir?.path !== d.path) void ws.useDir(d)
+  ws.gotoSubPage('projects')
+}
+
+function gotoDirs(): void {
+  ws.gotoSubPage('dirs')
+}
+
 function startRename(kind: 'project' | 'dir', meta: ProjectMeta | WorkDirMeta): void {
   renameTarget.value = { kind, meta }
   renameName.value = meta.name
@@ -147,7 +182,8 @@ function openProjectMenu(p: ProjectMeta, x: number, y: number): void {
 
 function openDirMenu(d: WorkDirMeta, x: number, y: number): void {
   const items: ContextMenuItem[] = []
-  if (ws.dir?.path !== d.path) items.push({ label: '打开', action: () => void ws.useDir(d) })
+  if (ws.dir?.path !== d.path) items.push({ label: '打开', action: () => enterDir(d) })
+  else items.push({ label: '进入项目', action: () => ws.gotoSubPage('projects') })
   items.push(
     { label: '重命名', action: () => startRename('dir', d) },
     { label: '导出…', action: () => (exportTarget.value = { kind: 'dir', name: d.name, path: d.path }) },
@@ -207,93 +243,98 @@ onMounted(() => {
         </AppButton>
       </div>
 
-      <!-- ② 工作区总览：工作目录列表 + 工作项目 -->
+      <!-- ② 工作区：工作目录页 ⇄ 工作项目页 两级导航 -->
       <div v-else key="projects" class="projects-wrap">
-        <!-- 工作目录：列表式管理（查看 / 切换 / 移除记录） -->
-        <section v-if="fsAvailable" class="card grow">
-          <header class="sec-head">
-            <div class="sec-title">
-              <FolderOpen :size="15" />
-              <h1>工作目录</h1>
-              <span class="sec-count">{{ ws.dirs.length }}</span>
-            </div>
-            <div v-if="sandboxedFs" class="create-inline">
-              <input
-                v-model="newDirName"
-                class="text-input"
-                placeholder="新目录名称"
-                @keyup.enter="addDir"
-              />
-              <AppButton size="sm" variant="primary" :disabled="!newDirName.trim()" @click="addDir">
-                <FolderPlus :size="14" />新建
-              </AppButton>
-            </div>
-            <AppButton v-else size="sm" variant="ghost" @click="addDir">
-              <FolderPlus :size="13" />添加工作目录…
-            </AppButton>
-          </header>
-
-          <ul v-if="ws.dirs.length" class="dir-list">
-            <li
-              v-for="d in ws.dirs"
-              :key="d.path"
-              class="dir-row"
-              :class="{ active: ws.dir?.path === d.path }"
-              :data-dir-path="d.path"
-              v-on="dirPress"
-            >
-              <span class="dir-icon">
-                <Check v-if="ws.dir?.path === d.path" :size="14" />
-                <FolderOpen v-else :size="14" />
-              </span>
-              <div class="dir-main">
-                <span class="dir-name">{{ d.name }}</span>
-                <span class="dir-path" :title="d.path">{{ d.path }}</span>
-              </div>
-              <span class="dir-count">{{ d.projects ?? '—' }} 个项目</span>
-              <button
-                v-if="ws.dir?.path !== d.path"
-                class="dir-use"
-                title="切换到此目录"
-                @click="ws.useDir(d)"
-              >
-                <ArrowLeftRight :size="13" />使用
-              </button>
-              <AppDropdown
-                v-if="!isCoarse"
-                align="right"
-                :items="[
-                  { label: '重命名', action: () => startRename('dir', d) },
-                  { label: '导出…', action: () => (exportTarget = { kind: 'dir', name: d.name, path: d.path }) },
-                  { label: '移除记录', danger: true, action: () => (removeDirTarget = d) },
-                ]"
-              >
-                <!-- span 触发器：AppDropdown 外层已有 button，slot 内不可再嵌 button，
-                     也不能裸 @click.stop——冒泡被截断菜单永远打不开（与项目卡触发器同构） -->
-                <template #trigger>
-                  <span class="dir-tool" role="button" title="目录操作">
-                    <MoreHorizontal :size="13" />
-                  </span>
-                </template>
-              </AppDropdown>
-            </li>
-          </ul>
-          <p v-else class="empty">还没有工作目录</p>
-        </section>
-
-        <!-- 工作项目 -->
-        <section class="card grow">
-          <template v-if="fsAvailable && ws.dir">
+        <Transition :name="navDir === 'push' ? 'wsp-push' : 'wsp-pop'">
+          <!-- 页面 ①：工作目录（列表式管理，点击行进入该项目目录的工作项目页） -->
+          <section v-if="fsAvailable && ws.subPage === 'dirs'" key="dirs" class="card grow subpage">
             <header class="sec-head">
               <div class="sec-title">
-                <Images :size="15" />
-                <h1>工作项目</h1>
-                <span class="sec-count">{{ ws.projects.length }}</span>
+                <FolderOpen :size="15" />
+                <h1>工作目录</h1>
+                <span class="sec-count">{{ ws.dirs.length }}</span>
               </div>
-              <AppButton size="sm" variant="ghost" @click="importOpen = true">
-                <ArchiveRestore :size="13" />导入项目
+              <div v-if="sandboxedFs" class="create-inline">
+                <input
+                  v-model="newDirName"
+                  class="text-input"
+                  placeholder="新目录名称"
+                  @keyup.enter="addDir"
+                />
+                <AppButton size="sm" variant="primary" :disabled="!newDirName.trim()" @click="addDir">
+                  <FolderPlus :size="14" />新建
+                </AppButton>
+              </div>
+              <AppButton v-else size="sm" variant="ghost" @click="addDir">
+                <FolderPlus :size="13" />添加工作目录…
               </AppButton>
             </header>
+
+            <ul v-if="ws.dirs.length" class="dir-list">
+              <li
+                v-for="d in ws.dirs"
+                :key="d.path"
+                class="dir-row"
+                :class="{ active: ws.dir?.path === d.path }"
+                :data-dir-path="d.path"
+                @click="onDirRowClick(d, $event)"
+                v-on="dirPress"
+              >
+                <span class="dir-icon">
+                  <Check v-if="ws.dir?.path === d.path" :size="14" />
+                  <FolderOpen v-else :size="14" />
+                </span>
+                <div class="dir-main">
+                  <span class="dir-name">{{ d.name }}</span>
+                  <span class="dir-path" :title="d.path">{{ d.path }}</span>
+                </div>
+                <span class="dir-count">{{ d.projects ?? '—' }} 个项目</span>
+                <button
+                  v-if="ws.dir?.path !== d.path"
+                  class="dir-use"
+                  title="切换到此目录并进入"
+                  @click.stop="enterDir(d)"
+                >
+                  <ArrowLeftRight :size="13" />使用
+                </button>
+                <AppDropdown
+                  v-if="!isCoarse"
+                  align="right"
+                  :items="[
+                    { label: '重命名', action: () => startRename('dir', d) },
+                    { label: '导出…', action: () => (exportTarget = { kind: 'dir', name: d.name, path: d.path }) },
+                    { label: '移除记录', danger: true, action: () => (removeDirTarget = d) },
+                  ]"
+                >
+                  <!-- span 触发器：AppDropdown 外层已有 button，slot 内不可再嵌 button，
+                       也不能裸 @click.stop——冒泡被截断菜单永远打不开（与项目卡触发器同构） -->
+                  <template #trigger>
+                    <span class="dir-tool" role="button" title="目录操作">
+                      <MoreHorizontal :size="13" />
+                    </span>
+                  </template>
+                </AppDropdown>
+              </li>
+            </ul>
+            <p v-else class="empty">还没有工作目录</p>
+          </section>
+
+          <!-- 页面 ②：工作项目（返回可回工作目录页；安卓侧滑返回同一层级） -->
+          <section v-else key="projects" class="card grow subpage">
+            <template v-if="fsAvailable && ws.dir">
+              <header class="sec-head">
+                <div class="sec-title">
+                  <button class="back-btn" title="返回工作目录" @click="gotoDirs">
+                    <ArrowLeft :size="15" />
+                  </button>
+                  <h1>工作项目</h1>
+                  <span class="sec-count">{{ ws.projects.length }}</span>
+                </div>
+                <AppButton size="sm" variant="ghost" @click="importOpen = true">
+                  <ArchiveRestore :size="13" />导入项目
+                </AppButton>
+              </header>
+              <p class="cur-dir">{{ ws.dir.name }}</p>
 
             <div class="create">
               <input
@@ -353,6 +394,9 @@ onMounted(() => {
             <AppButton variant="primary" class="cta" :disabled="ws.loading" @click="addDir">
               <FolderPlus :size="15" />选择文件夹…
             </AppButton>
+            <AppButton variant="ghost" class="cta" @click="gotoDirs">
+              <ArrowLeft :size="15" />返回工作目录
+            </AppButton>
           </template>
 
           <template v-else-if="fsAvailable">
@@ -360,6 +404,9 @@ onMounted(() => {
               <FolderOpen :size="30" :stroke-width="1.6" />
             </div>
             <h1>选择工作目录</h1>
+            <AppButton variant="ghost" class="cta" @click="gotoDirs">
+              <ArrowLeft :size="15" />返回工作目录
+            </AppButton>
           </template>
 
           <template v-else>
@@ -369,6 +416,7 @@ onMounted(() => {
             </AppButton>
           </template>
         </section>
+        </Transition>
       </div>
     </Transition>
 
@@ -528,6 +576,8 @@ onMounted(() => {
   border: 1px solid var(--line);
   border-radius: var(--r-m);
   background: var(--bg);
+  /* 整行可点：进入该目录的工作项目页（⋯ 菜单与下拉已按点击来源放行） */
+  cursor: pointer;
   transition: border-color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
 }
 .dir-row:hover {
@@ -799,6 +849,84 @@ h1 {
 .fwd-leave-to {
   opacity: 0;
   transform: translateX(-22px);
+}
+
+/* ---------- 工作区两级页面切换：推入 / 弹出，路径对称可回放 ----------
+   两页同时过渡（不用 out-in）才有「推挤」的空间感：离场页绝对定位脱离
+   文档流、入场页正常布局接管高度；位移小、以透明度为主——页面级切换
+   保持克制，非线性由 --ease-soft 承担 */
+.projects-wrap {
+  position: relative;
+}
+.wsp-push-enter-active,
+.wsp-push-leave-active,
+.wsp-pop-enter-active,
+.wsp-pop-leave-active {
+  transition:
+    opacity 300ms var(--ease-soft),
+    transform 300ms var(--ease-soft);
+}
+.wsp-push-leave-active,
+.wsp-pop-leave-active {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+}
+.wsp-push-enter-from {
+  opacity: 0;
+  transform: translateX(36px);
+}
+.wsp-push-leave-to {
+  opacity: 0;
+  transform: translateX(-28px);
+}
+.wsp-pop-enter-from {
+  opacity: 0;
+  transform: translateX(-28px);
+}
+.wsp-pop-leave-to {
+  opacity: 0;
+  transform: translateX(36px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .wsp-push-enter-active,
+  .wsp-push-leave-active,
+  .wsp-pop-enter-active,
+  .wsp-pop-leave-active {
+    transition: opacity 200ms var(--ease-soft);
+  }
+  .wsp-push-enter-from,
+  .wsp-push-leave-to,
+  .wsp-pop-enter-from,
+  .wsp-pop-leave-to {
+    transform: none;
+  }
+}
+
+/* 项目页头部：返回按钮 + 当前目录名（层级线索） */
+.back-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  color: var(--text-2);
+  transition: color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
+}
+.back-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.back-btn:active {
+  transform: scale(0.94);
+}
+.cur-dir {
+  margin: -6px 0 10px;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 打开项目 / 扫描中：居中加载提示 */
