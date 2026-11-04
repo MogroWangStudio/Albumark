@@ -1859,6 +1859,19 @@ function baseSignature(): string {
       .map((l) => ({ id: l.id, visible: l.visible })),
   ])
 }
+
+// 背景层的布局参数（外扩 / 画幅比例 / 偏移 / 模糊 / 缩放等）只作用于主线程
+// 组合——签名变了重画底图（画布尺寸、模糊缓存键、照片矩形都随之变），
+// 不需要进 Worker；其余图层变化只重绘叠加层
+let lastBgLayoutSig = ""
+function bgLayoutSignature(): string {
+  return JSON.stringify(
+    wm
+      .effectiveLayers(active.value?.id ?? null)
+      .filter((l) => l.type === "background")
+      .map((l) => toRaw(l)),
+  )
+}
 watch(
   [
     active,
@@ -1880,6 +1893,11 @@ watch(
       lastBaseSig = sig
       scheduleBase()
     } else {
+      const bgSig = bgLayoutSignature()
+      if (bgSig !== lastBgLayoutSig) {
+        lastBgLayoutSig = bgSig
+        drawBase()
+      }
       scheduleOverlay()
     }
   },

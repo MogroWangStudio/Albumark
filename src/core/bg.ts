@@ -33,6 +33,28 @@ export function backgroundAspect(bg: BackgroundLayer, photoW: number, photoH: nu
   return photoH > 0 ? photoW / photoH : 1
 }
 
+/**
+ * 画幅比例预设（fit=background 时可选）：free = 按背景图比例（原有行为）；
+ * 其余表示画幅形状，**方向跟随照片**——横照片取预设的横版（4:5 → 5:4），
+ * 竖照片取竖版（4:5 → 4:5），符合摄影画幅的方向直觉。
+ * 编辑器选项与布局计算共用这一份清单。
+ */
+export const BG_RATIO_PRESETS: { value: string; label: string; r: number }[] = [
+  { value: 'free', label: '自由', r: 0 },
+  { value: '1:1', label: '1 : 1', r: 1 },
+  { value: '4:5', label: '4 : 5', r: 4 / 5 },
+  { value: '3:2', label: '3 : 2', r: 3 / 2 },
+  { value: '16:9', label: '16 : 9', r: 16 / 9 },
+]
+
+/** 解析预设为「画布宽/高」：横照片取横版形式（较大值），竖照片取竖版 */
+export function bgRatioValue(value: string | undefined, photoW: number, photoH: number): number | null {
+  const preset = BG_RATIO_PRESETS.find((p) => p.value === value)
+  if (!preset || preset.r <= 0) return null
+  const landscape = Math.max(preset.r, 1 / preset.r)
+  return photoW >= photoH ? landscape : 1 / landscape
+}
+
 export interface BgFrameLayout {
   /** 最终画布尺寸（照片 + 背景外扩） */
   frameW: number
@@ -51,7 +73,9 @@ export interface BgFrameLayout {
  *
  * fit=background：画布按背景图宽高比适配照片（照片完整置于画布内），
  * 「外扩程度」决定照片的面积占比余量——0 为贴边基准，100 时照片约占
- * 画布四分之一面积。fit=custom：横 / 纵外扩按照片边长百分比、两侧对称。
+ * 画布四分之一面积；选取了画幅比例预设（ratio ≠ free）时画布比例锁定
+ * 为预设值（方向跟随照片），照片边界顶住时另一维跟随以保持比例。
+ * fit=custom：横 / 纵外扩按照片边长百分比、两侧对称。
  */
 export function layoutBackgroundFrame(
   bg: BackgroundLayer,
@@ -69,10 +93,29 @@ export function layoutBackgroundFrame(
     // 程度 0-100 → 照片面积占比 1 → 0.25
     const fill = 1 - (Math.min(100, Math.max(0, bg.expand)) / 100) * 0.75
     const area = (w * h) / Math.max(0.05, fill)
-    const r = Math.max(0.05, bgAspect)
-    // 画布保持背景图比例（frameW/frameH = r），面积取 fill 折算值
-    frameW = Math.max(w, Math.round(Math.sqrt(area * r)))
-    frameH = Math.max(h, Math.round(Math.sqrt(area / r)))
+    const ratio = bgRatioValue(bg.ratio, w, h)
+    const r = Math.max(0.05, ratio ?? bgAspect)
+    if (ratio !== null) {
+      // 预设模式：比例严格锁定为 r，且照片完整置于画布内——以照片的
+      // 「r 比例外接矩形」为最小画布，外扩程度在其上按面积放大
+      let baseW = Math.max(w, h * r)
+      let baseH = baseW / r
+      if (baseH < h) {
+        baseH = h
+        baseW = h * r
+      }
+      const target = Math.max(baseW * baseH, area)
+      frameW = Math.max(Math.ceil(baseW), Math.round(Math.sqrt(target * r)))
+      frameH = Math.round(frameW / r)
+      if (frameH < baseH) {
+        frameH = Math.ceil(baseH)
+        frameW = Math.round(frameH * r)
+      }
+    } else {
+      // 自由模式（背景图比例）：面积取 fill 折算值，边界只保证照片完整
+      frameW = Math.max(w, Math.round(Math.sqrt(area * r)))
+      frameH = Math.max(h, Math.round(Math.sqrt(area / r)))
+    }
   }
   const s = bg.photoScale / 100
   const photoW = w * s

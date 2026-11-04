@@ -130,6 +130,12 @@ export interface BackgroundLayer {
   aspect?: number
   /** 画布外扩模式：background = 按背景图宽高比适配（缺省）；custom = 手动控制横 / 纵外扩 */
   fit: 'background' | 'custom'
+  /**
+   * 画幅比例预设（fit=background 时生效）：free = 按背景图比例（缺省，兼容
+   * 旧数据）；其余见 BG_RATIO_PRESETS（1:1 / 4:5 / 3:2 / 16:9，画布方向
+   * 跟随照片方向）。
+   */
+  ratio?: string
   /** fit=background：外扩程度 0-100 —— 照片在画布中的面积占比余量 */
   expand: number
   /** fit=custom：水平 / 垂直外扩，占照片对应边长的百分比（两侧对称） */

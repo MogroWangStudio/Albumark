@@ -22,6 +22,7 @@ import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import FontPickerDialog from '@/components/FontPickerDialog.vue'
 import { TOKENS, missingTokens } from '@/core/tokens'
+import { BG_RATIO_PRESETS } from '@/core/bg'
 import { renderTemplateThumb } from '@/core/sample'
 import { toast } from '@/stores/toast'
 import { useFontsStore, FONT_CATEGORY_LABELS } from '@/stores/fonts'
@@ -375,6 +376,14 @@ const bgFitModel = computed({
   get: () => selectedBackground.value?.fit ?? 'background',
   set: (v: unknown) => {
     if (selectedBackground.value) wm.update(selectedBackground.value.id, { fit: v as 'background' | 'custom' })
+  },
+})
+
+/* 画幅比例预设：free = 按背景图比例（与旧版一致），其余锁定字面宽高比 */
+const bgRatioModel = computed({
+  get: () => selectedBackground.value?.ratio ?? 'free',
+  set: (v: unknown) => {
+    if (selectedBackground.value) wm.update(selectedBackground.value.id, { ratio: v as string })
   },
 })
 
@@ -850,16 +859,27 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           { value: 'background', label: '按背景比例' },
           { value: 'custom', label: '自定义' },
         ]" />
-        <AppSlider
-          v-if="selectedBackground.fit === 'background'"
-          :model-value="selectedBackground.expand"
-          :min="0"
-          :max="100"
-          label="外扩程度"
-          :format="(v) => `${Math.round(v)}%`"
-          @update:model-value="wm.update(selectedBackground!.id, { expand: $event })"
-          @reset="wm.update(selectedBackground!.id, { expand: 30 })"
-        />
+        <template v-if="selectedBackground.fit === 'background'">
+          <div class="field">
+            <span class="fl">画幅比例</span>
+            <AppSegment
+              v-model="bgRatioModel"
+              small
+              wrap
+              :options="BG_RATIO_PRESETS.map((p) => ({ value: p.value, label: p.label }))"
+            />
+            <p class="mode-hint">画幅按所选比例锁定，方向跟随照片（横照片取横版）。</p>
+          </div>
+          <AppSlider
+            :model-value="selectedBackground.expand"
+            :min="0"
+            :max="100"
+            label="外扩程度"
+            :format="(v) => `${Math.round(v)}%`"
+            @update:model-value="wm.update(selectedBackground!.id, { expand: $event })"
+            @reset="wm.update(selectedBackground!.id, { expand: 30 })"
+          />
+        </template>
         <template v-else>
           <AppSlider
             :model-value="selectedBackground.expandX"
