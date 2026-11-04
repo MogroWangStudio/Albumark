@@ -99,6 +99,28 @@ function resetCropDraft(): void {
   adjust.cropDraft = { x: 0, y: 0, w: 1, h: 1, rot: 0, flipH: false, flipV: false }
   adjust.cropRatio = 'free'
 }
+
+/* ---------- 自定义比例：键入宽高数值即应用（custom:W:H 存入 cropRatio） ---------- */
+
+/** 当前 cropRatio 为自定义时拆回两格显示，否则留空 */
+const customRatio = computed(() => {
+  if (!adjust.cropRatio.startsWith('custom:')) return { w: '', h: '' }
+  const parts = adjust.cropRatio.split(':')
+  return { w: parts[1] ?? '', h: parts[2] ?? '' }
+})
+
+function onCustomRatio(e: Event): void {
+  // 两格一起从 DOM 读：computed 值派生自 cropRatio，输入第一格时第二格
+  // 尚未写回，从派生值读会拿到旧空值
+  const row = (e.target as HTMLElement).closest('.custom-ratio')
+  const inputs = row?.querySelectorAll<HTMLInputElement>('input')
+  if (!inputs || inputs.length < 2) return
+  const w = Number(inputs[0].value.trim())
+  const h = Number(inputs[1].value.trim())
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return
+  // 输入合法性通过后立即应用（重排裁剪框）；输入未完成时保持旧比例
+  adjust.cropRatio = `custom:${w}:${h}`
+}
 </script>
 
 <template>
@@ -108,6 +130,29 @@ function resetCropDraft(): void {
       <span class="size">{{ draftState }}</span>
     </div>
     <AppSegment v-model="adjust.cropRatio" :options="CROP_RATIOS" small class="ratios" />
+    <!-- 自定义比例：键入宽高数值即应用（选预设后两格清空） -->
+    <div class="custom-ratio">
+      <span class="fl">自定义</span>
+      <input
+        class="num"
+        type="number"
+        min="0.01"
+        step="any"
+        placeholder="宽"
+        :value="customRatio.w"
+        @input="onCustomRatio($event)"
+      />
+      <span class="colon">:</span>
+      <input
+        class="num"
+        type="number"
+        min="0.01"
+        step="any"
+        placeholder="高"
+        :value="customRatio.h"
+        @input="onCustomRatio($event)"
+      />
+    </div>
     <div class="geom">
       <div class="flips">
         <button
@@ -179,6 +224,35 @@ function resetCropDraft(): void {
 .ratios {
   display: flex;
   width: 100%;
+}
+/* 自定义比例：宽:高 两格数值，键入即应用 */
+.custom-ratio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+.custom-ratio .fl {
+  font-size: calc(12px * var(--ui-zoom, 1));
+  color: var(--text-2);
+}
+.custom-ratio .num {
+  width: 64px;
+  height: calc(26px * var(--ui-zoom, 1));
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg);
+  font-size: calc(12px * var(--ui-zoom, 1));
+  color: var(--text);
+  outline: none;
+  transition: border-color var(--dur-hover) var(--ease-soft);
+}
+.custom-ratio .num:focus {
+  border-color: var(--accent);
+}
+.custom-ratio .colon {
+  color: var(--text-3);
 }
 .ratios :deep(button) {
   flex: 1;

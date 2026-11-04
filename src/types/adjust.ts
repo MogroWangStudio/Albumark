@@ -310,6 +310,14 @@ export function cropInnerBounds(
 ]
 
 export function cropRatioOf(value: string): number | null {
+  // 自定义比例：custom:W:H（用户键入的宽高数值），W/H 均为正数才有效
+  if (value.startsWith('custom:')) {
+    const parts = value.split(':')
+    if (parts.length !== 3) return null
+    const w = Number(parts[1])
+    const h = Number(parts[2])
+    return Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? w / h : null
+  }
   return CROP_RATIOS.find((r) => r.value === value)?.ratio ?? null
 }
 
