@@ -1167,13 +1167,23 @@ function pinchInfo(): { dist: number; mid: { x: number; y: number } } {
   }
 }
 
-/** 拖动中的吸附：把图层中心吸附到图片中线、安全边距线与其他图层中心。 */
+/**
+ * 拖动中的吸附：把图层中心吸附到图片中线、安全边距线与其他图层中心。
+ * 带磁滞——进入吸附用 8px 容差，脱离要超出容差再 6px：没有这段滞回，
+ * 手指在吸附线边缘微动时「吸住与释放」逐帧翻转，位置 0~8px 高频跳变
+ * （表现为拖动抖动）。吸附状态按轴记在 dragSnap，整个手势期间共享。
+ */
+const SNAP_HYSTERESIS = 6 // CSS px：脱离吸附的额外距离
+
+let dragSnap: { x: number | null; y: number | null } = { x: null, y: null }
+
 function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy: number; lines: { x?: number; y?: number } } {
   const out: { cx: number; cy: number; lines: { x?: number; y?: number } } = { cx, cy, lines: {} }
   if (!settings.wmSnap || !resultMap.w) return out
   const dpr = view.dpr || 1
   const cssPerImg = resultMap.scale / dpr
-  const threshold = 8 / cssPerImg // 8 CSS px 容差（图片 px）
+  const threshold = 8 / cssPerImg // 进入吸附的容差（图片 px）
+  const leaveThreshold = (8 + SNAP_HYSTERESIS) / cssPerImg
   const imgW = resultMap.w
   const imgH = resultMap.h
   const pxScale = overlayPxScale()
@@ -1185,22 +1195,44 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
     xs.push(c.x)
     ys.push(c.y)
   }
-  let best = threshold
-  for (const x of xs) {
-    const d = Math.abs(cx - x)
-    if (d < best) {
-      best = d
-      out.cx = x
-      out.lines.x = x
+  // X 轴：已吸附则先给脱离机会（手指真实位置对吸附线的距离），仍吸附就强制对齐
+  if (dragSnap.x !== null) {
+    if (Math.abs(cx - dragSnap.x) > leaveThreshold) dragSnap.x = null
+    else {
+      out.cx = dragSnap.x
+      out.lines.x = dragSnap.x
     }
   }
-  best = threshold
-  for (const y of ys) {
-    const d = Math.abs(cy - y)
-    if (d < best) {
-      best = d
-      out.cy = y
-      out.lines.y = y
+  if (dragSnap.x === null) {
+    let best = threshold
+    for (const x of xs) {
+      const d = Math.abs(cx - x)
+      if (d < best) {
+        best = d
+        dragSnap.x = x
+        out.cx = x
+        out.lines.x = x
+      }
+    }
+  }
+  // Y 轴同理
+  if (dragSnap.y !== null) {
+    if (Math.abs(cy - dragSnap.y) > leaveThreshold) dragSnap.y = null
+    else {
+      out.cy = dragSnap.y
+      out.lines.y = dragSnap.y
+    }
+  }
+  if (dragSnap.y === null) {
+    let best = threshold
+    for (const y of ys) {
+      const d = Math.abs(cy - y)
+      if (d < best) {
+        best = d
+        dragSnap.y = y
+        out.cy = y
+        out.lines.y = y
+      }
     }
   }
   return out
@@ -1410,7 +1442,12 @@ function onPointerDown(e: PointerEvent): void {
     return
   }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, downT: performance.now(), moved: false })
-  canvas.setPointerCapture(e.pointerId)
+  // 指针已失活（极端时序 / 合成事件）时 capture 会抛错：降级为就近跟踪，不让手势建不起来
+  try {
+    canvas.setPointerCapture(e.pointerId)
+  } catch {
+    /* 忽略：move/up 仍会派发到画布元素本身 */
+  }
 
   if (pointers.size === 2) {
     const { dist, mid } = pinchInfo()
@@ -1469,6 +1506,7 @@ function onPointerDown(e: PointerEvent): void {
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
       const c = layerPivot(l, resultMap.w, resultMap.h, overlayPxScale())
+      dragSnap = { x: null, y: null }
       gesture = {
         type: 'layer',
         id: l.id,
@@ -1486,6 +1524,7 @@ function onPointerDown(e: PointerEvent): void {
       const bg = backgroundLayers()[0]
       if (bg) {
         wm.selectedId = bg.id
+        dragSnap = { x: null, y: null }
         gesture = {
           type: 'photo',
           id: bg.id,
@@ -1578,51 +1617,78 @@ function onPointerMove(e: PointerEvent): void {
     if (!layer || layer.type === 'border' || layer.type === 'background') return
     const a = anchorPoint(layer.anchor, imgW, imgH)
     snapLines.value = snapped.lines.x !== undefined || snapped.lines.y !== undefined ? snapped.lines : null
-    // 定位点与位移都在叠加层坐标系：写入前折算回原图尺度的 offset
+    // 定位点与位移都在叠加层坐标系：写入前折算回原图尺度的 offset。
+    // 拖动中保留浮点不取整——offset 折算系数 <1 时 round 的量化步长在屏幕上
+    // 放大且不均匀（1px、2px 交替），是拖动抖动的来源之一；松手时统一取整
     const pxScale = overlayPxScale()
     wm.update(gid, {
-      offsetX: Math.round((cx - a.x) / pxScale),
-      offsetY: Math.round((cy - a.y) / pxScale),
+      offsetX: (cx - a.x) / pxScale,
+      offsetY: (cy - a.y) / pxScale,
     })
     return
   }
 
   if (gesture.type === 'photo') {
     // 拖动照片在背景上的位置：主线程即时组合，Worker 不参与。
-    // bg.offsetX 是原图尺度像素：屏幕位移与吸附量都按取样系数折算
+    // bg.offsetX 是原图尺度像素：屏幕位移按取样系数折算；吸附与水印拖动
+    // 共用同一套磁滞（dragSnap），拖动中保持浮点、松手时统一取整
     if (!resultMap.w || !bgLayout) return
     const dpr = view.dpr || 1
     const cssPerImg = resultMap.scale / dpr
     const pxScale = resultPhoto.renderScale || 1
     let nx = gesture.startX + (e.clientX - gesture.startClient.x) / cssPerImg / pxScale
     let ny = gesture.startY + (e.clientY - gesture.startClient.y) / cssPerImg / pxScale
-    // 吸附：照片中心贴画布中线与安全线（与水印拖动同一容差与参考线）
     if (settings.wmSnap) {
-      const thr = 8 / cssPerImg
-      const cx = bgLayout.photoX + bgLayout.photoW / 2 + (nx - gesture.startX) * pxScale
-      const cy = bgLayout.photoY + bgLayout.photoH / 2 + (ny - gesture.startY) * pxScale
+      const threshold = 8 / cssPerImg
+      const leaveThreshold = (8 + SNAP_HYSTERESIS) / cssPerImg
+      // 照片中心（未吸附）= 画布中线 + 当前 offset（绝对式）。不能用
+      // bgLayout.photoX + 增量：photoX 已含上一帧 offset，再叠加增量会
+      // 把吸附修正重复计入形成正反馈——吸附状态逐帧振荡（拖动抖动主因）
+      const cx = bgLayout.frameW / 2 + nx * pxScale
+      const cy = bgLayout.frameH / 2 + ny * pxScale
       const lines: { x?: number; y?: number } = {}
-      let best = thr
-      for (const x of [bgLayout.frameW / 2, bgLayout.frameW * 0.04, bgLayout.frameW * 0.96]) {
-        const d = Math.abs(cx - x)
-        if (d < best) {
-          best = d
-          nx += (x - cx) / pxScale
-          lines.x = x
+      // 磁滞：已吸附的轴先判断脱离（按手指真实位置），仍吸附则强制对齐
+      if (dragSnap.x !== null) {
+        if (Math.abs(cx - dragSnap.x) > leaveThreshold) dragSnap.x = null
+        else {
+          nx += (dragSnap.x - cx) / pxScale
+          lines.x = dragSnap.x
         }
       }
-      best = thr
-      for (const y of [bgLayout.frameH / 2, bgLayout.frameH * 0.04, bgLayout.frameH * 0.96]) {
-        const d = Math.abs(cy - y)
-        if (d < best) {
-          best = d
-          ny += (y - cy) / pxScale
-          lines.y = y
+      if (dragSnap.x === null) {
+        let best = threshold
+        for (const x of [bgLayout.frameW / 2, bgLayout.frameW * 0.04, bgLayout.frameW * 0.96]) {
+          const d = Math.abs(cx - x)
+          if (d < best) {
+            best = d
+            dragSnap.x = x
+            nx += (x - cx) / pxScale
+            lines.x = x
+          }
+        }
+      }
+      if (dragSnap.y !== null) {
+        if (Math.abs(cy - dragSnap.y) > leaveThreshold) dragSnap.y = null
+        else {
+          ny += (dragSnap.y - cy) / pxScale
+          lines.y = dragSnap.y
+        }
+      }
+      if (dragSnap.y === null) {
+        let best = threshold
+        for (const y of [bgLayout.frameH / 2, bgLayout.frameH * 0.04, bgLayout.frameH * 0.96]) {
+          const d = Math.abs(cy - y)
+          if (d < best) {
+            best = d
+            dragSnap.y = y
+            ny += (y - cy) / pxScale
+            lines.y = y
+          }
         }
       }
       snapLines.value = lines.x !== undefined || lines.y !== undefined ? lines : null
     }
-    wm.update(gesture.id, { offsetX: Math.round(nx), offsetY: Math.round(ny) })
+    wm.update(gesture.id, { offsetX: nx, offsetY: ny })
     drawBase()
     drawOverlay()
     return
@@ -1645,6 +1711,18 @@ function onPointerMove(e: PointerEvent): void {
     drawBase()
     drawOverlay()
   }
+}
+
+/**
+ * 拖动结束：把拖动产生的浮点 offset 取整落库。拖动中为平滑跟手不取整
+ * （round 的量化步长经 pxScale 折算会在屏幕上放大且不均匀——抖动来源），
+ * 数据落盘仍保持整数。
+ */
+function settleDragGesture(g: Gesture): void {
+  if (g.type !== 'photo' && g.type !== 'layer') return
+  const l = wm.editTarget().find((x) => x.id === g.id)
+  if (!l || !('offsetX' in l) || !('offsetY' in l)) return
+  wm.update(g.id, { offsetX: Math.round(l.offsetX), offsetY: Math.round(l.offsetY) })
 }
 
 function onPointerUp(e: PointerEvent): void {
@@ -1675,6 +1753,8 @@ function onPointerUp(e: PointerEvent): void {
 
   if (pointers.size > 0) {
     if (g.type === 'layer' || g.type === 'photo' || g.type === 'pan') {
+      // 多指接管（如拖动中第二指落下）：本手势结束，位移量取整落库
+      settleDragGesture(g)
       gesture = { type: 'idle' }
       snapLines.value = null
       scheduleOverlay()
@@ -1684,6 +1764,7 @@ function onPointerUp(e: PointerEvent): void {
 
   gesture = { type: 'idle' }
   snapLines.value = null
+  settleDragGesture(g)
   scheduleOverlay()
 
   // 双击/双触：快速且几乎未移动的两次点按 → 放大/还原

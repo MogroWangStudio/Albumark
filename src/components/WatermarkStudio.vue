@@ -404,6 +404,14 @@ type Gesture =
     }
 
 let gesture: Gesture = { type: 'idle' }
+
+/**
+ * 拖动吸附状态（图片坐标系，按轴记忆）：进入吸附 8px 容差、脱离需再超
+ * 6px——没有这段滞回，手指在吸附线边缘微动时「吸住与释放」逐帧翻转，
+ * 位置 0~8px 高频跳变（拖动抖动）。与预览画布同一套参数与语义。
+ */
+const SNAP_HYSTERESIS = 6
+let dragSnap: { x: number | null; y: number | null } = { x: null, y: null }
 let lastTap: { t: number; x: number; y: number } | null = null
 
 function toImagePx(clientX: number, clientY: number): { x: number; y: number } {
@@ -459,6 +467,7 @@ function onPointerDown(e: PointerEvent): void {
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
       const c = layerPivot(l, wmSpace.w, wmSpace.h)
+      dragSnap = { x: null, y: null }
       gesture = {
         type: 'layer',
         id: l.id,
@@ -518,17 +527,37 @@ function onPointerMove(e: PointerEvent): void {
       const sw = wmSpace.w
       const sh = wmSpace.h
       const t = 8 / (vmap.scale / vmap.dpr)
-      for (const x of [sw / 2, sw * 0.04, sw * 0.96]) {
-        if (Math.abs(cx - x) < t) cx = x
+      const leave = (8 + SNAP_HYSTERESIS) / (vmap.scale / vmap.dpr)
+      // 磁滞：已吸附的轴脱离要超出容差再 6px，否则手指在吸附线边缘微动时
+      // 「吸住与释放」逐帧翻转，表现为拖动抖动（与预览画布同一修复）
+      for (const axis of ['x', 'y'] as const) {
+        const pos = axis === 'x' ? cx : cy
+        const snap = dragSnap[axis]
+        if (snap !== null) {
+          if (Math.abs(pos - snap) > leave) dragSnap[axis] = null
+          else if (axis === 'x') cx = snap
+          else cy = snap
+        }
       }
-      for (const y of [sh / 2, sh * 0.04, sh * 0.96]) {
-        if (Math.abs(cy - y) < t) cy = y
+      for (const axis of ['x', 'y'] as const) {
+        if (dragSnap[axis] !== null) continue
+        const pos = axis === 'x' ? cx : cy
+        const lines = axis === 'x' ? [sw / 2, sw * 0.04, sw * 0.96] : [sh / 2, sh * 0.04, sh * 0.96]
+        for (const v of lines) {
+          if (Math.abs(pos - v) < t) {
+            dragSnap[axis] = v
+            if (axis === 'x') cx = v
+            else cy = v
+            break
+          }
+        }
       }
     }
     const a = anchorPoint(layer.anchor, wmSpace.w, wmSpace.h)
+    // 拖动中浮点平滑，松手（onPointerUp）统一取整
     wm.update(layer.id, {
-      offsetX: Math.round(cx - a.x),
-      offsetY: Math.round(cy - a.y),
+      offsetX: cx - a.x,
+      offsetY: cy - a.y,
     })
     return
   }
@@ -584,13 +613,25 @@ function onPointerUp(e: PointerEvent): void {
 
   if (pointers.size > 0) {
     if (g.type === 'layer') {
+      // 多指接管：本手势结束，位移量取整落库
+      const l = wm.editTarget().find((x) => x.id === g.id)
+      if (l && 'offsetX' in l && 'offsetY' in l) {
+        wm.update(g.id, { offsetX: Math.round(l.offsetX), offsetY: Math.round(l.offsetY) })
+      }
       gesture = { type: 'idle' }
       grabbing.value = false
     }
     return
   }
 
-  if (g.type === 'layer') grabbing.value = false
+  if (g.type === 'layer') {
+    grabbing.value = false
+    // 拖动中浮点平滑，结束时取整落库
+    const l = wm.editTarget().find((x) => x.id === g.id)
+    if (l && 'offsetX' in l && 'offsetY' in l) {
+      wm.update(g.id, { offsetX: Math.round(l.offsetX), offsetY: Math.round(l.offsetY) })
+    }
+  }
   gesture = { type: 'idle' }
 
   // 双击空白处：放大 ⇄ 复位（落在水印上时双击属于图层操作，不触发）
