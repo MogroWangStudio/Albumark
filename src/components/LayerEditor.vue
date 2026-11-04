@@ -8,6 +8,7 @@ import {
   Frame,
   GripVertical,
   Image as ImageIcon,
+  Pencil,
   Replace,
   RotateCcw,
   TriangleAlert,
@@ -588,6 +589,9 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           @blur="commitRename"
         />
         <span v-else class="name" title="双击重命名" @dblclick.stop="startRename(l)">{{ layerName(l) }}</span>
+        <button class="tool" aria-label="重命名图层" title="重命名" @click.stop="startRename(l)">
+          <Pencil :size="13" />
+        </button>
         <button
           class="tool"
           :aria-label="l.visible ? '隐藏图层' : '显示图层'"
