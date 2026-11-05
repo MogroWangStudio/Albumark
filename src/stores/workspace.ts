@@ -5,6 +5,7 @@ import { fsAvailable, sandboxedFs } from '@/core/fs'
 import * as fs from '@/core/fs'
 import { probeZipManifest, unzipTo } from '@/core/archive'
 import { appDataDir, executableDir, isTauri, pickDirectory } from '@/core/platform'
+import { createDebouncedSaver } from '@/core/storage'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
 import { processItem, useImagesStore } from './images'
@@ -62,8 +63,6 @@ const DATA_FOLDER = 'AlbumarkData'
 const DIR_FILE = 'workdir.json'
 /** 项目清单文件名（存每个项目文件夹内） */
 const MANIFEST = 'albumark.json'
-
-export { fsAvailable, sandboxedFs }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const ab = new ArrayBuffer(bytes.byteLength)
@@ -561,10 +560,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
    */
   async function closeProject(): Promise<void> {
     hydrateSeq++
-    if (saveTimer) {
-      window.clearTimeout(saveTimer)
-      saveTimer = null
-    }
+    manifestSaver.cancel()
     if (fsAvailable && manifest.value && current.value?.path) {
       const path = current.value.path
       try {
@@ -599,26 +595,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   /* ---------- 图片进出项目 ---------- */
 
-  let saveTimer: number | null = null
   /** 渐进填充的会话序号：切换/关闭项目后旧后台任务作废 */
   let hydrateSeq = 0
+  const manifestSaver = createDebouncedSaver(async () => {
+    if (!manifest.value || !current.value?.path) return
+    await fs.writeJsonFile(await fs.joinPath(current.value.path, MANIFEST), manifest.value)
+  }, 400)
   function scheduleSave(): void {
     if (!fsAvailable || !manifest.value || !current.value?.path) return
-    if (saveTimer) window.clearTimeout(saveTimer)
-    saveTimer = window.setTimeout(async () => {
-      saveTimer = null
-      if (!manifest.value || !current.value) return
-      await fs.writeJsonFile(await fs.joinPath(current.value.path, MANIFEST), manifest.value)
-    }, 400)
+    manifestSaver.schedule()
   }
 
   /** 立即写出防抖中的清单：安卓返回退出、切后台前调用，防止窗口期内被杀丢数据 */
-  async function flushSave(): Promise<void> {
-    if (!saveTimer) return
-    window.clearTimeout(saveTimer)
-    saveTimer = null
-    if (!manifest.value || !current.value?.path) return
-    await fs.writeJsonFile(await fs.joinPath(current.value.path, MANIFEST), manifest.value)
+  function flushSave(): Promise<void> {
+    return Promise.resolve(manifestSaver.flush())
   }
 
   function makeItem(ref: PrjImageRef, blob: Blob | null): ImageItem {

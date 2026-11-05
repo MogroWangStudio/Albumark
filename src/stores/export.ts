@@ -56,13 +56,14 @@ export const useExportStore = defineStore('export', () => {
   async function buildPayload() {
     // 素材按「全局 + 各照片独立水印」引用的并集收集
     const perImageLayers = wm.perImageSnapshot()
-    const allLayers = [...wm.plainLayers(), ...Object.values(perImageLayers).flat()]
+    const layers = wm.plainLayers()
+    const allLayers = [...layers, ...Object.values(perImageLayers).flat()]
     const assets = await wm.assetPayloads(allLayers)
     // 裁剪对象来自响应式存储，传 Worker 前拍平为纯数据
     const crops: Record<string, Crop> = {}
     for (const [id, c] of Object.entries(adjust.crops)) crops[id] = { ...c }
     return {
-      layers: wm.plainLayers(),
+      layers,
       adjustments: adjust.snapshotFor(null),
       perImage: adjust.perImageSnapshot(),
       crops,

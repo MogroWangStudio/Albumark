@@ -6,6 +6,7 @@ import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import { TOKENS } from '@/core/tokens'
+import { fmtSize } from '@/core/format'
 import { isCapacitor, isTauri } from '@/core/platform'
 import { useExportStore } from '@/stores/export'
 import { useImagesStore } from '@/stores/images'
@@ -82,13 +83,6 @@ const scopeCountText = computed(() =>
 )
 
 /* ---------- 大小预估：设置 / 范围 / 照片清单变化后防抖重算 ---------- */
-
-function fmtSize(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${bytes} B`
-}
 
 const estimateText = computed(() =>
   ex.estimating ? '估算中…' : ex.estimate != null ? `约 ${fmtSize(ex.estimate)}` : '',

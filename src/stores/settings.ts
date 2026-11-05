@@ -2,6 +2,7 @@ import { ref, watchEffect } from 'vue'
 import { defineStore } from 'pinia'
 import { registerPlugin } from '@capacitor/core'
 import { isCapacitor, isTauri } from '@/core/platform'
+import { loadJson, saveJson } from '@/core/storage'
 import type { UpdateChannel } from '@/core/updater'
 
 export type ThemeMode =
@@ -156,7 +157,7 @@ export type BootStyle =
 /** 启动动画选择：具体款式，或每次启动随机抽一款 */
 export type BootStyleChoice = BootStyle | 'random'
 
-export const BOOT_STYLES: { value: BootStyle; label: string; hint: string }[] = [
+const BOOT_STYLES: { value: BootStyle; label: string; hint: string }[] = [
   { value: 'default', label: '勾勒', hint: '线条勾勒，颜色填入' },
   { value: 'shutter', label: '快门', hint: '黑幕收开，露出界面' },
   { value: 'develop', label: '显影', hint: '影像在药水中浮现' },
@@ -185,7 +186,7 @@ export function pickBootStyle(choice: BootStyleChoice): BootStyle {
   return pool[Math.floor(Math.random() * pool.length)].value
 }
 
-export interface AppSettings {
+interface AppSettings {
   /** 外观主题：auto 跟随系统 */
   theme: ThemeMode
   /** 界面显示字体：字体族名；空 = 系统默认栈 */
@@ -236,34 +237,27 @@ const DEFAULTS: AppSettings = {
 }
 
 function load(): AppSettings {
-  try {
-    const raw = window.localStorage.getItem(PERSIST_KEY)
-    if (raw) {
-      const data = { ...DEFAULTS, ...(JSON.parse(raw) as Partial<AppSettings>) }
-      // 旧版本 / 手改存档的容错：款式必须存在，时长夹回档位并取整到 100ms
-      if (!BOOT_STYLE_CHOICES.some((s) => s.value === data.bootStyle)) data.bootStyle = DEFAULTS.bootStyle
-      const dur = Number(data.bootDuration)
-      data.bootDuration = Number.isFinite(dur)
-        ? Math.min(BOOT_DURATION_MAX, Math.max(BOOT_DURATION_MIN, Math.round(dur / 100) * 100))
-        : BOOT_DURATION_DEFAULT
-      // 渲染质量同理：未知档位回落到默认，自定义精度夹回范围并取整到 50px
-      if (!PREVIEW_QUALITIES.some((q) => q.value === data.previewQuality)) {
-        data.previewQuality = DEFAULTS.previewQuality
-      }
-      const pq = Number(data.previewQualityValue)
-      data.previewQualityValue = Number.isFinite(pq)
-        ? Math.min(PREVIEW_CUSTOM_MAX, Math.max(PREVIEW_CUSTOM_MIN, Math.round(pq / 50) * 50))
-        : DEFAULTS.previewQualityValue
-      // 更新渠道：未知值回落稳定通道
-      if (!UPDATE_CHANNELS.some((c) => c.value === data.updateChannel)) {
-        data.updateChannel = DEFAULTS.updateChannel
-      }
-      return data
-    }
-  } catch {
-    /* 忽略损坏数据 */
+  const parsed = loadJson<Partial<AppSettings>>(PERSIST_KEY, {})
+  const data = { ...DEFAULTS, ...parsed }
+  // 旧版本 / 手改存档的容错：款式必须存在，时长夹回档位并取整到 100ms
+  if (!BOOT_STYLE_CHOICES.some((s) => s.value === data.bootStyle)) data.bootStyle = DEFAULTS.bootStyle
+  const dur = Number(data.bootDuration)
+  data.bootDuration = Number.isFinite(dur)
+    ? Math.min(BOOT_DURATION_MAX, Math.max(BOOT_DURATION_MIN, Math.round(dur / 100) * 100))
+    : BOOT_DURATION_DEFAULT
+  // 渲染质量同理：未知档位回落到默认，自定义精度夹回范围并取整到 50px
+  if (!PREVIEW_QUALITIES.some((q) => q.value === data.previewQuality)) {
+    data.previewQuality = DEFAULTS.previewQuality
   }
-  return { ...DEFAULTS }
+  const pq = Number(data.previewQualityValue)
+  data.previewQualityValue = Number.isFinite(pq)
+    ? Math.min(PREVIEW_CUSTOM_MAX, Math.max(PREVIEW_CUSTOM_MIN, Math.round(pq / 50) * 50))
+    : DEFAULTS.previewQualityValue
+  // 更新渠道：未知值回落稳定通道
+  if (!UPDATE_CHANNELS.some((c) => c.value === data.updateChannel)) {
+    data.updateChannel = DEFAULTS.updateChannel
+  }
+  return data
 }
 
 /** Capacitor 8 内置 SystemBars 插件（仅安卓），用于让状态栏图标随主题切换。 */
@@ -292,29 +286,22 @@ export const useSettingsStore = defineStore('settings', () => {
   const systemDark = window.matchMedia('(prefers-color-scheme: dark)')
 
   function persist(): void {
-    try {
-      window.localStorage.setItem(
-        PERSIST_KEY,
-        JSON.stringify({
-          theme: theme.value,
-          fontFamily: fontFamily.value,
-          uiZoom: uiZoom.value,
-          bootEnabled: bootEnabled.value,
-          bootStyle: bootStyle.value,
-          bootDuration: bootDuration.value,
-          exifNotice: exifNotice.value,
-          minZoom: minZoom.value,
-          previewQuality: previewQuality.value,
-          previewQualityValue: previewQualityValue.value,
-          wmSnap: wmSnap.value,
-          updateChannel: updateChannel.value,
-          dataDir: dataDir.value,
-          oobeDone: oobeDone.value,
-        }),
-      )
-    } catch {
-      /* 忽略写入失败 */
-    }
+    saveJson(PERSIST_KEY, {
+      theme: theme.value,
+      fontFamily: fontFamily.value,
+      uiZoom: uiZoom.value,
+      bootEnabled: bootEnabled.value,
+      bootStyle: bootStyle.value,
+      bootDuration: bootDuration.value,
+      exifNotice: exifNotice.value,
+      minZoom: minZoom.value,
+      previewQuality: previewQuality.value,
+      previewQualityValue: previewQualityValue.value,
+      wmSnap: wmSnap.value,
+      updateChannel: updateChannel.value,
+      dataDir: dataDir.value,
+      oobeDone: oobeDone.value,
+    })
   }
 
   /** auto 跟随系统解析出的明暗；个性主题取注册表里的固定 mode */

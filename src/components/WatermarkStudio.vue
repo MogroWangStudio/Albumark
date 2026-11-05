@@ -8,6 +8,7 @@ import { type AssetMap } from '@/core/draw'
 import { backgroundAspect, layoutBackgroundFrame } from '@/core/bg'
 import { loadSampleBitmap, paintComposed, SAMPLE_VARIANTS, type SampleOrientation } from '@/core/sample'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
+import { clampPanAxis, rubberband } from '@/core/viewmotion'
 import { resolveTokens, SAMPLE_EXIF } from '@/core/tokens'
 import { toast } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
@@ -311,25 +312,12 @@ function fitSize(rect: DOMRect): { w: number; h: number } {
   return { w: frame.w * fit, h: frame.h * fit }
 }
 
-/** Apple 式橡皮筋：越界越多阻力越大 */
-function rubberband(overshoot: number, dimension: number, constant = 0.55): number {
-  return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot))
-}
-
-function clampPanAxis(v: number, disp: number, viewport: number, soft: boolean): number {
-  const max = Math.max(0, (disp * viewZoom.value - viewport) / 2)
-  if (max === 0) return 0
-  if (Math.abs(v) <= max) return v
-  if (!soft) return Math.sign(v) * max
-  return Math.sign(v) * (max + rubberband(Math.abs(v) - max, viewport))
-}
-
 function hardClampPan(): void {
   const rect = canvasEl.value?.getBoundingClientRect()
   if (!rect) return
   const d = fitSize(rect)
-  viewPan.x = clampPanAxis(viewPan.x, d.w, rect.width, false)
-  viewPan.y = clampPanAxis(viewPan.y, d.h, rect.height, false)
+  viewPan.x = clampPanAxis(viewPan.x, d.w, rect.width, viewZoom.value, false)
+  viewPan.y = clampPanAxis(viewPan.y, d.h, rect.height, viewZoom.value, false)
 }
 
 function stopViewAnim(): void {
@@ -570,12 +558,14 @@ function onPointerMove(e: PointerEvent): void {
       gesture.startPan.x + (e.clientX - gesture.startClient.x),
       d.w,
       rect.width,
+      viewZoom.value,
       true,
     )
     viewPan.y = clampPanAxis(
       gesture.startPan.y + (e.clientY - gesture.startClient.y),
       d.h,
       rect.height,
+      viewZoom.value,
       true,
     )
     redraw()
@@ -597,8 +587,8 @@ function onPointerUp(e: PointerEvent): void {
       let ty = viewPan.y
       if (rect) {
         const d = fitSize(rect)
-        tx = clampPanAxis(viewPan.x, d.w, rect.width, false)
-        ty = clampPanAxis(viewPan.y, d.h, rect.height, false)
+        tx = clampPanAxis(viewPan.x, d.w, rect.width, viewZoom.value, false)
+        ty = clampPanAxis(viewPan.y, d.h, rect.height, viewZoom.value, false)
       }
       if (
         Math.abs(tz - viewZoom.value) > 0.001 ||
@@ -675,8 +665,8 @@ function onPointerUp(e: PointerEvent): void {
     const rect = canvasEl.value?.getBoundingClientRect()
     if (!rect) return
     const d = fitSize(rect)
-    const tx = clampPanAxis(viewPan.x, d.w, rect.width, false)
-    const ty = clampPanAxis(viewPan.y, d.h, rect.height, false)
+    const tx = clampPanAxis(viewPan.x, d.w, rect.width, viewZoom.value, false)
+    const ty = clampPanAxis(viewPan.y, d.h, rect.height, viewZoom.value, false)
     if (Math.abs(tx - viewPan.x) > 0.5 || Math.abs(ty - viewPan.y) > 0.5) {
       animateViewTo(viewZoom.value, tx, ty)
     }

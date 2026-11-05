@@ -1,5 +1,6 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
+import { createDebouncedSaver } from '@/core/storage'
 import { FULL_CROP, type Adjustments, type Crop } from '@/types/adjust'
 import type { WatermarkLayer } from '@/types/watermark'
 import { toast } from './toast'
@@ -57,7 +58,6 @@ export const useHistoryStore = defineStore('history', () => {
 
   /** 回填期间屏蔽监听，避免「恢复」本身又生成一步历史 */
   let applying = false
-  let timer: number | null = null
   /** 有改动尚未落步（防抖窗口内）：撤销按钮应立即变为可用 */
   const pending = ref(false)
 
@@ -108,22 +108,17 @@ export const useHistoryStore = defineStore('history', () => {
     future.value = []
   }
 
+  const commitSaver = createDebouncedSaver(commit, IDLE)
+
   function schedule(): void {
     if (applying || wm.studioActive) return
     pending.value = true
-    if (timer) window.clearTimeout(timer)
-    timer = window.setTimeout(() => {
-      timer = null
-      commit()
-    }, IDLE)
+    commitSaver.schedule()
   }
 
   /** 立刻结算防抖中的改动：撤销前必须先把它落成一步，否则会撤掉上一步 */
   function flush(): void {
-    if (!timer) return
-    window.clearTimeout(timer)
-    timer = null
-    commit()
+    commitSaver.flush()
   }
 
   function restore(s: EditState): void {
@@ -178,10 +173,7 @@ export const useHistoryStore = defineStore('history', () => {
 
   /** 以当前状态为起点清空历史：启动装载完成、切换项目时调用 */
   function reset(): void {
-    if (timer) {
-      window.clearTimeout(timer)
-      timer = null
-    }
+    commitSaver.cancel()
     pending.value = false
     past.value = []
     future.value = []

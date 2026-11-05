@@ -137,7 +137,7 @@ export async function openReleasePage(url: string): Promise<void> {
 /* ---------- 自动更新：下载与安装 ---------- */
 
 /** 按平台匹配 Release 资产（命名约定由 CI 发布时保证） */
-export function pickAsset(assets: UpdateAsset[]): UpdateAsset | null {
+function pickAsset(assets: UpdateAsset[]): UpdateAsset | null {
   const ua = navigator.userAgent
   const patterns = isCapacitor
     ? [/\.apk$/i]

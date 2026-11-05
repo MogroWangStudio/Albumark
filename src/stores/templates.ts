@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
+import { loadJson, saveJson } from '@/core/storage'
 import { makeBorderLayer, makeTextLayer, useWatermarkStore } from './watermark'
 import { toast } from './toast'
 import { migrateOffsetsToPx, type WatermarkTemplate } from '@/types/watermark'
@@ -124,13 +125,8 @@ function migrateTemplateLayers(t: SavedTemplate): SavedTemplate {
 }
 
 function loadSaved(): SavedTemplate[] {
-  let saved: SavedTemplate[] = []
-  try {
-    const raw = window.localStorage.getItem(PERSIST_KEY)
-    if (raw) saved = JSON.parse(raw) as SavedTemplate[]
-  } catch {
-    /* 忽略损坏数据 */
-  }
+  let saved = loadJson<SavedTemplate[]>(PERSIST_KEY, [])
+  if (!Array.isArray(saved)) saved = []
   if (!saved.length) {
     // 旧版模板键（偏移按长边百分比存储）：读出后迁移并移除
     try {
@@ -166,10 +162,17 @@ export const useTemplatesStore = defineStore('templates', () => {
   ])
 
   function persist(): void {
-    try {
-      window.localStorage.setItem(PERSIST_KEY, JSON.stringify(saved.value))
-    } catch {
+    if (!saveJson(PERSIST_KEY, saved.value)) {
       toast('模板过大，仅保存到本次会话', 'error')
+    }
+  }
+
+  /** 序列化体积超限（含序列化抛错）时返回 true，调用方放弃保存 */
+  function overLimit(data: unknown): boolean {
+    try {
+      return JSON.stringify(data).length > SIZE_LIMIT
+    } catch {
+      return true
     }
   }
 
@@ -187,11 +190,7 @@ export const useTemplatesStore = defineStore('templates', () => {
       layers: data.layers,
       assets: data.assets,
     }
-    try {
-      if (JSON.stringify(t).length > SIZE_LIMIT) return null
-    } catch {
-      return null
-    }
+    if (overLimit(t)) return null
     saved.value.unshift(t)
     persist()
     return t.id
@@ -202,11 +201,7 @@ export const useTemplatesStore = defineStore('templates', () => {
     const t = saved.value.find((x) => x.id === id)
     if (!t) return false
     const data = wm.serialize()
-    try {
-      if (JSON.stringify(data).length > SIZE_LIMIT) return false
-    } catch {
-      return false
-    }
+    if (overLimit(data)) return false
     t.layers = data.layers
     t.assets = data.assets
     t.updatedAt = Date.now()
@@ -233,11 +228,7 @@ export const useTemplatesStore = defineStore('templates', () => {
       layers: structuredClone(src.layers),
       assets: structuredClone(src.assets),
     }
-    try {
-      if (JSON.stringify(t).length > SIZE_LIMIT) return null
-    } catch {
-      return null
-    }
+    if (overLimit(t)) return null
     saved.value.unshift(t)
     persist()
     return t.id

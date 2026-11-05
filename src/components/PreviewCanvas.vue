@@ -16,6 +16,7 @@ import {
 } from '@/core/bg'
 import { renderClient } from '@/core/renderer'
 import { resolveTokens } from '@/core/tokens'
+import { clampPanAxis, rubberband } from '@/core/viewmotion'
 import { useAdjustStore } from '@/stores/adjust'
 import { toast } from '@/stores/toast'
 import { useImagesStore } from '@/stores/images'
@@ -1028,22 +1029,8 @@ function sampleResult(x: number, y: number): { r: number; g: number; b: number }
 
 /* ---------- 视图变换：缩放 / 平移 / 橡皮筋 ---------- */
 
-/** Apple 式橡皮筋：越界越多阻力越大 */
-function rubberband(overshoot: number, dimension: number, constant = 0.55): number {
-  return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot))
-}
-
 /** 放大平移时图片边缘与面板/顶栏/底栏保留的呼吸边距 */
 const PAN_MARGIN = 12
-
-function clampPanAxis(v: number, disp: number, viewport: number, soft: boolean): number {
-  // 边界从可用区域各边内收 PAN_MARGIN：放大后图片不贴操作面板与屏幕边
-  const max = Math.max(0, (disp * zoom.value - viewport) / 2 - PAN_MARGIN)
-  if (max === 0) return 0
-  if (Math.abs(v) <= max) return v
-  if (!soft) return Math.sign(v) * max
-  return Math.sign(v) * (max + rubberband(Math.abs(v) - max, viewport))
-}
 
 /** 图像在当前 zoom 下的显示尺寸（CSS px） */
 function displaySize(): { w: number; h: number } {
@@ -1055,8 +1042,8 @@ function displaySize(): { w: number; h: number } {
 
 function hardClampPan(): void {
   const d = displaySize()
-  pan.x = clampPanAxis(pan.x, d.w, avail.w, false)
-  pan.y = clampPanAxis(pan.y, d.h, avail.h, false)
+  pan.x = clampPanAxis(pan.x, d.w, avail.w, zoom.value, false, PAN_MARGIN)
+  pan.y = clampPanAxis(pan.y, d.h, avail.h, zoom.value, false, PAN_MARGIN)
 }
 
 function stopViewAnim(): void {
@@ -1703,13 +1690,17 @@ function onPointerMove(e: PointerEvent): void {
       gesture.startPan.x + (e.clientX - gesture.startClient.x),
       d.w,
       avail.w,
+      zoom.value,
       true,
+      PAN_MARGIN,
     )
     pan.y = clampPanAxis(
       gesture.startPan.y + (e.clientY - gesture.startClient.y),
       d.h,
       avail.h,
+      zoom.value,
       true,
+      PAN_MARGIN,
     )
     drawBase()
     drawOverlay()
@@ -1740,8 +1731,8 @@ function onPointerUp(e: PointerEvent): void {
       const tz = Math.min(MAX_ZOOM, Math.max(minZoom.value, zoom.value))
       const d = displaySize()
       zoom.value = tz
-      const tx = clampPanAxis(pan.x, d.w, avail.w, false)
-      const ty = clampPanAxis(pan.y, d.h, avail.h, false)
+      const tx = clampPanAxis(pan.x, d.w, avail.w, zoom.value, false, PAN_MARGIN)
+      const ty = clampPanAxis(pan.y, d.h, avail.h, zoom.value, false, PAN_MARGIN)
       if (Math.abs(tx - pan.x) > 0.5 || Math.abs(ty - pan.y) > 0.5) {
         animateViewTo(tz, tx, ty)
       } else {
@@ -1801,8 +1792,8 @@ function onPointerUp(e: PointerEvent): void {
   // 面板展开时全视口基准会把图片放行到面板底下，造成部分内容无法拖回）
   if (g.type === 'pan') {
     const d = displaySize()
-    const tx = clampPanAxis(pan.x, d.w, avail.w, false)
-    const ty = clampPanAxis(pan.y, d.h, avail.h, false)
+    const tx = clampPanAxis(pan.x, d.w, avail.w, zoom.value, false, PAN_MARGIN)
+    const ty = clampPanAxis(pan.y, d.h, avail.h, zoom.value, false, PAN_MARGIN)
     if (Math.abs(tx - pan.x) > 0.5 || Math.abs(ty - pan.y) > 0.5) {
       animateViewTo(zoom.value, tx, ty)
     }

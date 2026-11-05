@@ -44,7 +44,7 @@ export async function withExif(
  * 只按需增量读文件头部，不给几十 MB 的原图整份解码；
  * 段不存在（非 JPEG / 纯净文件）或读到上限仍未见分晓，返回 null。
  */
-export async function readExifSegment(blob: Blob): Promise<Uint8Array | null> {
+async function readExifSegment(blob: Blob): Promise<Uint8Array | null> {
   if (blob.size < 4) return null
   let end = Math.min(256 * 1024, blob.size)
   try {
@@ -104,7 +104,7 @@ function isExifPayload(b: Uint8Array, p: number): boolean {
  * 修补 Exif 段以匹配导出结果：方向置 1、宽高改为实际输出尺寸、
  * 去掉 IFD1 缩略图。结构异常时返回 null（调用方放弃 EXIF）。
  */
-export function normalizeExifSegment(
+function normalizeExifSegment(
   seg: Uint8Array,
   outW: number,
   outH: number,

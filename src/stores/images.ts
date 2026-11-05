@@ -177,14 +177,6 @@ export const useImagesStore = defineStore('images', () => {
     }
   }
 
-  async function addFiles(incoming: File[]): Promise<void> {
-    const jpegs = incoming.filter((f) => f.type === 'image/jpeg' || isJpegName(f.name))
-    const skipped = incoming.length - jpegs.length
-    if (skipped > 0) toast(`已跳过 ${skipped} 个非 JPG 文件`)
-    if (!jpegs.length) return
-    await addBlobs(jpegs.map((f) => ({ blob: f, name: f.name || '照片.jpg' })))
-  }
-
   async function addFromUrl(url: string): Promise<void> {
     const blob = await fetchImageBlob(url)
     const looksJpeg = blob.type === 'image/jpeg' || isJpegName(url)
@@ -269,7 +261,6 @@ export const useImagesStore = defineStore('images', () => {
     selectRange,
     selectAll,
     step,
-    addFiles,
     addFromUrl,
     remove,
     clear,

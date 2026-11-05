@@ -1,6 +1,7 @@
 import { computed, ref, toRaw, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
+import { createDebouncedSaver, loadJson, saveJson } from '@/core/storage'
 import { blobToDataUrl, dataUrlToBlob, rasterizeSvg } from '@/core/svg'
 import type {
   AnchorPreset,
@@ -44,7 +45,7 @@ const LEGACY_V1_KEY = 'albumark.watermark.v1'
 /** 旧全局配置只迁移一次，避免把同一份水印带给后续每个项目 */
 const MIGRATED_KEY = 'albumark.watermark.v4:migrated'
 /** 浏览器临时项目（没有磁盘路径）单独一份配置 */
-export const EPHEMERAL_WATERMARK_SCOPE = '__ephemeral__'
+const EPHEMERAL_WATERMARK_SCOPE = '__ephemeral__'
 /** 项目作用域前缀：与临时作用域、以及历史上的裸目录路径区分开 */
 const PROJECT_SCOPE_PREFIX = 'p:'
 
@@ -111,7 +112,7 @@ export function makeBorderLayer(patch: Partial<BorderLayer> = {}): BorderLayer {
   }
 }
 
-export function makeBackgroundLayer(patch: Partial<BackgroundLayer> = {}): BackgroundLayer {
+function makeBackgroundLayer(patch: Partial<BackgroundLayer> = {}): BackgroundLayer {
   return {
     id: uid(),
     type: 'background',
@@ -268,19 +269,25 @@ export const useWatermarkStore = defineStore('watermark', () => {
     selectedId.value = layer.id
   }
 
-  /** 为背景水印挑选素材：只入库素材，不建图层（区别于图片水印的 addImageFile） */
-  async function addBackgroundAsset(file: File): Promise<string> {
-    const prep = await prepImageFile(file)
+  /** 解析结果统一入库：建素材对象（含 dataUrl 缓存），返回素材 id */
+  async function registerAsset(prep: { blob: Blob; aspect: number }, name: string): Promise<string> {
     const asset: WatermarkAsset = {
       id: uid(),
-      name: file.name,
+      name,
       blob: prep.blob,
       dataUrl: await blobToDataUrl(prep.blob),
       aspect: prep.aspect,
     }
     assets.value[asset.id] = asset
-    schedulePersist()
     return asset.id
+  }
+
+  /** 为背景水印挑选素材：只入库素材，不建图层（区别于图片水印的 addImageFile） */
+  async function addBackgroundAsset(file: File): Promise<string> {
+    const prep = await prepImageFile(file)
+    const id = await registerAsset(prep, file.name)
+    schedulePersist()
+    return id
   }
 
   /** 「仅当前照片使用」的自定义背景：写入 / 清除某张照片的覆盖 */
@@ -316,30 +323,16 @@ export const useWatermarkStore = defineStore('watermark', () => {
 
   async function addImageFile(file: File): Promise<void> {
     const prep = await prepImageFile(file)
-    const asset: WatermarkAsset = {
-      id: uid(),
-      name: file.name,
-      blob: prep.blob,
-      dataUrl: await blobToDataUrl(prep.blob),
-      aspect: prep.aspect,
-    }
-    assets.value[asset.id] = asset
-    addImageLayer(asset.id, prep.aspect, file.name)
+    const id = await registerAsset(prep, file.name)
+    addImageLayer(id, prep.aspect, file.name)
   }
 
   async function replaceImageFile(layerId: string, file: File): Promise<void> {
     const layer = editTarget().find((l) => l.id === layerId)
     if (!layer || layer.type !== 'image') return
     const prep = await prepImageFile(file)
-    const asset: WatermarkAsset = {
-      id: uid(),
-      name: file.name,
-      blob: prep.blob,
-      dataUrl: await blobToDataUrl(prep.blob),
-      aspect: prep.aspect,
-    }
-    assets.value[asset.id] = asset
-    layer.assetId = asset.id
+    const id = await registerAsset(prep, file.name)
+    layer.assetId = id
     layer.aspect = prep.aspect
     layer.name = file.name
   }
@@ -506,14 +499,8 @@ export const useWatermarkStore = defineStore('watermark', () => {
   }
 
   function readStored(scope: string): StoredWatermark | null {
-    try {
-      const raw = window.localStorage.getItem(scopedStorageKey(scope))
-      if (!raw) return null
-      const data = JSON.parse(raw) as StoredWatermark
-      return data && Array.isArray(data.layers) ? data : null
-    } catch {
-      return null
-    }
+    const data = loadJson<StoredWatermark | null>(scopedStorageKey(scope), null)
+    return data && Array.isArray(data.layers) ? data : null
   }
 
   /** 旧版全局配置：只并入第一个打开的工作项目，之后作废 */
@@ -604,10 +591,9 @@ export const useWatermarkStore = defineStore('watermark', () => {
     bgOverrides.value = data.bgOverrides ? { ...data.bgOverrides } : {}
   }
 
-  let persistTimer: number | null = null
+  const persistSaver = createDebouncedSaver(persist, 500)
   function schedulePersist(): void {
-    if (persistTimer) window.clearTimeout(persistTimer)
-    persistTimer = window.setTimeout(persist, 500)
+    persistSaver.schedule()
   }
   function persist(): void {
     // 工作室草稿不写入；没有打开项目时也没有可写的分片
@@ -621,17 +607,14 @@ export const useWatermarkStore = defineStore('watermark', () => {
       const data: StoredWatermark = Object.keys(bgOverrides.value).length
         ? { ...payload, bgOverrides: { ...toRaw(bgOverrides.value) } }
         : payload
-      window.localStorage.setItem(scopedStorageKey(scopeKey.value), JSON.stringify(data))
+      saveJson(scopedStorageKey(scopeKey.value), data)
     } catch {
       /* 素材过大等情况直接放弃持久化 */
     }
   }
   /** 立即写出防抖中的水印：切目录 / 切后台 / 退出前调用，避免 500ms 窗口丢改动 */
   function flushPersist(): void {
-    if (persistTimer) {
-      window.clearTimeout(persistTimer)
-      persistTimer = null
-    }
+    persistSaver.cancel()
     persist()
   }
 
@@ -720,11 +703,6 @@ export const useWatermarkStore = defineStore('watermark', () => {
   })
   watch(derivedScope, (next) => setScope(next), { immediate: true })
 
-  /** 按当前工作项目立即对齐作用域。绑定是自动的，通常无需手动调用。 */
-  function syncScope(): void {
-    setScope(derivedScope.value)
-  }
-
   /**
    * 项目被删除：它的分片不再有归属，一并清除，避免残留数据在新建同名项目
    * 或复用 id 时被读回来。
@@ -786,7 +764,6 @@ export const useWatermarkStore = defineStore('watermark', () => {
     flushPersist,
     restoreState,
     setScope,
-    syncScope,
     forgetProject,
   }
 })

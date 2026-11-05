@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
+import { loadJson, saveJson } from '@/core/storage'
 import { cloneAdjustments, NEUTRAL, type Adjustments } from '@/types/adjust'
 import { toast } from './toast'
 import { useAdjustStore } from './adjust'
@@ -17,22 +18,16 @@ export interface AdjustPreset {
 const PERSIST_KEY = 'albumark.adjustPresets.v1'
 
 function load(): AdjustPreset[] {
-  try {
-    const raw = window.localStorage.getItem(PERSIST_KEY)
-    if (!raw) return []
-    const list = JSON.parse(raw) as AdjustPreset[]
-    if (!Array.isArray(list)) return []
-    return list
-      .filter((p) => p && typeof p.id === 'string' && typeof p.name === 'string' && p.values)
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        createdAt: p.createdAt ?? Date.now(),
-        values: { ...NEUTRAL, ...p.values },
-      }))
-  } catch {
-    return []
-  }
+  const list = loadJson<AdjustPreset[]>(PERSIST_KEY, [])
+  if (!Array.isArray(list)) return []
+  return list
+    .filter((p) => p && typeof p.id === 'string' && typeof p.name === 'string' && p.values)
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      createdAt: p.createdAt ?? Date.now(),
+      values: { ...NEUTRAL, ...p.values },
+    }))
 }
 
 export const useAdjustPresetsStore = defineStore('adjustPresets', () => {
@@ -41,9 +36,7 @@ export const useAdjustPresetsStore = defineStore('adjustPresets', () => {
   const list = ref<AdjustPreset[]>(load())
 
   function persist(): void {
-    try {
-      window.localStorage.setItem(PERSIST_KEY, JSON.stringify(list.value))
-    } catch {
+    if (!saveJson(PERSIST_KEY, list.value)) {
       toast('预设保存失败：本地存储空间不足', 'error')
     }
   }

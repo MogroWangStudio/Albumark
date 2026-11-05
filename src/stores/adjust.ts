@@ -6,21 +6,15 @@ import {
   NEUTRAL,
   type Adjustments,
   type Crop,
-  type SliderKey,
 } from '@/types/adjust'
 import { whiteBalanceDelta } from '@/core/adjust'
+import { loadJson, saveJson } from '@/core/storage'
 import { useImagesStore } from '@/stores/images'
 
 const PERSIST_KEY = 'albumark.adjust.v1'
 
 function load(): Adjustments {
-  try {
-    const raw = window.localStorage.getItem(PERSIST_KEY)
-    if (raw) return { ...NEUTRAL, ...(JSON.parse(raw) as Partial<Adjustments>) }
-  } catch {
-    /* 忽略损坏数据 */
-  }
-  return { ...NEUTRAL }
+  return { ...NEUTRAL, ...loadJson<Partial<Adjustments>>(PERSIST_KEY, {}) }
 }
 
 function plain(a: Adjustments): Adjustments {
@@ -34,10 +28,6 @@ export const useAdjustStore = defineStore('adjust', () => {
   const values = reactive(load()) as Adjustments
   /** 单独调节的照片：id → 独立参数（存在即为开启），随会话结束不持久化 */
   const perImage = ref<Record<string, Adjustments>>({})
-
-  function set(key: SliderKey, v: number): void {
-    values[key] = v
-  }
 
   function reset(): void {
     Object.assign(values, NEUTRAL)
@@ -159,11 +149,7 @@ export const useAdjustStore = defineStore('adjust', () => {
   }
 
   watch(values, () => {
-    try {
-      window.localStorage.setItem(PERSIST_KEY, JSON.stringify(values))
-    } catch {
-      /* 忽略写入失败 */
-    }
+    saveJson(PERSIST_KEY, values)
   })
 
   /* ---------- 裁剪：随照片独立，会话内有效（与「单独调节」同一生命周期） ---------- */
@@ -215,7 +201,6 @@ export const useAdjustStore = defineStore('adjust', () => {
   return {
     values,
     perImage,
-    set,
     reset,
     isIndividual,
     setIndividual,

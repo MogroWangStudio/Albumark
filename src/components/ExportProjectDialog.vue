@@ -6,6 +6,7 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import { statFolder, zipFolderTo, type ArchiveStats } from '@/core/archive'
 import { copyDir, joinPath, openWriter } from '@/core/fs'
+import { fmtSize } from '@/core/format'
 import { isTauri, pickDirectory, pickSavePath, revealInFolder } from '@/core/platform'
 import { toast } from '@/stores/toast'
 
@@ -57,13 +58,6 @@ watch(
 function requestClose(): void {
   if (phase.value === 'running') return
   emit('close')
-}
-
-function fmtSize(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${bytes} B`
 }
 
 function timestamp(): string {
