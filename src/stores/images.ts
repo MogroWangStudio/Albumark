@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { readExif } from '@/core/exif'
 import { jpegSize } from '@/core/jpeg'
+import { pngSize } from '@/core/png'
 import { fetchImageBlob } from '@/core/platform'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
@@ -10,6 +11,10 @@ import { useSettingsStore } from './settings'
 
 function isJpegName(name: string): boolean {
   return /\.jpe?g$/i.test(name)
+}
+
+function isPngName(name: string): boolean {
+  return /\.png$/i.test(name)
 }
 
 /** 图库缩略图长边（px）：60px 缩略图按 2x DPR 留足余量 */
@@ -21,16 +26,17 @@ const PARALLEL = 4
  * 解码一次得到尺寸 + 缩略图；EXIF 只读元数据段，代价很小。
  * 返回 patch，由调用方经 patchItem 写回，保证走响应式代理触发更新。
  *
- * 尺寸优先从 JPEG 头部 SOF 段读取（只扫几 KB），缩略图直接按小尺寸解码——
- * 不再为读尺寸 / 做缩略图整图解码（安卓 WebView 上一张 50MP 要数秒）。
- * 头部解析失败才回退整图解码。
+ * 尺寸优先从文件头部读取（JPEG 扫 SOF 段、PNG 读 IHDR，只扫几 KB），
+ * 缩略图直接按小尺寸解码——不再为读尺寸 / 做缩略图整图解码
+ * （安卓 WebView 上一张 50MP 要数秒）。头部解析失败才回退整图解码。
  */
 export async function processItem(item: ImageItem): Promise<Partial<ImageItem>> {
   const patch: Partial<ImageItem> = {}
   if (item.blob) {
     try {
       const head = new Uint8Array(await item.blob.slice(0, 262144).arrayBuffer())
-      const size = jpegSize(head)
+      // 按魔数分派头部解析：JPEG SOF 或 PNG IHDR，其余格式回退整图解码
+      const size = jpegSize(head) ?? pngSize(head)
       const long = size ? Math.max(size.w, size.h) : 0
       const k = long > THUMB_LONG ? THUMB_LONG / long : 1
       const bmp = await createImageBitmap(
@@ -179,8 +185,9 @@ export const useImagesStore = defineStore('images', () => {
 
   async function addFromUrl(url: string): Promise<void> {
     const blob = await fetchImageBlob(url)
-    const looksJpeg = blob.type === 'image/jpeg' || isJpegName(url)
-    if (!looksJpeg) throw new Error('仅支持 JPG 图片链接')
+    const supported =
+      blob.type === 'image/jpeg' || blob.type === 'image/png' || isJpegName(url) || isPngName(url)
+    if (!supported) throw new Error('仅支持 JPG/PNG 图片链接')
     let name: string
     try {
       name = decodeURIComponent(new URL(url, window.location.href).pathname.split('/').pop() ?? '')
@@ -188,7 +195,7 @@ export const useImagesStore = defineStore('images', () => {
       name = ''
     }
     if (!name) name = 'photo'
-    if (!isJpegName(name)) name += '.jpg'
+    if (!isJpegName(name) && !isPngName(name)) name += blob.type === 'image/png' ? '.png' : '.jpg'
     await addBlobs([{ blob, name }])
   }
 

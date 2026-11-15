@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "albumark"
-version = "2.0.0"
+version = "2.0.0-beta1"
 dependencies = [
  "serde",
  "serde_json",

@@ -59,14 +59,14 @@ export async function pickDirectory(title = '选择文件夹'): Promise<string |
   return typeof dir === 'string' ? dir : null
 }
 
-/** 桌面端选择若干 JPG 照片，返回绝对路径。 */
+/** 桌面端选择若干 JPG/PNG 照片，返回绝对路径。 */
 export async function pickImagePaths(title = '选择照片'): Promise<string[]> {
   if (!isTauri) return []
   const { open } = await import('@tauri-apps/plugin-dialog')
   const paths = await open({
     multiple: true,
     title,
-    filters: [{ name: 'JPEG 照片', extensions: ['jpg', 'jpeg'] }],
+    filters: [{ name: '图片文件（JPG/PNG）', extensions: ['jpg', 'jpeg', 'png'] }],
   })
   return Array.isArray(paths) ? paths : paths ? [paths] : []
 }

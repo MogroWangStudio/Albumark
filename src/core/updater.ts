@@ -4,27 +4,31 @@ import { APP_VERSION } from './version'
 
 /**
  * GitHub Release 检查与自动更新：
- * - 检查：手动触发，不自动轮询（本地优先，不打扰）；渠道分稳定（正式 Release）
- *   与测试（含 Pre-Release）
- * - 更新：流式下载 Release 资产（带进度），平台各自的安装动作——
- *   Windows 便携版写替换脚本自动换新，macOS 打开 DMG，安卓交给系统安装器
+ * - 检查：走 github.com 主站的 releases.atom 摘要源，不走 api.github.com——
+ *   匿名 REST API 按 IP 限流，共享出口网络下极易 403，部分网络对 api 子域
+ *   本身也不稳定；预发布按 tag 是否带「-」后缀判定，与 CI 发布规则同源；
+ *   渠道分稳定（仅正式 Release）与测试（含 Pre-Release）
+ * - 下载：流式拉取当前平台的 Release 产物到暂存目录（带进度），下载前清掉旧包
+ * - 安装：桌面端只暂存不替换，由设置页读秒后调 installStagedUpdate 派发系统
+ *   脚本，等本进程退出后替换并重启（见 src-tauri/src/relaunch.rs 与 update.rs）；
+ *   安卓交给系统安装器
  */
-
-export interface UpdateAsset {
-  name: string
-  url: string
-}
 
 export interface UpdateInfo {
   version: string
   url: string
   notes: string
-  /** Release 附带的安装包资产（按平台命名约定匹配下载） */
-  assets: UpdateAsset[]
+  /** 本平台对应的 Release 产物名（null = 没有对应包体，只能去发布页手动下载） */
+  asset: string | null
 }
 
-const RELEASES_API = 'https://api.github.com/repos/MogroWangStudio/Albumark/releases'
-const LATEST_API = `${RELEASES_API}/latest`
+/** 摘要源：github.com 主站提供，无 api 子域的限流问题 */
+const ATOM_URL = 'https://github.com/MogroWangStudio/Albumark/releases.atom'
+/** Atom link href 里 tag 的路径前缀，其后即 tag 本身 */
+const TAG_PATH = '/releases/tag/'
+/** 产物下载前缀（tag 带 v，产物名不带） */
+const DOWNLOAD_BASE = 'https://github.com/MogroWangStudio/Albumark/releases/download'
+const RELEASES_PAGE = 'https://github.com/MogroWangStudio/Albumark/releases'
 
 /** 更新渠道：stable 只看正式 Release，beta 连 Pre-Release 测试版一起看 */
 export type UpdateChannel = 'stable' | 'beta'
@@ -70,59 +74,83 @@ function isNewer(a: string, b: string): boolean {
   return false
 }
 
-async function fetchJson(url: string): Promise<unknown> {
-  const headers = { Accept: 'application/vnd.github+json' }
+async function fetchText(url: string): Promise<string> {
   if (isTauri) {
     const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http')
-    const res = await tauriFetch(url, { headers })
+    const res = await tauriFetch(url)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return await res.json()
+    return await res.text()
   }
-  const res = await fetch(url, { headers })
+  const res = await fetch(url)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return await res.json()
+  return await res.text()
 }
 
-interface ReleaseData {
-  tag_name?: string
-  html_url?: string
-  body?: string
-  draft?: boolean
-  prerelease?: boolean
-  assets?: { name?: string; browser_download_url?: string }[]
+interface FeedEntry {
+  tag: string
+  url: string
+  notes: string
+}
+
+/**
+ * 解析 releases.atom：tag 从 link href 的 /releases/tag/ 后缀取（id 末段会丢
+ * 特殊字符），发布说明取 content（GitHub 渲染后的 HTML）的纯文本。
+ */
+function parseAtom(xml: string): FeedEntry[] {
+  const doc = new DOMParser().parseFromString(xml, 'text/xml')
+  const out: FeedEntry[] = []
+  for (const entry of Array.from(doc.getElementsByTagName('entry'))) {
+    const link = Array.from(entry.getElementsByTagName('link')).find((l) =>
+      (l.getAttribute('href') ?? '').includes(TAG_PATH),
+    )
+    const href = link?.getAttribute('href')
+    if (!href) continue
+    const tag = decodeURIComponent(href.slice(href.indexOf(TAG_PATH) + TAG_PATH.length))
+    if (!tag) continue
+    const html = entry.getElementsByTagName('content')[0]?.textContent ?? ''
+    out.push({ tag, url: href, notes: htmlToText(html) })
+  }
+  return out
+}
+
+/** HTML → 纯文本：parse 成独立文档取 textContent（外部内容绝不注入页面 DOM），截 3000 字符 */
+function htmlToText(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  return (doc.body.textContent ?? '').trim().slice(0, 3000)
 }
 
 /**
  * 按渠道查询最新版本；有新版本时返回更新信息，已是最新返回 null，异常时抛错。
- * - 稳定通道：GitHub releases/latest，天然只含正式 Release
- * - 测试通道：releases 列表取第一条非草稿（正式版或 Pre-Release，列表已按时间倒序）
+ * Atom 源按发布时间倒序列出最近若干条（正式与 Pre-Release 混排，draft 不在其中）；
+ * 稳定通道过滤掉带「-」后缀的预发布 tag 后取语义化最新的一个。
  */
 export async function checkForUpdate(channel: UpdateChannel = 'stable'): Promise<UpdateInfo | null> {
-  let release: ReleaseData | undefined
-  if (channel === 'beta') {
-    const list = (await fetchJson(`${RELEASES_API}?per_page=10`)) as ReleaseData[]
-    release = Array.isArray(list) ? list.find((r) => r && !r.draft && r.tag_name) : undefined
-  } else {
-    release = (await fetchJson(LATEST_API)) as ReleaseData
+  const xml = await fetchText(ATOM_URL)
+  const acceptPre = channel === 'beta'
+  let best: { version: string; entry: FeedEntry } | null = null
+  for (const entry of parseAtom(xml)) {
+    const ver = entry.tag.replace(/^v/, '')
+    // 预发布判定与 CI 发布规则同源：去 v 前缀后含「-」即 Pre-Release
+    if (!acceptPre && ver.includes('-')) continue
+    if (!isNewer(ver, APP_VERSION)) continue
+    if (!best || isNewer(ver, best.version)) best = { version: ver, entry }
   }
-  if (!release || release.draft || !release.tag_name) {
-    throw new Error('响应格式异常')
-  }
-  // 稳定通道若拿到 Pre-Release 说明响应异常（latest 本不该返回）
-  if (channel === 'stable' && release.prerelease) {
-    throw new Error('响应格式异常')
-  }
-  const latest = release.tag_name.replace(/^v/, '')
-  if (!isNewer(latest, APP_VERSION)) return null
-  const assets = (release.assets ?? [])
-    .filter((a) => a.name && a.browser_download_url)
-    .map((a) => ({ name: a.name as string, url: a.browser_download_url as string }))
+  if (!best) return null
   return {
-    version: latest,
-    url: release.html_url ?? 'https://github.com/MogroWangStudio/Albumark/releases',
-    notes: release.body ?? '',
-    assets,
+    version: best.version,
+    url: best.entry.url || RELEASES_PAGE,
+    notes: best.entry.notes,
+    asset: assetName(best.version),
   }
+}
+
+/** 当前平台对应的 Release 产物名（与 .github/workflows/release.yml 的整理产物命名一致；未列出的平台退回手动下载） */
+function assetName(version: string): string | null {
+  if (isCapacitor) return `Albumark_${version}_android.apk`
+  const ua = navigator.userAgent
+  if (/Windows/i.test(ua)) return `Albumark_${version}_windows-x64-portable.exe`
+  if (/Mac/i.test(ua)) return `Albumark_${version}_macos-arm64.dmg`
+  return null
 }
 
 export async function openReleasePage(url: string): Promise<void> {
@@ -135,23 +163,6 @@ export async function openReleasePage(url: string): Promise<void> {
 }
 
 /* ---------- 自动更新：下载与安装 ---------- */
-
-/** 按平台匹配 Release 资产（命名约定由 CI 发布时保证） */
-function pickAsset(assets: UpdateAsset[]): UpdateAsset | null {
-  const ua = navigator.userAgent
-  const patterns = isCapacitor
-    ? [/\.apk$/i]
-    : /Windows/i.test(ua)
-      ? [/windows.*\.exe$/i]
-      : /Mac/i.test(ua)
-        ? [/macos.*\.dmg$/i]
-        : []
-  for (const re of patterns) {
-    const hit = assets.find((a) => re.test(a.name))
-    if (hit) return hit
-  }
-  return null
-}
 
 /** 流式下载到内存：content-length 可知时回报百分比，否则 null（不定进度） */
 async function fetchBytes(
@@ -200,33 +211,47 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(bin)
 }
 
-export interface InstallOutcome {
-  /** auto：应用即将退出（Windows）或跳转安装器（安卓）；manual：用户手动继续安装 */
-  kind: 'auto' | 'manual'
+export interface DownloadResult {
+  /** staged = 桌面端已暂存待装（读秒后调 installStagedUpdate）；auto = 已交给系统安装器（安卓） */
+  kind: 'staged' | 'auto'
+  stagedPath: string
   message: string
 }
 
+/** 清空暂存目录里的旧安装包，只留本次下载；目录尚不存在等异常忽略。 */
+async function clearStale(dir: string): Promise<void> {
+  const { join } = await import('@tauri-apps/api/path')
+  const fs = await import('@tauri-apps/plugin-fs')
+  try {
+    for (const entry of await fs.readDir(dir)) {
+      await fs.remove(await join(dir, entry.name)).catch(() => undefined)
+    }
+  } catch {
+    /* 尚无目录：无需清理 */
+  }
+}
+
 /**
- * 下载并启动更新安装：
- * - Windows 便携版：新 exe + 替换脚本写入程序目录，打开脚本后应用自动退出，
- *   脚本等旧进程退出后覆盖原文件并重启
- * - macOS：DMG 下载到应用数据目录并在访达中显示
- * - 安卓：APK 写入公共 Documents/Albumark/updates/，交给系统安装器
+ * 下载当前平台的更新包并暂存：
+ * - 桌面端：写入暂存目录（Windows 为程序目录 updates/，macOS 为应用数据目录
+ *   updates/），返回 stagedPath，安装动作由设置页读秒后触发
+ * - 安卓：APK 写入公共 Documents/Albumark/updates/，直接交给系统安装器
  */
-export async function downloadAndInstall(
+export async function downloadUpdate(
   info: UpdateInfo,
   onProgress: (pct: number | null) => void,
-): Promise<InstallOutcome> {
-  const asset = pickAsset(info.assets)
+): Promise<DownloadResult> {
+  const asset = info.asset
   if (!asset) {
     throw new Error('没有适配当前平台的更新包，请前往下载页手动获取')
   }
-  const bytes = await fetchBytes(asset.url, onProgress)
+  const url = `${DOWNLOAD_BASE}/v${info.version}/${asset}`
+  const bytes = await fetchBytes(url, onProgress)
   onProgress(100)
 
   if (isCapacitor) {
     const { Directory, Filesystem } = await import('@capacitor/filesystem')
-    const rel = `Albumark/updates/${asset.name}`
+    const rel = `Albumark/updates/${asset}`
     await Filesystem.writeFile({
       path: rel,
       directory: Directory.Documents,
@@ -235,70 +260,32 @@ export async function downloadAndInstall(
     })
     const updater = registerPlugin<{ openApk(o: { path: string }): Promise<void> }>('Updater')
     await updater.openApk({ path: rel })
-    return { kind: 'auto', message: '已交给系统安装，按提示完成更新' }
+    return { kind: 'auto', stagedPath: rel, message: '已交给系统安装，按提示完成更新' }
   }
 
-  const ua = navigator.userAgent
-  if (/Windows/i.test(ua)) {
-    const { join } = await import('@tauri-apps/api/path')
-    const { writeFile } = await import('@tauri-apps/plugin-fs')
-    const { openPath } = await import('@tauri-apps/plugin-opener')
-    const { exePath, executableDir } = await import('./platform')
-    const oldPath = await exePath()
-    if (!oldPath) throw new Error('无法定位当前程序文件')
-    const dir = await executableDir()
-    const newPath = await join(dir, asset.name)
-    await writeFile(newPath, bytes)
-    const batPath = await join(dir, '更新辑印.bat')
-    await writeFile(batPath, new TextEncoder().encode(buildReplaceBat(oldPath, newPath)))
-    await openPath(batPath)
-    // 脚本会等旧进程退出后替换并重启，这里稍候自行关闭
-    window.setTimeout(() => {
-      void import('@tauri-apps/api/window')
-        .then(({ getCurrentWindow }) => getCurrentWindow().close())
-        .catch(() => undefined)
-    }, 1800)
-    return { kind: 'auto', message: '更新包已就绪，应用即将自动替换并重启' }
-  }
-
-  // macOS：DMG 下载到应用数据目录，在访达中显示
   const { join } = await import('@tauri-apps/api/path')
   const { writeFile, mkdir } = await import('@tauri-apps/plugin-fs')
-  const { revealItemInDir } = await import('@tauri-apps/plugin-opener')
-  const { appDataDir } = await import('./platform')
-  const base = await appDataDir()
-  if (!base) throw new Error('无法定位数据目录')
+  const { executableDir, appDataDir } = await import('./platform')
+
+  // Windows 便携版暂存在程序目录旁；macOS 暂存在应用数据目录
+  const onWindows = /Windows/i.test(navigator.userAgent)
+  const base = onWindows ? await executableDir() : await appDataDir()
+  if (!base) {
+    throw new Error(onWindows ? '无法定位程序目录' : '无法定位数据目录')
+  }
   const dir = await join(base, 'updates')
   await mkdir(dir, { recursive: true }).catch(() => undefined)
-  const dmgPath = await join(dir, asset.name)
-  await writeFile(dmgPath, bytes)
-  await revealItemInDir(dmgPath)
-  return { kind: 'manual', message: '安装包已下载，双击 DMG 完成安装' }
+  await clearStale(dir)
+  const stagedPath = await join(dir, asset)
+  await writeFile(stagedPath, bytes)
+  return { kind: 'staged', stagedPath, message: '更新包已就绪' }
 }
 
-/** 便携版自替换脚本：等旧进程退出 → 覆盖原文件 → 重启 → 自清理 */
-function buildReplaceBat(oldPath: string, newPath: string): string {
-  const oldName = oldPath.split(/[\\/]/).pop() ?? 'Albumark.exe'
-  return [
-    '@echo off',
-    'chcp 65001 >nul',
-    'title 辑印更新',
-    'echo 正在更新辑印，请稍候…',
-    ':wait',
-    `tasklist | find /I "${oldName}" >nul`,
-    'if not errorlevel 1 (',
-    '  timeout /t 1 /nobreak >nul',
-    '  goto wait',
-    ')',
-    `copy /y "${newPath}" "${oldPath}" >nul`,
-    'if errorlevel 1 (',
-    '  echo 更新失败：无法替换程序文件（可能被占用或没有权限）。',
-    `  echo 新版本已保存在：${newPath}`,
-    '  pause',
-    '  exit /b 1',
-    ')',
-    `del "${newPath}"`,
-    `start "" "${oldPath}"`,
-    'exit',
-  ].join('\r\n')
+/**
+ * 桌面端安装已暂存的更新：派发替换脚本（Windows 改名覆盖 exe，macOS 整体替换
+ * .app）后本进程立即退出，由脚本完成替换并重启；失败抛错由调用方展示。
+ */
+export async function installStagedUpdate(stagedPath: string, version: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('prepare_and_install', { stagedPath, version })
 }

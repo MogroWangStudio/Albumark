@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ArrowLeft, Check, Download, ExternalLink, HardDrive, LoaderCircle, Play, Shuffle, Type } from 'lucide-vue-next'
+import { ArrowLeft, Check, Download, ExternalLink, HardDrive, LoaderCircle, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
@@ -13,7 +13,8 @@ import PlainstructMark from '@/components/brand/PlainstructMark.vue'
 import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platform'
 import {
   checkForUpdate,
-  downloadAndInstall,
+  downloadUpdate,
+  installStagedUpdate,
   openReleasePage,
   type UpdateChannel,
   type UpdateInfo,
@@ -137,11 +138,27 @@ function onFontPicked(family: string): void {
 
 /* ---------- 检查更新与自动更新 ---------- */
 
-type UpdateState = 'idle' | 'checking' | 'latest' | 'available' | 'downloading' | 'error'
+type UpdateState =
+  | 'idle'
+  | 'checking'
+  | 'latest'
+  | 'available'
+  | 'downloading'
+  | 'ready'
+  | 'installing'
+  | 'error'
 const updateState = ref<UpdateState>('idle')
 const updateInfo = ref<UpdateInfo | null>(null)
 /** 下载进度：null = 总大小未知，只显示进行中 */
 const updateProgress = ref<number | null>(null)
+/** 下载完成的暂存路径：读秒结束后派发替换脚本用 */
+const stagedPath = ref('')
+/** 读秒：N 秒后自动重启安装 */
+const countdown = ref(0)
+let countdownTimer: number | undefined
+
+/** 下载完成后自动重启安装的读秒秒数 */
+const AUTO_INSTALL_SEC = 6
 
 async function checkUpdate(): Promise<void> {
   updateState.value = 'checking'
@@ -160,6 +177,7 @@ const channelModel = computed({
   get: () => settings.updateChannel,
   set: (v: unknown) => {
     settings.updateChannel = v as UpdateChannel
+    stopCountdown()
     updateState.value = 'idle'
     updateInfo.value = null
   },
@@ -171,25 +189,73 @@ const channelDesc = computed(() =>
     : '仅检查正式发布的版本',
 )
 
+/** 下载更新包：安卓下载完直接交给系统安装器；桌面端暂存后进入读秒 */
 async function installUpdate(): Promise<void> {
   if (!updateInfo.value || updateState.value === 'downloading') return
   updateState.value = 'downloading'
   updateProgress.value = null
   try {
-    const out = await downloadAndInstall(updateInfo.value, (pct) => {
+    const out = await downloadUpdate(updateInfo.value, (pct) => {
       updateProgress.value = pct
     })
-    toast(out.message, 'success')
-    if (out.kind === 'manual') updateState.value = 'latest'
+    if (out.kind === 'auto') {
+      // 安卓：已交给系统安装器，回到待更新态（取消安装可再次拉起）
+      toast(out.message, 'success')
+      updateState.value = 'available'
+      return
+    }
+    stagedPath.value = out.stagedPath
+    updateState.value = 'ready'
+    startCountdown()
   } catch (err) {
     toast(`更新失败：${err instanceof Error ? err.message : '请稍后重试，或前往下载页手动获取'}`, 'error')
     updateState.value = 'available'
   }
 }
 
+function startCountdown(): void {
+  stopCountdown()
+  countdown.value = AUTO_INSTALL_SEC
+  countdownTimer = window.setInterval(() => {
+    countdown.value -= 1
+    if (countdown.value <= 0) void installStaged()
+  }, 1000)
+}
+
+function stopCountdown(): void {
+  if (countdownTimer !== undefined) {
+    window.clearInterval(countdownTimer)
+    countdownTimer = undefined
+  }
+}
+
+/** 立即或读秒归零后安装：派发替换脚本，应用随即退出 */
+async function installStaged(): Promise<void> {
+  if (updateState.value !== 'ready') return
+  stopCountdown()
+  updateState.value = 'installing'
+  try {
+    await installStagedUpdate(stagedPath.value, updateInfo.value?.version ?? '')
+    // 正常路径：替换脚本已在等本进程退出，界面随之消失
+  } catch (err) {
+    toast(`安装失败：${err instanceof Error ? err.message : '请重试，或前往下载页手动获取'}`, 'error')
+    updateState.value = 'available'
+  }
+}
+
+/** 稍后：停表保留已下载的包，回到等待手动更新 */
+function deferInstall(): void {
+  stopCountdown()
+  updateState.value = 'available'
+}
+
+onBeforeUnmount(stopCountdown)
+
 const progressText = computed(() =>
   updateProgress.value === null ? '下载中…' : `下载 ${updateProgress.value}%`,
 )
+
+const readyText = computed(() => `${countdown.value} 秒后自动重启安装`)
 
 const isDownloading = computed(() => updateState.value === 'downloading')
 
@@ -464,7 +530,28 @@ async function relaunchOobe(): Promise<void> {
             <p class="desc">v{{ APP_VERSION }}</p>
           </div>
           <div class="btns">
-            <template v-if="updateState === 'available' && updateInfo">
+            <!-- 下载完成进入读秒：数字就地走字，两个动作都可点（Agency） -->
+            <template v-if="updateState === 'ready' || updateState === 'installing'">
+              <span class="update-hint">{{ readyText }}</span>
+              <AppButton
+                size="sm"
+                variant="primary"
+                :disabled="updateState === 'installing'"
+                @click="installStaged"
+              >
+                <LoaderCircle v-if="updateState === 'installing'" :size="13" class="spin" />
+                <RefreshCw v-else :size="13" />立即重启安装
+              </AppButton>
+              <AppButton
+                size="sm"
+                variant="ghost"
+                :disabled="updateState === 'installing'"
+                @click="deferInstall"
+              >
+                稍后
+              </AppButton>
+            </template>
+            <template v-else-if="updateState === 'available' && updateInfo">
               <span class="update-hint"><Check :size="13" />新版本 v{{ updateInfo.version }}</span>
               <AppButton
                 size="sm"

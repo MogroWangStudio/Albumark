@@ -1,0 +1,376 @@
+name: Release
+
+# 发布流水线：推送到 main 后自动执行，也可手动重发（Actions → Release → Run workflow）。
+#
+#   1. 读 main 分支 package.json 的版本号
+#   2. 该版本的 Release 已存在 → 直接跳过（版本没变的日常提交不会重复构建）
+#      版本为 x.x.x-betaN（含「-」后缀）→ 打 tag vx.x.x-betaN 并发布 Pre-Release
+#      版本为纯数字 x.x.x        → 打 tag vx.x.x   并发布 Release 且标记 latest
+#   3. 三平台构建（Windows 便携 exe / macOS DMG / Android APK）后上传进该 Release
+#
+# 发版流程：同步版本号（package.json / version.ts / tauri.conf.json / Cargo.toml /
+# Cargo.lock / build.gradle）+ 补 CHANGELOG 对应版本段，然后推送 main。
+# 手动触发一律视为重发：跳过「已发布」判定，按当前版本号重新构建并覆盖产物
+# （tag 已存在则检出该 tag 的代码，产物与 tag 严格一致）。
+#
+# 幂等性：tag 已存在则跳过创建（不移动 tag），Release 已存在则把产物
+# 塞进去（--clobber 覆盖同名文件）并按 tag 纠正渠道标记。
+#
+# 与 build.yml 的关系：build.yml 已改为纯手动构建校验，不再监听任何推送，
+# 因此这里用内置 GITHUB_TOKEN 推 tag 不会触发第二条流水线。
+#
+# 产物命名与前端 core/updater.ts 的 assetName() 单点对齐，改一处必须改另一处。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false # 发布排队执行，不互相取消
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: 确定版本与 tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # git push 打 tag + 查已有 Release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      channel_flag: ${{ steps.version.outputs.channel_flag }}
+      skip: ${{ steps.gate.outputs.skip }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 仅允许 main 分支触发
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "::error::本工作流按 main 分支的版本号发布，请在 main 上运行（当前：${GITHUB_REF_NAME}）"
+            exit 1
+          fi
+
+      - name: 读取版本号并判定渠道
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          # 版本含预发布后缀（如 -beta1）→ Pre-Release；纯版本 → Release 且标记 latest
+          # （判定规则与前端 isNewer 渠道过滤同源：去 v 前缀后含「-」即预发布）
+          if [[ "$version" == *-* ]]; then
+            flag="--prerelease"
+          else
+            flag="--latest"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "channel_flag=${flag}" >> "$GITHUB_OUTPUT"
+
+      - name: 该版本是否已发布
+        id: state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            echo "exists=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 判定是否需要发布
+        id: gate
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "手动触发：按 ${GITHUB_REF_NAME} 的版本号强制重发"
+          elif [ "${{ steps.state.outputs.exists }}" = "1" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## 跳过发布"
+              echo ""
+              echo "\`${{ steps.version.outputs.tag }}\` 已存在，版本未变化。"
+              echo "需要重发请手动运行本工作流。"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 校验 CHANGELOG 已有对应版本段
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          # index() 字符串匹配而非动态正则：awk -v 会吃掉 \[ 转义导致匹配错段
+          if ! awk -v header="## [${version}]" '
+            index($0, header) == 1 { found = 1 }
+            END { exit !found }
+          ' CHANGELOG.md; then
+            echo "::error::CHANGELOG.md 缺少 \"## [${version}]\" 版本段——发布说明以该段为准，请先补齐再发布"
+            exit 1
+          fi
+
+      - name: 打 tag（已存在则跳过——补发语义）
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null 2>&1; then
+            echo "tag ${TAG} 已存在，跳过创建——本次运行为补发 / 重发，构建将检出该 tag 的代码"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "${TAG}" -m "Albumark ${VERSION}"
+            git push origin "${TAG}"
+          fi
+
+  build-windows:
+    name: Windows x64 便携版
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          # 恒定检出 tag：新建时 = main HEAD，已存在时 = 原 commit——产物与 tag 代码严格一致
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 先做类型检查：编译错误在 ~1 分钟内暴露，不必等 release 全量编译（LTO）跑完
+      - name: Rust 类型检查（快速失败）
+        run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml
+
+      # 便携版只产出单个可执行文件，跳过安装器打包
+      - name: 构建便携版
+        run: npm run tauri build -- --no-bundle
+
+      - name: 整理产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $exe = Get-ChildItem "src-tauri/target/release" -Filter *.exe |
+            Where-Object { $_.Name -match 'albumark' } |
+            Sort-Object Length -Descending |
+            Select-Object -First 1
+          if (-not $exe) { throw "未找到 albumark 可执行文件" }
+          Copy-Item $exe.FullName ("artifacts/Albumark_{0}_windows-x64-portable.exe" -f "${{ needs.prepare.outputs.version }}")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Albumark-${{ needs.prepare.outputs.version }}-windows-x64-portable
+          path: artifacts/*
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS arm64 DMG
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建 DMG
+        run: npm run tauri build -- --bundles dmg
+
+      # 应用未做开发者签名，下载后会被 Gatekeeper 标记为「已损坏」。
+      # 往 DMG 里放一个双击即可移除隔离标记（xattr -cr）的终端脚本，随包分发。
+      - name: 向 DMG 注入「修复已损坏提示」脚本
+        run: |
+          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
+          hdiutil convert "$DMG" -format UDRW -o /tmp/albumark_rw.dmg
+          MOUNT="$(mktemp -d)/dmg"
+          hdiutil attach /tmp/albumark_rw.dmg -mountpoint "$MOUNT" -nobrowse -quiet
+          install -m 0755 "scripts/修复已损坏提示.command" "$MOUNT/修复已损坏提示.command"
+          hdiutil detach "$MOUNT" -quiet
+          hdiutil convert /tmp/albumark_rw.dmg -format UDZO -o /tmp/albumark_final.dmg
+          mv /tmp/albumark_final.dmg "$DMG"
+
+      - name: 整理产物
+        run: |
+          mkdir -p artifacts
+          cp src-tauri/target/release/bundle/dmg/*.dmg \
+            "artifacts/Albumark_${{ needs.prepare.outputs.version }}_macos-arm64.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Albumark-${{ needs.prepare.outputs.version }}-macos-arm64
+          path: artifacts/*
+          if-no-files-found: error
+
+  build-android:
+    name: Android APK
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # 缓存 GRADLE_USER_HOME（含 Gradle 发行包与依赖），替代 setup-java 已弃用的 cache: gradle
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: 接受 Android SDK 许可
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建 Web 资源并同步
+        run: |
+          npm run build
+          npx cap sync android
+
+      # services.gradle.org 偶发 10 秒内连不上导致构建直接失败，这里只负责下载发行包并重试
+      - name: 预下载 Gradle 发行包（失败自动重试）
+        run: |
+          cd android
+          chmod +x gradlew
+          for i in 1 2 3; do
+            ./gradlew --version && break
+            if [ "$i" = 3 ]; then echo "Gradle 发行包下载失败" >&2; exit 1; fi
+            echo "第 $i 次失败，10 秒后重试..."
+            sleep 10
+          done
+
+      # release 直接由仓库内置密钥签名（见 android/app/build.gradle 的 signingConfigs），
+      # 每次构建同一签名，用户可覆盖安装升级；只产出已签名 APK，不打包 debug 等其他产物
+      - name: 构建已签名 release APK
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon
+
+      - name: 整理产物
+        run: |
+          mkdir -p artifacts
+          APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          [ -n "$APK" ] || { echo "未找到 release APK" >&2; exit 1; }
+          cp "$APK" "artifacts/Albumark_${{ needs.prepare.outputs.version }}_android.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Albumark-${{ needs.prepare.outputs.version }}-android-apk
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    name: 发布 Release / Pre-Release
+    needs: [prepare, build-windows, build-macos, build-android]
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      CHANNEL_FLAG: ${{ needs.prepare.outputs.channel_flag }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载全部构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 提取 CHANGELOG 对应版本段作为发布说明
+        run: |
+          version="${RELEASE_TAG#v}"
+          # index() 字符串匹配而非动态正则：awk -v 会吃掉 \[ 转义导致匹配错段
+          awk -v header="## [${version}]" '
+            index($0, header) == 1 { flag = 1; next }
+            /^## \[/ && flag { flag = 0 }
+            flag { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG 中没有 ${version} 段落，改用 GitHub 自动生成说明" >&2
+            echo "use_generate=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: 发布（已存在则上传产物并纠正渠道标记）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="辑印 Albumark ${RELEASE_TAG#v}"
+          if gh release view "${RELEASE_TAG}" > /dev/null 2>&1; then
+            # 同 tag 的 Release 已存在（手动预建 / 上次中途失败）：不重建，
+            # 只把产物塞进去（--clobber 覆盖同名文件），渠道标记以 tag 为准纠正
+            gh release upload "${RELEASE_TAG}" artifacts/* --clobber
+            gh release edit "${RELEASE_TAG}" "${CHANNEL_FLAG}"
+          else
+            if [ "${use_generate:-0}" = "1" ]; then
+              gh release create "${RELEASE_TAG}" artifacts/* \
+                --title "$TITLE" \
+                "${CHANNEL_FLAG}" --generate-notes
+            else
+              gh release create "${RELEASE_TAG}" artifacts/* \
+                --title "$TITLE" \
+                "${CHANNEL_FLAG}" --notes-file release-notes.md
+            fi
+          fi
+
+      - name: 发布结果摘要
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${CHANNEL_FLAG}" == *latest* ]]; then channel="stable（latest）"; else channel="pre-release"; fi
+          {
+            echo "## 发布完成"
+            echo ""
+            echo "- Tag: \`${RELEASE_TAG}\`（渠道：${channel}）"
+            echo ""
+            echo "### 产物"
+            gh release view "${RELEASE_TAG}" --json assets --jq '.assets[].name' | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
