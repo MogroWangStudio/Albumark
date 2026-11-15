@@ -19,7 +19,8 @@ name: Release
 # 与 build.yml 的关系：build.yml 已改为纯手动构建校验，不再监听任何推送，
 # 因此这里用内置 GITHUB_TOKEN 推 tag 不会触发第二条流水线。
 #
-# 产物命名与前端 core/updater.ts 的 assetName() 单点对齐，改一处必须改另一处。
+# 产物统一为 zip 压缩包，名字只带平台架构不带版本号（版本只在 tag 路径里）；
+# 命名与前端 core/updater.ts 的 assetName() 单点对齐，改一处必须改另一处。
 
 on:
   push:
@@ -172,7 +173,8 @@ jobs:
             Sort-Object Length -Descending |
             Select-Object -First 1
           if (-not $exe) { throw "未找到 albumark 可执行文件" }
-          Copy-Item $exe.FullName ("artifacts/Albumark_{0}_windows-x64-portable.exe" -f "${{ needs.prepare.outputs.version }}")
+          Copy-Item $exe.FullName artifacts/Albumark.exe
+          Compress-Archive -Path artifacts/Albumark.exe -DestinationPath artifacts/Albumark_windows-x64.zip -Force
 
       - uses: actions/upload-artifact@v4
         with:
@@ -181,7 +183,7 @@ jobs:
           if-no-files-found: error
 
   build-macos:
-    name: macOS arm64 DMG
+    name: macOS arm64
     needs: prepare
     if: needs.prepare.outputs.skip != 'true'
     runs-on: macos-15
@@ -225,8 +227,10 @@ jobs:
       - name: 整理产物
         run: |
           mkdir -p artifacts
-          cp src-tauri/target/release/bundle/dmg/*.dmg \
-            "artifacts/Albumark_${{ needs.prepare.outputs.version }}_macos-arm64.dmg"
+          DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
+          cp "$DMG" artifacts/Albumark_macos-arm64.dmg
+          zip -j artifacts/Albumark_macos-arm64.zip artifacts/Albumark_macos-arm64.dmg
+          rm artifacts/Albumark_macos-arm64.dmg
 
       - uses: actions/upload-artifact@v4
         with:
@@ -296,7 +300,9 @@ jobs:
           mkdir -p artifacts
           APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)
           [ -n "$APK" ] || { echo "未找到 release APK" >&2; exit 1; }
-          cp "$APK" "artifacts/Albumark_${{ needs.prepare.outputs.version }}_android.apk"
+          cp "$APK" artifacts/Albumark.apk
+          zip -j artifacts/Albumark_android.zip artifacts/Albumark.apk
+          rm artifacts/Albumark.apk
 
       - uses: actions/upload-artifact@v4
         with:

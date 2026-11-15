@@ -1,27 +1,24 @@
-//! 更新安装编排：安装包已由前端流式下载进暂存目录（updates/），这里只负责
-//! 派发"第三者"替换脚本并退出——真正的替换发生在本进程退出之后（见 relaunch）。
-//! 下载与渠道检查在前端（core/updater.ts，走 GitHub releases.atom），
-//! 安卓走 Capacitor 系统安装器，都不经这里。
+//! 更新安装编排：安装包已由前端下载 Release 的 zip 资产、解出安装包放进
+//! 暂存目录（updates/），这里只负责派发"第三者"替换脚本并退出——真正的
+//! 替换发生在本进程退出之后（见 relaunch）。下载与渠道检查在前端
+//! （core/updater.ts，走 GitHub releases.atom），安卓走 Capacitor 系统
+//! 安装器，都不经这里。
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::relaunch;
 use tauri::{AppHandle, Manager};
 
 /// 安装已暂存的包并退出，由后台脚本完成替换与重启。
-/// `staged_path` 为前端下载落地的新包完整路径，`version` 为目标版本号。
+/// `staged_path` 为前端下载落地（解压后）的新包完整路径。
 #[tauri::command]
-pub fn prepare_and_install(
-    app: AppHandle,
-    staged_path: String,
-    version: String,
-) -> Result<(), String> {
+pub fn prepare_and_install(app: AppHandle, staged_path: String) -> Result<(), String> {
     let staged = std::path::PathBuf::from(&staged_path);
     if !staged.is_file() {
         return Err("安装包不存在，请重新下载".into());
     }
     let current = std::env::current_exe().map_err(|e| format!("无法定位当前程序: {e}"))?;
 
-    prepare_install(&app, &current, &staged, &version)?;
+    prepare_install(&app, &current, &staged)?;
 
     // 脚本已在等本进程退出；立刻退出，把替换窗口留给它
     app.exit(0);
@@ -30,19 +27,16 @@ pub fn prepare_and_install(
 
 // ---- 平台安装动作 ----
 // 三个同名函数按平台各写一份：调用点不必被 cfg 切成三块，
-// 各平台的差异（exe 还是 .app、要不要重命名）留在各自的实现里。
+// 各平台的差异（exe 还是 .app）留在各自的实现里。
 
-/// Windows：把下载好的 exe 覆盖到原位并按新版本号重命名
+/// Windows：新 exe 原地覆盖当前程序文件（产物名不含版本号，更新不改名）
 #[cfg(target_os = "windows")]
 fn prepare_install(
-    app: &AppHandle,
+    _app: &AppHandle,
     current: &std::path::Path,
     staged: &std::path::Path,
-    version: &str,
 ) -> Result<(), String> {
-    let from = app.package_info().version.to_string();
-    let target = current.with_file_name(versioned_exe_name(current, &from, version));
-    relaunch::spawn_replace_exe(current, staged, &target)
+    relaunch::spawn_replace_exe(current, staged, current)
 }
 
 /// macOS：从 DMG 里取出 .app 暂存到旧包旁边，退出后整体替换
@@ -51,7 +45,6 @@ fn prepare_install(
     _app: &AppHandle,
     current: &std::path::Path,
     staged: &std::path::Path,
-    _version: &str,
 ) -> Result<(), String> {
     let app_root = relaunch::bundle_root(current)
         .ok_or_else(|| "当前不是 .app 包，无法自动替换".to_string())?;
@@ -67,27 +60,8 @@ fn prepare_install(
     _app: &AppHandle,
     _current: &std::path::Path,
     _staged: &std::path::Path,
-    _version: &str,
 ) -> Result<(), String> {
     Err("当前平台不支持自动更新".into())
-}
-
-/// 新 exe 的文件名：把旧版本号换成新版本号（文件名即版本，便于用户分辨）；
-/// 用户改过名字（如 `Albumark.exe`）时补上版本号，避免覆盖同名文件后
-/// 无从判断手里是哪个版本。
-#[cfg(target_os = "windows")]
-fn versioned_exe_name(current: &std::path::Path, from: &str, to: &str) -> String {
-    let stem = current
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Albumark");
-    let ext = current.extension().and_then(|s| s.to_str()).unwrap_or("exe");
-    let renamed = if stem.contains(from) {
-        stem.replacen(from, to, 1)
-    } else {
-        format!("{stem}-{to}")
-    };
-    format!("{renamed}.{ext}")
 }
 
 /// 挂载 DMG，把里面的 .app 复制到 `stage`，随即卸载。

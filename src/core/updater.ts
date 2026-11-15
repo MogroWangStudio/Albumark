@@ -8,7 +8,8 @@ import { APP_VERSION } from './version'
  *   匿名 REST API 按 IP 限流，共享出口网络下极易 403，部分网络对 api 子域
  *   本身也不稳定；预发布按 tag 是否带「-」后缀判定，与 CI 发布规则同源；
  *   渠道分稳定（仅正式 Release）与测试（含 Pre-Release）
- * - 下载：流式拉取当前平台的 Release 产物到暂存目录（带进度），下载前清掉旧包
+ * - 下载：流式拉取当前平台的 Release 产物（统一 zip，名不带版本号，带进度、
+ *   可取消），解出安装包写入暂存目录，下载前清掉旧包
  * - 安装：桌面端只暂存不替换，由设置页读秒后调 installStagedUpdate 派发系统
  *   脚本，等本进程退出后替换并重启（见 src-tauri/src/relaunch.rs 与 update.rs）；
  *   安卓交给系统安装器
@@ -140,16 +141,20 @@ export async function checkForUpdate(channel: UpdateChannel = 'stable'): Promise
     version: best.version,
     url: best.entry.url || RELEASES_PAGE,
     notes: best.entry.notes,
-    asset: assetName(best.version),
+    asset: assetName(),
   }
 }
 
-/** 当前平台对应的 Release 产物名（与 .github/workflows/release.yml 的整理产物命名一致；未列出的平台退回手动下载） */
-function assetName(version: string): string | null {
-  if (isCapacitor) return `Albumark_${version}_android.apk`
+/**
+ * 当前平台对应的 Release 产物名（与 .github/workflows/release.yml 的整理产物
+ * 命名单点对齐；未列出的平台退回手动下载）。产物统一为 zip 压缩包，
+ * 名字只带平台架构不带版本号——版本只体现在 tag 路径里。
+ */
+function assetName(): string | null {
+  if (isCapacitor) return 'Albumark_android.zip'
   const ua = navigator.userAgent
-  if (/Windows/i.test(ua)) return `Albumark_${version}_windows-x64-portable.exe`
-  if (/Mac/i.test(ua)) return `Albumark_${version}_macos-arm64.dmg`
+  if (/Windows/i.test(ua)) return 'Albumark_windows-x64.zip'
+  if (/Mac/i.test(ua)) return 'Albumark_macos-arm64.zip'
   return null
 }
 
@@ -164,17 +169,18 @@ export async function openReleasePage(url: string): Promise<void> {
 
 /* ---------- 自动更新：下载与安装 ---------- */
 
-/** 流式下载到内存：content-length 可知时回报百分比，否则 null（不定进度） */
+/** 流式下载到内存：content-length 可知时回报百分比，否则 null（不定进度）；signal 可中途取消 */
 async function fetchBytes(
   url: string,
   onProgress: (pct: number | null) => void,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   const headers = { Accept: 'application/octet-stream' }
   const res = isTauri
     ? await import('@tauri-apps/plugin-http').then(({ fetch: tauriFetch }) =>
-        tauriFetch(url, { headers }),
+        tauriFetch(url, { headers, signal }),
       )
-    : await fetch(url, { headers })
+    : await fetch(url, { headers, signal })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const total = Number(res.headers.get('content-length') ?? 0)
   const reader = res.body?.getReader()
@@ -233,29 +239,46 @@ async function clearStale(dir: string): Promise<void> {
 
 /**
  * 下载当前平台的更新包并暂存：
+ * - Release 资产统一为 zip（Albumark_平台架构.zip），下载完解出里面的安装包，
+ *   只取包内第一个文件（安装包与版本号无关，名字由 CI 打包保证）
  * - 桌面端：写入暂存目录（Windows 为程序目录 updates/，macOS 为应用数据目录
  *   updates/），返回 stagedPath，安装动作由设置页读秒后触发
  * - 安卓：APK 写入公共 Documents/Albumark/updates/，直接交给系统安装器
+ * - signal 可中途取消下载：中断时抛 AbortError，由调用方静默处理
  */
 export async function downloadUpdate(
   info: UpdateInfo,
   onProgress: (pct: number | null) => void,
+  signal?: AbortSignal,
 ): Promise<DownloadResult> {
   const asset = info.asset
   if (!asset) {
     throw new Error('没有适配当前平台的更新包，请前往下载页手动获取')
   }
   const url = `${DOWNLOAD_BASE}/v${info.version}/${asset}`
-  const bytes = await fetchBytes(url, onProgress)
+  const bytes = await fetchBytes(url, onProgress, signal)
   onProgress(100)
+  if (signal?.aborted) {
+    throw new DOMException('下载已取消', 'AbortError')
+  }
+
+  // 解包 zip：安装包（exe / dmg / apk）与版本号无关，zip 内只有一个文件
+  const { unzipSync } = await import('fflate')
+  const files = unzipSync(bytes)
+  const entry = Object.entries(files).find(([, data]) => data.length > 0)
+  if (!entry) {
+    throw new Error('更新包内容为空，请重新下载或前往下载页手动获取')
+  }
+  const payload = entry[1]
+  const pkgName = entry[0].split(/[\\/]/).pop() ?? 'Albumark.bin'
 
   if (isCapacitor) {
     const { Directory, Filesystem } = await import('@capacitor/filesystem')
-    const rel = `Albumark/updates/${asset}`
+    const rel = `Albumark/updates/${pkgName}`
     await Filesystem.writeFile({
       path: rel,
       directory: Directory.Documents,
-      data: toBase64(bytes),
+      data: toBase64(payload),
       recursive: true,
     })
     const updater = registerPlugin<{ openApk(o: { path: string }): Promise<void> }>('Updater')
@@ -276,16 +299,16 @@ export async function downloadUpdate(
   const dir = await join(base, 'updates')
   await mkdir(dir, { recursive: true }).catch(() => undefined)
   await clearStale(dir)
-  const stagedPath = await join(dir, asset)
-  await writeFile(stagedPath, bytes)
+  const stagedPath = await join(dir, pkgName)
+  await writeFile(stagedPath, payload)
   return { kind: 'staged', stagedPath, message: '更新包已就绪' }
 }
 
 /**
- * 桌面端安装已暂存的更新：派发替换脚本（Windows 改名覆盖 exe，macOS 整体替换
+ * 桌面端安装已暂存的更新：派发替换脚本（Windows 原地覆盖 exe、macOS 整体替换
  * .app）后本进程立即退出，由脚本完成替换并重启；失败抛错由调用方展示。
  */
-export async function installStagedUpdate(stagedPath: string, version: string): Promise<void> {
+export async function installStagedUpdate(stagedPath: string): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core')
-  await invoke('prepare_and_install', { stagedPath, version })
+  await invoke('prepare_and_install', { stagedPath })
 }

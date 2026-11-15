@@ -5,6 +5,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
+import AppWindowControls from '@/components/ui/AppWindowControls.vue'
 import BootScreen from '@/components/BootScreen.vue'
 import FontPickerDialog from '@/components/FontPickerDialog.vue'
 import LogoMark from '@/components/brand/LogoMark.vue'
@@ -156,6 +157,8 @@ const stagedPath = ref('')
 /** 读秒：N 秒后自动重启安装 */
 const countdown = ref(0)
 let countdownTimer: number | undefined
+/** 下载中的取消句柄：downloadUpdate 的 AbortController */
+let downloadCtl: AbortController | null = null
 
 /** 下载完成后自动重启安装的读秒秒数 */
 const AUTO_INSTALL_SEC = 6
@@ -189,15 +192,19 @@ const channelDesc = computed(() =>
     : '仅检查正式发布的版本',
 )
 
-/** 下载更新包：安卓下载完直接交给系统安装器；桌面端暂存后进入读秒 */
+/** 下载更新包：安卓下载完直接交给系统安装器；桌面端暂存后进入读秒。
+ *  下载中可取消（AbortController），取消后回到待更新态静默处理。 */
 async function installUpdate(): Promise<void> {
   if (!updateInfo.value || updateState.value === 'downloading') return
   updateState.value = 'downloading'
   updateProgress.value = null
+  const ctl = new AbortController()
+  downloadCtl = ctl
   try {
     const out = await downloadUpdate(updateInfo.value, (pct) => {
       updateProgress.value = pct
-    })
+    }, ctl.signal)
+    if (ctl.signal.aborted) return // 已取消：丢弃结果，状态由 cancelDownload 复位
     if (out.kind === 'auto') {
       // 安卓：已交给系统安装器，回到待更新态（取消安装可再次拉起）
       toast(out.message, 'success')
@@ -208,9 +215,21 @@ async function installUpdate(): Promise<void> {
     updateState.value = 'ready'
     startCountdown()
   } catch (err) {
+    if (ctl.signal.aborted) {
+      updateState.value = 'available'
+      return
+    }
     toast(`更新失败：${err instanceof Error ? err.message : '请稍后重试，或前往下载页手动获取'}`, 'error')
     updateState.value = 'available'
+  } finally {
+    if (downloadCtl === ctl) downloadCtl = null
   }
+}
+
+/** 取消下载：中断传输、保留待更新态（已下载的部分包会被下次下载前的清理清掉） */
+function cancelDownload(): void {
+  downloadCtl?.abort()
+  updateState.value = 'available'
 }
 
 function startCountdown(): void {
@@ -235,7 +254,7 @@ async function installStaged(): Promise<void> {
   stopCountdown()
   updateState.value = 'installing'
   try {
-    await installStagedUpdate(stagedPath.value, updateInfo.value?.version ?? '')
+    await installStagedUpdate(stagedPath.value)
     // 正常路径：替换脚本已在等本进程退出，界面随之消失
   } catch (err) {
     toast(`安装失败：${err instanceof Error ? err.message : '请重试，或前往下载页手动获取'}`, 'error')
@@ -259,9 +278,9 @@ const readyText = computed(() => `${countdown.value} 秒后自动重启安装`)
 
 const isDownloading = computed(() => updateState.value === 'downloading')
 
-/** 开发者工作室网站（Plainstruct），与项目主页同一外部打开通道 */
+/** 开发者 MogroWang Studio 官方网站，与项目主页同一外部打开通道 */
 function openStudioSite(): void {
-  void openReleasePage('https://plainstruct.mogrowangstudio.top')
+  void openReleasePage('https://www.mogrowangstudio.top')
 }
 
 /* ---------- 数据位置（仅桌面） ---------- */
@@ -300,6 +319,8 @@ async function relaunchOobe(): Promise<void> {
       <AppButton variant="ghost" size="sm" @click="emit('back')"><ArrowLeft :size="14" />返回</AppButton>
       <h1>设置</h1>
       <span class="flex" />
+      <!-- 全屏覆盖页自带窗控：本页盖住主顶栏，窗口操作入口由这里承接 -->
+      <AppWindowControls />
     </header>
 
     <div class="body">
@@ -562,6 +583,9 @@ async function relaunchOobe(): Promise<void> {
                 <LoaderCircle v-if="isDownloading" :size="13" class="spin" />
                 <Download v-else :size="13" />{{ isDownloading ? progressText : '立即更新' }}
               </AppButton>
+              <AppButton v-if="isDownloading" size="sm" variant="ghost" @click="cancelDownload">
+                取消
+              </AppButton>
             </template>
             <template v-else>
               <span v-if="updateState === 'latest'" class="update-hint">
@@ -591,12 +615,18 @@ async function relaunchOobe(): Promise<void> {
             <ExternalLink :size="13" />打开
           </AppButton>
         </div>
-        <!-- 开发者：Plainstruct 工作室标识，点击打开工作室网站 -->
+        <!-- 开发者：工作室字标可点击前往官网——仿 Plainstruct 关于页：
+             悬停/聚焦时字标模糊淡出，引导文字覆盖浮现 -->
         <div class="dev">
           <span class="dev-label">开发者</span>
-          <button class="studio" title="Plainstruct 工作室" @click="openStudioSite">
+          <a
+            class="studio-link"
+            href="https://www.mogrowangstudio.top"
+            @click.prevent="openStudioSite"
+          >
             <PlainstructMark class="studio-logo" />
-          </button>
+            <span class="studio-hint">点击前往 MogroWang Studio 官方网站</span>
+          </a>
         </div>
       </section>
     </div>
@@ -1034,26 +1064,46 @@ async function relaunchOobe(): Promise<void> {
   color: var(--text-3);
   letter-spacing: 0.04em;
 }
-.studio {
+/* 仿 Plainstruct 关于页的工作室跳转：字标悬停/聚焦时模糊淡出，引导文字覆盖浮现 */
+.studio-link {
+  position: relative;
   display: inline-flex;
   align-items: center;
   padding: 6px 10px;
   border-radius: 8px;
-  color: var(--text-3);
   cursor: pointer;
-  transition: color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
 }
-.studio:hover {
-  color: var(--text);
-  background: var(--hover);
-}
-.studio:active {
-  transform: scale(0.97);
+.studio-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 .studio-logo {
   height: 15px;
   width: auto;
   display: block;
+  transition: filter var(--dur-hover) var(--ease-soft), opacity var(--dur-hover) var(--ease-soft);
+}
+.studio-link:hover .studio-logo,
+.studio-link:focus-visible .studio-logo {
+  opacity: 0.7;
+  filter: blur(3px);
+}
+.studio-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text);
+  opacity: 0;
+  transition: opacity var(--dur-hover) var(--ease-soft);
+  pointer-events: none;
+}
+.studio-link:hover .studio-hint,
+.studio-link:focus-visible .studio-hint {
+  opacity: 1;
 }
 .spin {
   animation: rotate 0.9s linear infinite;

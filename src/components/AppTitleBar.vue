@@ -4,15 +4,12 @@ import {
   Brush,
   FolderOpen,
   ImagePlus,
-  Minus,
   Redo2,
   Settings,
-  Square,
   Undo2,
-  X,
 } from 'lucide-vue-next'
 import LogoText from '@/components/brand/LogoText.vue'
-import { isMacDesktop, isTauri } from '@/core/platform'
+import AppWindowControls from '@/components/ui/AppWindowControls.vue'
 import { useHistoryStore } from '@/stores/history'
 import { toast } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -27,8 +24,6 @@ const emit = defineEmits<{
 const ws = useWorkspaceStore()
 const history = useHistoryStore()
 const pressed = ref(false)
-/** macOS 用系统红绿灯与系统窗口圆角，前端不再画窗控 */
-const mac = isMacDesktop
 
 /** 快捷键提示按平台显示：macOS 用 ⌘，其余用 Ctrl+ */
 const mod = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl+'
@@ -44,23 +39,6 @@ const redoTitle = computed(() => {
 
 // 药丸集合组里的控件：工作区 / 导入 / 水印工作室 / 设置
 const canImport = computed(() => ws.inProject)
-let win: { minimize(): void; toggleMaximize(): void; close(): void } | null = null
-
-if (isTauri) {
-  void import('@tauri-apps/api/window').then((m) => {
-    win = m.getCurrentWindow()
-  })
-}
-
-async function onMinimize(): Promise<void> {
-  await win?.minimize()
-}
-async function onMaximize(): Promise<void> {
-  await win?.toggleMaximize()
-}
-function onClose(): void {
-  win?.close()
-}
 
 /* ---------- logo 彩蛋：2 秒内连点 5 次，随机触发一个小惊喜 ---------- */
 /** 视觉彩蛋与文案彩蛋各占一半，且不与上一次同类 */
@@ -188,11 +166,7 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <div v-if="isTauri && !mac" class="win-controls">
-        <button class="win-btn" aria-label="最小化" @click="onMinimize"><Minus :size="14" /></button>
-        <button class="win-btn" aria-label="最大化/还原" @click="onMaximize"><Square :size="11" /></button>
-        <button class="win-btn close" aria-label="关闭" @click="onClose"><X :size="14" /></button>
-      </div>
+      <AppWindowControls />
     </div>
   </header>
 </template>
@@ -219,7 +193,6 @@ onUnmounted(() => {
   align-self: stretch;
 }
 .pill,
-.win-controls,
 .history,
 .logo-btn,
 .ws-chip {
@@ -408,28 +381,6 @@ onUnmounted(() => {
   width: 1px;
   height: 14px;
   background: var(--line-strong);
-}
-.win-controls {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-.win-btn {
-  width: 30px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  color: var(--text-3);
-  transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
-}
-.win-btn:hover {
-  background: var(--active);
-  color: var(--text);
-}
-.win-btn.close:hover {
-  background: var(--danger);
-  color: #fff;
 }
 @media (max-width: 640px) {
   .logo {
