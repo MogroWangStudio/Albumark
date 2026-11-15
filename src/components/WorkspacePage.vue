@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ArrowLeft,
   ArchiveRestore,
-  ArrowLeftRight,
   ArrowRight,
   Check,
   FolderOpen,
@@ -19,6 +18,7 @@ import LogoMark from '@/components/brand/LogoMark.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
+import EmojiPicker from '@/components/ui/EmojiPicker.vue'
 import ExportProjectDialog from '@/components/ExportProjectDialog.vue'
 import ImportProjectDialog from '@/components/ImportProjectDialog.vue'
 import type { ContextMenuItem } from '@/components/AppContextMenu.vue'
@@ -111,6 +111,8 @@ async function confirmRemove(): Promise<void> {
 
 /* 重命名：目录与项目共用一个对话框，按 kind 分派到对应 action */
 const renameTarget = ref<{ kind: 'project' | 'dir'; meta: ProjectMeta | WorkDirMeta } | null>(null)
+/** 设置 emoji 图标的目标：目录写 workdir.json，项目写 albumark.json */
+const emojiTarget = ref<{ kind: 'project' | 'dir'; meta: ProjectMeta | WorkDirMeta } | null>(null)
 const renameName = ref('')
 /** 导出目标：交给 ExportProjectDialog */
 const exportTarget = ref<{ kind: 'project' | 'dir'; name: string; path: string } | null>(null)
@@ -161,6 +163,26 @@ async function confirmRename(): Promise<void> {
   if (ok) renameTarget.value = null
 }
 
+async function confirmEmoji(emoji: string): Promise<void> {
+  const t = emojiTarget.value
+  if (!t) return
+  const ok =
+    t.kind === 'project'
+      ? await ws.setProjectEmoji(t.meta as ProjectMeta, emoji)
+      : await ws.setDirEmoji(t.meta as WorkDirMeta, emoji)
+  if (ok) emojiTarget.value = null
+}
+
+async function clearEmoji(): Promise<void> {
+  const t = emojiTarget.value
+  if (!t) return
+  const ok =
+    t.kind === 'project'
+      ? await ws.setProjectEmoji(t.meta as ProjectMeta, '')
+      : await ws.setDirEmoji(t.meta as WorkDirMeta, '')
+  if (ok) emojiTarget.value = null
+}
+
 /* 移动端长按菜单：触屏上 ⋯ 按钮不可见（hover 永不出现），长按是唯一入口。
    菜单项与桌面下拉一致；目录的「删除」沿用「移除记录」语义（不删文件），
    正在使用中的目录没有「打开」 */
@@ -174,6 +196,7 @@ function openProjectMenu(p: ProjectMeta, x: number, y: number): void {
   const items: ContextMenuItem[] = [
     { label: '打开', action: () => void ws.openProject(p) },
     { label: '重命名', action: () => startRename('project', p) },
+    { label: '设置图标…', action: () => (emojiTarget.value = { kind: 'project', meta: p }) },
     { label: '导出…', action: () => (exportTarget.value = { kind: 'project', name: p.name, path: p.path }) },
     { label: '删除', danger: true, action: () => (removeTarget.value = { id: p.id, name: p.name }) },
   ]
@@ -186,6 +209,7 @@ function openDirMenu(d: WorkDirMeta, x: number, y: number): void {
   else items.push({ label: '进入项目', action: () => ws.gotoSubPage('projects') })
   items.push(
     { label: '重命名', action: () => startRename('dir', d) },
+    { label: '设置图标…', action: () => (emojiTarget.value = { kind: 'dir', meta: d }) },
     { label: '导出…', action: () => (exportTarget.value = { kind: 'dir', name: d.name, path: d.path }) },
     { label: '移除记录', danger: true, action: () => (removeDirTarget.value = d) },
   )
@@ -227,7 +251,7 @@ onMounted(() => {
       <!-- ① OOBE：软件数据位置（仅桌面） -->
       <div v-if="step === 'oobe'" key="oobe" class="card">
         <LogoMark class="mark" animated />
-        <h1>欢迎使用辑印</h1>
+        <h1>欢迎使用 Albumark</h1>
 
         <div class="oobe-dir">
           <HardDrive :size="16" />
@@ -280,8 +304,9 @@ onMounted(() => {
                 @click="onDirRowClick(d, $event)"
                 v-on="dirPress"
               >
-                <span class="dir-icon">
-                  <Check v-if="ws.dir?.path === d.path" :size="14" />
+                <span class="dir-icon" :class="{ emoji: !!d.emoji }">
+                  <template v-if="d.emoji">{{ d.emoji }}</template>
+                  <Check v-else-if="ws.dir?.path === d.path" :size="14" />
                   <FolderOpen v-else :size="14" />
                 </span>
                 <div class="dir-main">
@@ -289,19 +314,12 @@ onMounted(() => {
                   <span class="dir-path" :title="d.path">{{ d.path }}</span>
                 </div>
                 <span class="dir-count">{{ d.projects ?? '—' }} 个项目</span>
-                <button
-                  v-if="ws.dir?.path !== d.path"
-                  class="dir-use"
-                  title="切换到此目录并进入"
-                  @click.stop="enterDir(d)"
-                >
-                  <ArrowLeftRight :size="13" />使用
-                </button>
                 <AppDropdown
                   v-if="!isCoarse"
                   align="right"
                   :items="[
                     { label: '重命名', action: () => startRename('dir', d) },
+                    { label: '设置图标…', action: () => (emojiTarget = { kind: 'dir', meta: d }) },
                     { label: '导出…', action: () => (exportTarget = { kind: 'dir', name: d.name, path: d.path }) },
                     { label: '移除记录', danger: true, action: () => (removeDirTarget = d) },
                   ]"
@@ -361,7 +379,10 @@ onMounted(() => {
                 @keyup.enter="ws.openProject(p)"
                 v-on="prjPress"
               >
-                <span class="prj-icon"><Images :size="17" /></span>
+                <span class="prj-icon" :class="{ emoji: !!p.emoji }">
+                  <template v-if="p.emoji">{{ p.emoji }}</template>
+                  <Images v-else :size="17" />
+                </span>
                 <span class="prj-name">{{ p.name }}</span>
                 <span class="prj-count">{{ p.count }} 张照片</span>
                 <span v-if="p.createdAt" class="prj-date">{{ fmtDate(p.createdAt) }}</span>
@@ -371,6 +392,7 @@ onMounted(() => {
                   align="right"
                   :items="[
                     { label: '重命名', action: () => startRename('project', p) },
+                    { label: '设置图标…', action: () => (emojiTarget = { kind: 'project', meta: p }) },
                     { label: '导出…', action: () => (exportTarget = { kind: 'project', name: p.name, path: p.path }) },
                     { label: '删除', danger: true, action: () => (removeTarget = { id: p.id, name: p.name }) },
                   ]"
@@ -474,6 +496,20 @@ onMounted(() => {
         <AppButton variant="ghost" @click="renameTarget = null">取消</AppButton>
         <AppButton variant="primary" @click="confirmRename"><Pencil :size="13" />重命名</AppButton>
       </div>
+    </AppDialog>
+
+    <!-- 设置 emoji 图标：目录与项目共用一个选择器，选择即保存 -->
+    <AppDialog
+      :open="!!emojiTarget"
+      :title="emojiTarget?.kind === 'dir' ? '目录图标' : '项目图标'"
+      :width="420"
+      @close="emojiTarget = null"
+    >
+      <EmojiPicker
+        :model-value="emojiTarget?.meta.emoji"
+        @pick="confirmEmoji"
+        @clear="clearEmoji"
+      />
     </AppDialog>
 
     <!-- 导出：文件详情 + ZIP/文件夹选择，确认后打包或复制 -->
@@ -596,6 +632,9 @@ onMounted(() => {
   color: var(--text-3);
   flex: none;
 }
+.dir-icon.emoji {
+  font-size: calc(16px * var(--ui-zoom, 1));
+}
 .dir-main {
   flex: 1;
   min-width: 0;
@@ -619,22 +658,6 @@ onMounted(() => {
   font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
-}
-.dir-use {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 9px;
-  border-radius: 999px;
-  font-size: calc(11.5px * var(--ui-zoom, 1));
-  color: var(--text-2);
-  transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
-}
-.dir-use:hover {
-  background: var(--active);
-  color: var(--text);
 }
 .dir-rm {
   flex: none;
@@ -768,6 +791,9 @@ h1 {
 .prj-icon {
   color: var(--accent);
   margin-bottom: 4px;
+}
+.prj-icon.emoji {
+  font-size: calc(26px * var(--ui-zoom, 1));
 }
 .prj-name {
   font-size: calc(13px * var(--ui-zoom, 1));

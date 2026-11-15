@@ -1,4 +1,4 @@
-/// 辑印 Albumark 桌面端入口。
+/// Albumark 桌面端入口。
 /// 图像处理全部在前端 Web Worker 完成，这里只注册官方插件与少量自定义命令：
 /// dialog（选位置）、fs（读写文件）、http（抓取图片链接）、opener（打开文件夹）；
 /// exe_dir 提供程序所在目录（官方 path.executableDir 在 Windows/macOS 取不到值）；

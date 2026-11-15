@@ -51,7 +51,7 @@ const eggLines = [
   '水印已盖好，今日辑录顺利',
   '胶片会褪色，水印不会',
   '暗房灯已亮，慢慢冲',
-  '辑印虽小，方寸有印',
+  '方寸虽小，皆有印记',
 ]
 const eggAnim = ref<(typeof eggAnims)[number] | ''>('')
 let eggCount = 0
@@ -106,7 +106,7 @@ onUnmounted(() => {
       <button
         class="logo-btn"
         :class="{ pressed }"
-        aria-label="辑印 Albumark"
+        aria-label="Albumark"
         @pointerdown="pressed = true"
         @pointerup="pressed = false"
         @pointerleave="pressed = false"

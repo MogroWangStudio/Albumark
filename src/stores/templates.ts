@@ -27,7 +27,7 @@ interface SavedTemplate {
 function builtinTemplates(): WatermarkTemplate[] {
   const signature = makeTextLayer({
     name: '签名',
-    content: '辑印 Albumark',
+    content: 'Albumark',
     anchor: 'bottom-right',
     offsetX: -40,
     offsetY: -40,
@@ -36,7 +36,7 @@ function builtinTemplates(): WatermarkTemplate[] {
   })
   const tile = makeTextLayer({
     name: '平铺文字',
-    content: '辑印 Albumark',
+    content: 'Albumark',
     anchor: 'middle-center',
     offsetX: 0,
     offsetY: 0,

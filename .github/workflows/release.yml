@@ -358,7 +358,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TITLE="辑印 Albumark ${RELEASE_TAG#v}"
+          TITLE="Albumark ${RELEASE_TAG#v}"
           if gh release view "${RELEASE_TAG}" > /dev/null 2>&1; then
             # 同 tag 的 Release 已存在（手动预建 / 上次中途失败）：不重建，
             # 只把产物塞进去（--clobber 覆盖同名文件），渠道标记以 tag 为准纠正

@@ -1,16 +1,16 @@
 <div align="center">
 
-<img src="public/brand/albumark-text-logo.svg" alt="辑印 Albumark" width="320" />
+<img src="public/brand/albumark-text-logo.svg" alt="Albumark" width="320" />
 
 **轻量 · 本地优先的图像批量水印与快速辑录工具**
 
-v2.0.0-beta4（2026-11-15） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· Capacitor（安卓端）
+v2.0.0-beta5（2026-11-15） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· Capacitor（安卓端）
 
 </div>
 
 ---
 
-辑印（Albumark）把「给一批照片加水印、做基础调整、打包交付」压缩成一条流水线：
+Albumark 把「给一批照片加水印、做基础调整、打包交付」压缩成一条流水线：
 选择工作目录 → 建工作项目 → 批量导入 → 水印工作室 → 快速辑录 → 打包导出。所有图像处理都在本机
 完成，**没有任何上传**，也没有账号与云端的负担。
 
@@ -21,8 +21,8 @@ v2.0.0-beta4（2026-11-15） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端
   工作区**分两页显示**——工作目录页列出全部目录（点击整行进入该目录的
   **工作项目页**，项目页头部有返回按钮与当前目录名，推入 / 弹出的方向性
   切换动画路径对称）；可以同时记录**多个**目录（查看路径 / 项目数、
-  一键切换、移除记录不删文件）；添加目录时**不再要求空文件夹**——已包含
-  辑印项目的文件夹会被自动识别；目录与项目均支持**重命名**（磁盘文件夹
+  点击行直接进入、移除记录不删文件），目录与项目支持自定义 **emoji 图标**；添加目录时**不再要求空文件夹**——已包含
+  Albumark 项目的文件夹会被自动识别；目录与项目均支持**重命名**（磁盘文件夹
   改名 + 内部记录同步重新引导，水印配置按项目 id 记录、不随改名丢失）
   与**导出**（查看文件详情后选择 ZIP / 文件夹，导出原样备份——解压到
   任意工作目录即可重新识别；桌面自选位置、安卓写入公共 Documents/Albumark/，
@@ -301,7 +301,7 @@ npx cap open android   # 在 Android Studio 中构建运行
   **`修复已损坏提示.command`**，按提示完成即可；
 - **终端命令**：`xattr -cr /Applications/Albumark.app`
 
-## 已知限制（v2.0.0-beta4 · 2026-11-15）
+## 已知限制（v2.0.0-beta5 · 2026-11-15）
 
 - 仅支持 JPG / PNG 输入；导出为重编码 JPG / PNG——JPG 可保留原 EXIF 元数据（不含 XMP），
   PNG 不携带；Exif 段结构异常的源文件会宁缺毋滥地跳过回写
@@ -344,4 +344,4 @@ npx cap open android   # 在 Android Studio 中构建运行
 
 ---
 
-© MogroWang Studio · 辑印 Albumark
+© MogroWang Studio · Albumark

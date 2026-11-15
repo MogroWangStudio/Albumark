@@ -79,7 +79,7 @@ export function makeTextLayer(patch: Partial<TextLayer> = {}): TextLayer {
     opacity: 100,
     blend: 'normal',
     tile: { enabled: false, gapX: 120, gapY: 90 },
-    content: '辑印 Albumark',
+    content: 'Albumark',
     fontFamily: '-apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif',
     fontWeight: 600,
     italic: false,

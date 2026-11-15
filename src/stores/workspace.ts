@@ -20,6 +20,8 @@ export interface WorkDirMeta {
   name: string
   /** 上次扫描时的工作项目数（未扫描过的目录没有该字段） */
   projects?: number
+  /** 目录的自定义 emoji 图标（空/未设置时用默认文件夹图形） */
+  emoji?: string
 }
 
 /** 工作项目：工作目录下的一个子文件夹 */
@@ -29,6 +31,8 @@ export interface ProjectMeta {
   path: string
   createdAt: number
   count: number
+  /** 项目的自定义 emoji 图标（存 albumark.json，随项目导出/导入） */
+  emoji?: string
 }
 
 interface PrjImageRef {
@@ -48,6 +52,8 @@ interface ProjectManifest {
   name: string
   createdAt: number
   images: PrjImageRef[]
+  /** 自定义 emoji 图标（可选，旧清单没有该字段） */
+  emoji?: string
 }
 
 /** workdir.json 的 v2 结构：多工作目录列表 */
@@ -186,7 +192,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     projects.value = []
   }
 
-  /** 把一个目录加入列表并激活（已记录则只激活）；扫描其中的辑印项目。 */
+  /** 把一个目录加入列表并激活（已记录则只激活）；扫描其中的 Albumark 项目。 */
   async function adoptDir(path: string): Promise<boolean> {
     try {
       await fs.readDir(path)
@@ -204,7 +210,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return true
   }
 
-  /** 桌面端：选择一个文件夹加入工作目录列表。允许非空——会自动扫描其中的辑印项目。 */
+  /** 桌面端：选择一个文件夹加入工作目录列表。允许非空——会自动扫描其中的 Albumark 项目。 */
   async function addDir(): Promise<boolean> {
     if (!isTauri) return false
     const picked = await pickDirectory('选择工作目录（可以是已有项目的文件夹）')
@@ -289,6 +295,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         path: p,
         createdAt: m.createdAt || 0,
         count: m.images.length,
+        emoji: m.emoji,
       })
     }
     out.sort((a, b) => b.createdAt - a.createdAt)
@@ -357,6 +364,49 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return true
   }
 
+  /** 规范 emoji 字段：空串/非字符串视为未设置（写 undefined，不落脏数据） */
+  function cleanEmoji(raw: string): string | undefined {
+    const v = typeof raw === 'string' ? raw.trim() : ''
+    return v ? v : undefined
+  }
+
+  /** 设置项目的 emoji 图标：写入项目清单（随项目导出/导入），随扫描刷新列表 */
+  async function setProjectEmoji(meta: ProjectMeta, emoji: string): Promise<boolean> {
+    if (!fsAvailable) return false
+    const m = (await fs.readJsonFile(await fs.joinPath(meta.path, MANIFEST))) as ProjectManifest | null
+    if (!m) {
+      toast('读取项目清单失败，无法设置图标', 'error')
+      return false
+    }
+    const v = cleanEmoji(emoji)
+    if (v) m.emoji = v
+    else delete m.emoji
+    await fs.writeJsonFile(await fs.joinPath(meta.path, MANIFEST), m)
+    await scanProjects()
+    return true
+  }
+
+  /** 设置目录的 emoji 图标：写进 workdir.json 的目录记录 */
+  async function setDirEmoji(meta: WorkDirMeta, emoji: string): Promise<boolean> {
+    if (!fsAvailable) return false
+    const v = cleanEmoji(emoji)
+    dirs.value = dirs.value.map((d) => {
+      if (d.path !== meta.path) return d
+      const next = { ...d }
+      if (v) next.emoji = v
+      else delete next.emoji
+      return next
+    })
+    if (dir.value?.path === meta.path) {
+      const next = { ...dir.value }
+      if (v) next.emoji = v
+      else delete next.emoji
+      dir.value = next
+    }
+    await persistDir()
+    return true
+  }
+
   async function createProject(name: string): Promise<boolean> {
     if (!fsAvailable || !dir.value) return false
     const clean = sanitizeDirName(name) || '未命名项目'
@@ -388,7 +438,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   async function findImported(dest: string, m: ProjectManifest, dirName: string): Promise<ProjectMeta> {
     const hit = projects.value.find((p) => p.path === dest)
     if (hit) return hit
-    return { id: m.id, name: m.name || dirName, path: dest, createdAt: m.createdAt || 0, count: m.images.length }
+    return { id: m.id, name: m.name || dirName, path: dest, createdAt: m.createdAt || 0, count: m.images.length, emoji: m.emoji }
   }
 
   /**
@@ -523,7 +573,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       const data = (await fs.readJsonFile(await fs.joinPath(meta.path, MANIFEST))) as ProjectManifest | null
       if (!data || !Array.isArray(data.images)) {
-        toast('这个文件夹不是有效的辑印项目', 'error')
+        toast('这个文件夹不是有效的 Albumark 项目', 'error')
         return
       }
       // 占位条目先进入项目，文件读取与解码转后台渐进补齐——安卓慢存储上不再整包等待
@@ -772,6 +822,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     importProjectFolder,
     renameProject,
     renameDir,
+    setProjectEmoji,
+    setDirEmoji,
     openProject,
     openEphemeralProject,
     closeProject,
