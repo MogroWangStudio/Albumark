@@ -184,7 +184,7 @@ jobs:
     name: macOS arm64 DMG
     needs: prepare
     if: needs.prepare.outputs.skip != 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: 检出代码

@@ -4,7 +4,7 @@
 
 **轻量 · 本地优先的图像批量水印与快速辑录工具**
 
-v2.0.0-beta1（2026-11-15） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· Capacitor（安卓端）
+v2.0.0-beta2（2026-11-15） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· Capacitor（安卓端）
 
 </div>
 
@@ -297,7 +297,7 @@ npx cap open android   # 在 Android Studio 中构建运行
   **`修复已损坏提示.command`**，按提示完成即可；
 - **终端命令**：`xattr -cr /Applications/Albumark.app`
 
-## 已知限制（v2.0.0-beta1 · 2026-11-15）
+## 已知限制（v2.0.0-beta2 · 2026-11-15）
 
 - 仅支持 JPG / PNG 输入；导出为重编码 JPG / PNG——JPG 可保留原 EXIF 元数据（不含 XMP），
   PNG 不携带；Exif 段结构异常的源文件会宁缺毋滥地跳过回写

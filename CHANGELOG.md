@@ -5,6 +5,17 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 
+## [2.0.0-beta2] - 2026-11-15
+
+### 修复
+
+- **macOS 构建失败**：GitHub Actions 的 `macos-14` runner 镜像已于 2026-11-02
+  完全退役（构建请求 0 秒即报「configuration not supported」），发版流水线与
+  手动构建校验的 macOS job 一并迁移到 `macos-15`（同为 arm64，工具链最接近，
+  构建步骤无需改动）。本版本内容与 2.0.0-beta1 相同（PNG 照片导入、更新读秒
+  自动安装、Release 自动发版流水线），仅用于修复发版构建
+
+
 ## [2.0.0-beta1] - 2026-11-15
 
 ### 新增
