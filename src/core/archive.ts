@@ -87,6 +87,42 @@ export async function zipFolderTo(
   await chain
 }
 
+/**
+ * 多项目批量导出：每个项目作为 ZIP 顶层的独立文件夹（{name}/albumark.json、
+ * {name}/images/…）。listFolder 拿到项目内相对路径后统一加项目名前缀，
+ * 解压到任意工作目录下即可被批量导入重新识别（probeZipBatch）。
+ */
+export async function zipFoldersTo(
+  roots: { name: string; path: string }[],
+  write: (chunk: Uint8Array) => Promise<void>,
+  onProgress?: (done: number, total: number, name: string) => void,
+): Promise<void> {
+  const packed: { name: string; rel: string; abs: string }[] = []
+  for (const root of roots) {
+    const files = await listFolder(root.path)
+    for (const rel of files) packed.push({ name: root.name, rel, abs: rel })
+  }
+  let chain: Promise<void> = Promise.resolve()
+  const zip = new Zip((err, chunk) => {
+    if (err) {
+      chain = chain.then(() => Promise.reject(err))
+      return
+    }
+    chain = chain.then(() => write(chunk))
+  })
+  for (let i = 0; i < packed.length; i++) {
+    const item = packed[i]
+    const bytes = await readFile(await joinPath(item.name, item.rel))
+    // 条目名里的名字已做 sanitizeDirName（调用方保证），路径分隔用 POSIX 斜杠
+    const entry = new ZipPassThrough(`${item.name}/${item.rel}`)
+    zip.add(entry)
+    entry.push(bytes, true)
+    onProgress?.(i + 1, packed.length, `${item.name}/${item.rel}`)
+  }
+  zip.end()
+  await chain
+}
+
 /* ---------- 导入：流式解压 ---------- */
 
 export interface ZipManifestProbe {
@@ -181,6 +217,54 @@ export async function probeZipManifest(source: Blob): Promise<ZipManifestProbe |
     return { prefix: best.prefix, bytes: concatChunks(best.chunks) }
   }
   return null
+}
+
+/**
+ * 批量归档探测：ZIP 顶层有多个项目文件夹（各有 albumark.json）时逐个
+ * 返回其前缀与清单字节——批量导出的 ZIP 由此重新导入。
+ */
+export async function probeZipBatch(source: Blob): Promise<ZipManifestProbe[]> {
+  const candidates: { prefix: string; chunks: Uint8Array[] }[] = []
+  const tops = new Set<string>()
+  let chain = Promise.resolve()
+  const uz = makeUnzip((file: UnzipFile) => {
+    const clean = sanitizeEntry(file.name)
+    if (!clean || clean.endsWith('/')) {
+      file.ondata = () => {}
+      file.start()
+      return
+    }
+    const slash = clean.indexOf('/')
+    // 只认顶层文件夹内的清单（根层清单不属于批量结构）
+    if (slash < 0) {
+      file.ondata = () => {}
+      file.start()
+      return
+    }
+    const prefix = clean.slice(0, slash + 1)
+    tops.add(prefix)
+    if (clean.slice(slash + 1) !== MANIFEST_NAME) {
+      file.ondata = () => {}
+      file.start()
+      return
+    }
+    const entry = { prefix, chunks: [] as Uint8Array[] }
+    candidates.push(entry)
+    file.ondata = (err, data, final) => {
+      chain = chain.then(() => {
+        if (err) throw err
+        entry.chunks.push(data)
+        if (final) return
+      })
+    }
+    file.start()
+  })
+  await pumpBlob(uz, source)
+  await chain
+  // 每个顶层文件夹至多一个清单；无顶层文件夹的散文件不是批量结构
+  return candidates
+    .filter((c) => tops.has(c.prefix))
+    .map((c) => ({ prefix: c.prefix, bytes: concatChunks(c.chunks) }))
 }
 
 function concatChunks(chunks: Uint8Array[]): Uint8Array {

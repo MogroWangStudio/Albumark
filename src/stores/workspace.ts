@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
 import * as fs from '@/core/fs'
-import { probeZipManifest, unzipTo } from '@/core/archive'
+import { probeZipBatch, probeZipManifest, unzipTo } from '@/core/archive'
 import { appDataDir, executableDir, isTauri, pickDirectory } from '@/core/platform'
 import { createDebouncedSaver } from '@/core/storage'
 import type { ImageItem } from '@/types/image'
@@ -33,6 +33,8 @@ export interface ProjectMeta {
   count: number
   /** 项目的自定义 emoji 图标（存 albumark.json，随项目导出/导入） */
   emoji?: string
+  /** 项目简介（存 albumark.json，编辑信息对话框编辑） */
+  description?: string
 }
 
 interface PrjImageRef {
@@ -54,6 +56,8 @@ interface ProjectManifest {
   images: PrjImageRef[]
   /** 自定义 emoji 图标（可选，旧清单没有该字段） */
   emoji?: string
+  /** 项目简介（可选，编辑信息对话框编辑） */
+  description?: string
 }
 
 /** workdir.json 的 v2 结构：多工作目录列表 */
@@ -296,6 +300,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         createdAt: m.createdAt || 0,
         count: m.images.length,
         emoji: m.emoji,
+        description: m.description,
       })
     }
     out.sort((a, b) => b.createdAt - a.createdAt)
@@ -370,6 +375,49 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return v ? v : undefined
   }
 
+  /**
+   * 编辑信息：名字 / 简介 / emoji 一次写入。名字变化才走磁盘改名（复用
+   * renameProject 的唯一名与占用检查），简介与 emoji 写进同一份清单——
+   * 只读写一次 manifest，避免多次落盘。
+   */
+  async function updateProjectInfo(
+    meta: ProjectMeta,
+    patch: { name?: string; description?: string; emoji?: string },
+  ): Promise<boolean> {
+    if (!fsAvailable) return false
+    const clean = sanitizeDirName(patch.name ?? meta.name)
+    if (!clean) return false
+    const nameChanged = clean !== meta.name
+    if (nameChanged) {
+      const nextPath = await fs.joinPath(fs.parentPath(meta.path), clean)
+      if (await fs.exists(nextPath)) {
+        toast('同名文件夹已存在，换一个名字', 'error')
+        return false
+      }
+      try {
+        await fs.renamePath(meta.path, nextPath)
+      } catch {
+        toast('重命名失败，文件夹可能正被占用', 'error')
+        return false
+      }
+      meta.path = nextPath
+      meta.name = clean
+    }
+    const m = (await fs.readJsonFile(await fs.joinPath(meta.path, MANIFEST))) as ProjectManifest | null
+    if (m) {
+      m.name = clean
+      const desc = patch.description?.trim()
+      if (desc) m.description = desc
+      else delete m.description
+      const emo = patch.emoji?.trim()
+      if (emo) m.emoji = emo
+      else delete m.emoji
+      await fs.writeJsonFile(await fs.joinPath(meta.path, MANIFEST), m)
+    }
+    await scanProjects()
+    return true
+  }
+
   /** 设置项目的 emoji 图标：写入项目清单（随项目导出/导入），随扫描刷新列表 */
   async function setProjectEmoji(meta: ProjectMeta, emoji: string): Promise<boolean> {
     if (!fsAvailable) return false
@@ -438,7 +486,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   async function findImported(dest: string, m: ProjectManifest, dirName: string): Promise<ProjectMeta> {
     const hit = projects.value.find((p) => p.path === dest)
     if (hit) return hit
-    return { id: m.id, name: m.name || dirName, path: dest, createdAt: m.createdAt || 0, count: m.images.length, emoji: m.emoji }
+    return {
+      id: m.id,
+      name: m.name || dirName,
+      path: dest,
+      createdAt: m.createdAt || 0,
+      count: m.images.length,
+      emoji: m.emoji,
+      description: m.description,
+    }
   }
 
   /**
@@ -472,6 +528,49 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (written === 0) throw new Error('ZIP 里没有可导入的文件')
     await scanProjects()
     return await findImported(dest, manifest, dirName)
+  }
+
+  /**
+   * 导入 ZIP(单项目 / 批量归档自动识别):先按单项目结构探测,失败则按
+   * 批量结构(顶层多个项目文件夹,来自批量导出)逐个导入——每项目重生成
+   * id,重名自动加序号,返回全部导入结果。
+   */
+  async function importProjectsZip(
+    file: Blob,
+    fallbackName: string,
+    onProgress?: (done: number, name: string) => void,
+  ): Promise<ProjectMeta[]> {
+    if (!fsAvailable || !dir.value) throw new Error('尚未打开工作目录')
+    try {
+      return [await importProjectZip(file, fallbackName, onProgress)]
+    } catch (singleErr) {
+      // 单项目结构不成立:按批量归档再试一次
+      const batch = await probeZipBatch(file)
+      if (!batch.length) throw singleErr
+      const out: ProjectMeta[] = []
+      for (let i = 0; i < batch.length; i++) {
+        const probe = batch[i]
+        let manifest: ProjectManifest
+        try {
+          manifest = JSON.parse(new TextDecoder().decode(probe.bytes)) as ProjectManifest
+        } catch {
+          continue
+        }
+        if (!manifest || !Array.isArray(manifest.images)) continue
+        manifest.id = uid()
+        const dirName = await uniqueProjectDir(manifest.name || `${fallbackName}-${i + 1}`)
+        const dest = await fs.joinPath(dir.value.path, dirName)
+        await unzipTo(file, dest, {
+          prefix: probe.prefix,
+          manifestBytes: new TextEncoder().encode(JSON.stringify(manifest)),
+          onProgress,
+        })
+        out.push(await findImported(dest, manifest, dirName))
+      }
+      if (!out.length) throw new Error('ZIP 里的项目清单都格式不正确')
+      await scanProjects()
+      return out
+    }
   }
 
   /** 导入文件夹工作项目（桌面）：校验清单 → 原样复制 → id 重新生成。 */
@@ -641,6 +740,154 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
     await scanProjects()
     return true
+  }
+
+  /* ---------- 多选批量:复制 / 移动 / 删除 ---------- */
+
+  /**
+   * 整目录搬移:同盘走 renamePath(原子);跨盘 / rename 失败降级
+   * copyDir 整树复制后删除源。返回目标路径,失败返回 null。
+   */
+  async function moveDir(from: string, to: string): Promise<string | null> {
+    if (from === to) return to
+    if (await fs.exists(to)) return null
+    try {
+      await fs.renamePath(from, to)
+      return to
+    } catch {
+      /* rename 失败(跨卷 / 被占用):降级复制 + 删除 */
+    }
+    try {
+      await fs.copyDir(from, to)
+      await fs.deletePath(from)
+      return to
+    } catch {
+      toast('移动失败,目标位置可能不可写', 'error')
+      return null
+    }
+  }
+
+  /** 批量复制项目为当前目录内的副本:整树复制 + 清单重生成 id 与名称 */
+  async function copyProjects(metas: ProjectMeta[]): Promise<number> {
+    if (!fsAvailable || !dir.value) return 0
+    let done = 0
+    for (const meta of metas) {
+      const dest = await fs.joinPath(dir.value.path, await uniqueProjectDir(`${meta.name} 副本`))
+      try {
+        await fs.copyDir(meta.path, dest)
+        const m = (await fs.readJsonFile(await fs.joinPath(dest, MANIFEST))) as ProjectManifest | null
+        if (m) {
+          m.id = uid()
+          await fs.writeJsonFile(await fs.joinPath(dest, MANIFEST), m)
+        }
+        done++
+      } catch {
+        toast(`复制「${meta.name}」失败,已跳过`, 'error')
+      }
+    }
+    if (done) await scanProjects()
+    return done
+  }
+
+  /** 批量移动项目到另一个工作目录:搬移后两端目录重新扫描 */
+  async function moveProjects(metas: ProjectMeta[], target: WorkDirMeta): Promise<number> {
+    if (!fsAvailable || !dir.value || target.path === dir.value.path) return 0
+    let done = 0
+    for (const meta of metas) {
+      const dest = await fs.joinPath(target.path, meta.name)
+      const moved = await moveDir(meta.path, dest)
+      if (moved) done++
+    }
+    if (done) {
+      if (current.value && metas.some((m) => m.path === current.value?.path)) await closeProject()
+      await scanProjects()
+      // 目标目录的项目数刷新(非当前目录,轻量统计一次)
+      const st = await scanDirProjects(target.path).catch(() => [])
+      const idx = dirs.value.findIndex((d) => d.path === target.path)
+      if (idx >= 0) dirs.value[idx] = { ...dirs.value[idx], projects: st.length }
+      await persistDir()
+    }
+    return done
+  }
+
+  /** 批量删除项目:桌面移入回收站 / 安卓直接删除(调用方负责二次确认) */
+  async function removeProjects(metas: ProjectMeta[]): Promise<number> {
+    if (!fsAvailable) return 0
+    let done = 0
+    for (const meta of metas) {
+      if (current.value?.path === meta.path) await closeProject()
+      try {
+        await fs.deletePath(meta.path)
+        done++
+      } catch {
+        toast(`删除「${meta.name}」失败,已跳过`, 'error')
+      }
+    }
+    if (done) await scanProjects()
+    return done
+  }
+
+  /** 批量复制目录整树到目标父目录(目标位置由 UI 层选定) */
+  async function copyDirs(metas: WorkDirMeta[], parentPath: string, toDocuments = false): Promise<number> {
+    if (!fsAvailable) return 0
+    let done = 0
+    for (const meta of metas) {
+      const dest = await fs.joinPath(parentPath, meta.name)
+      if (await fs.exists(dest)) {
+        toast(`「${meta.name}」在目标位置已存在,已跳过`, 'error')
+        continue
+      }
+      try {
+        await fs.copyDir(meta.path, dest, toDocuments)
+        done++
+      } catch {
+        toast(`复制「${meta.name}」失败,已跳过`, 'error')
+      }
+    }
+    return done
+  }
+
+  /** 批量搬移目录:磁盘移动 + workdir.json 记录同步(正在使用中的目录跟随) */
+  async function moveDirs(metas: WorkDirMeta[], parentPath: string): Promise<number> {
+    if (!fsAvailable) return 0
+    let done = 0
+    const moved: { from: string; to: string }[] = []
+    for (const meta of metas) {
+      const dest = await fs.joinPath(parentPath, meta.name)
+      if (await fs.exists(dest)) {
+        toast(`「${meta.name}」在目标位置已存在,已跳过`, 'error')
+        continue
+      }
+      const movedTo = await moveDir(meta.path, dest)
+      if (movedTo) {
+        moved.push({ from: meta.path, to: movedTo })
+        done++
+      }
+    }
+    if (moved.length) {
+      dirs.value = dirs.value.map((d) => {
+        const hit = moved.find((m) => m.from === d.path)
+        return hit ? { ...d, path: hit.to } : d
+      })
+      if (dir.value) {
+        const hit = moved.find((m) => m.from === dir.value!.path)
+        if (hit) dir.value = { ...dir.value, path: hit.to }
+      }
+      await persistDir()
+    }
+    return done
+  }
+
+  /** 批量移除目录记录(不删磁盘文件,语义与单个「移除记录」一致) */
+  function removeDirs(metas: WorkDirMeta[]): void {
+    const paths = new Set(metas.map((m) => m.path))
+    dirs.value = dirs.value.filter((d) => !paths.has(d.path))
+    if (dir.value && paths.has(dir.value.path)) {
+      dir.value = null
+      projects.value = []
+      gotoSubPage('dirs')
+    }
+    void persistDir()
   }
 
   /* ---------- 图片进出项目 ---------- */
@@ -824,10 +1071,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     renameDir,
     setProjectEmoji,
     setDirEmoji,
+    updateProjectInfo,
+    importProjectsZip,
     openProject,
     openEphemeralProject,
     closeProject,
     removeProject,
+    copyProjects,
+    moveProjects,
+    removeProjects,
+    copyDirs,
+    moveDirs,
+    removeDirs,
     ensureImageLoaded,
     addFiles,
     addFromPaths,

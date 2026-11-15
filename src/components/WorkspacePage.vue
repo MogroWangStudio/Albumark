@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
+  Archive,
   ArrowLeft,
   ArchiveRestore,
   ArrowRight,
+  Check,
+  Copy,
+  FolderInput,
   FolderOpen,
   FolderPlus,
   HardDrive,
@@ -11,6 +15,7 @@ import {
   Layers,
   MoreHorizontal,
   Pencil,
+  SquareDashed,
   Trash2,
 } from 'lucide-vue-next'
 import LogoMark from '@/components/brand/LogoMark.vue'
@@ -25,6 +30,7 @@ import { useLongPress } from '@/core/longpress'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
 import { isTauri } from '@/core/platform'
 import { openCtxMenu } from '@/stores/ctxMenu'
+import { toast } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 import { useWatermarkStore } from '@/stores/watermark'
 import { useWorkspaceStore, type ProjectMeta, type WorkDirMeta } from '@/stores/workspace'
@@ -112,6 +118,271 @@ async function confirmRemove(): Promise<void> {
 const renameTarget = ref<{ kind: 'project' | 'dir'; meta: ProjectMeta | WorkDirMeta } | null>(null)
 /** 设置 emoji 图标的目标：目录写 workdir.json，项目写 albumark.json */
 const emojiTarget = ref<{ kind: 'project' | 'dir'; meta: ProjectMeta | WorkDirMeta } | null>(null)
+
+/* ---------- 编辑信息：项目名 / 简介 / emoji 一次编辑 ---------- */
+const editInfoTarget = ref<ProjectMeta | null>(null)
+const editName = ref('')
+const editDesc = ref('')
+const editEmoji = ref('')
+
+function openEditInfo(p: ProjectMeta): void {
+  editInfoTarget.value = p
+  editName.value = p.name
+  editDesc.value = p.description ?? ''
+  editEmoji.value = p.emoji ?? ''
+}
+
+async function confirmEditInfo(): Promise<void> {
+  const t = editInfoTarget.value
+  if (!t) return
+  const ok = await ws.updateProjectInfo(t, {
+    name: editName.value,
+    description: editDesc.value,
+    emoji: editEmoji.value,
+  })
+  if (ok) editInfoTarget.value = null
+}
+
+/* ---------- 多选批量:目录页 / 项目页 ---------- */
+
+const selectScope = ref<'dirs' | 'projects' | null>(null)
+const selected = ref<Set<string>>(new Set())
+const selectedCount = computed(() => selected.value.size)
+const isSelecting = computed(() => selectScope.value !== null)
+
+function enterSelect(scope: 'dirs' | 'projects'): void {
+  selectScope.value = scope
+  selected.value = new Set()
+}
+function exitSelect(): void {
+  selectScope.value = null
+  selected.value = new Set()
+}
+function toggleSel(id: string): void {
+  const next = new Set(selected.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selected.value = next
+}
+function selectAllVisible(): void {
+  const all =
+    selectScope.value === 'dirs'
+      ? ws.dirs.map((d) => d.path)
+      : ws.projects.map((p) => p.id)
+  selected.value = new Set(all)
+}
+
+/** 选中项目的元信息(按当前列表过滤,排除已被外部删除的) */
+const selectedProjects = computed(() =>
+  selectScope.value === 'projects'
+    ? ws.projects.filter((p) => selected.value.has(p.id))
+    : [],
+)
+/** 选中目录的元信息 */
+const selectedDirs = computed(() =>
+  selectScope.value === 'dirs' ? ws.dirs.filter((d) => selected.value.has(d.path)) : [],
+)
+
+/* 框选(rubber band):多选模式下在列表空白处按下拖动,与行/卡相交即选中 */
+const rubber = ref<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+let rubberBase: Set<string> | null = null
+
+function rubberRect(): { left: number; top: number; width: number; height: number } | null {
+  if (!rubber.value) return null
+  const { x1, y1, x2, y2 } = rubber.value
+  return {
+    left: Math.min(x1, x2),
+    top: Math.min(y1, y2),
+    width: Math.abs(x2 - x1),
+    height: Math.abs(y2 - y1),
+  }
+}
+const rubberStyle = computed(() => {
+  const r = rubberRect()
+  return r ? { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` } : null
+})
+
+function onRubberDown(scope: 'dirs' | 'projects', e: PointerEvent): void {
+  if (selectScope.value !== scope || isCoarse.value || e.button !== 0) return
+  const t = e.target as HTMLElement | null
+  // 行/卡/菜单上的按下不属于框选起点
+  if (t?.closest('.dir-row, .prj-card, .dropdown-menu, .select-bar, button, input')) return
+  // 框选覆盖层挂在所属 section 内:坐标以 section 为基准
+  const hostEl = (e.currentTarget as HTMLElement).closest('.subpage') as HTMLElement | null
+  if (!hostEl) return
+  const host = hostEl.getBoundingClientRect()
+  const startX = e.clientX - host.left
+  const startY = e.clientY - host.top
+  rubberBase = new Set(selected.value)
+  rubber.value = { x1: startX, y1: startY, x2: startX, y2: startY }
+  const move = (ev: PointerEvent) => {
+    rubber.value = { x1: startX, y1: startY, x2: ev.clientX - host.left, y2: ev.clientY - host.top }
+    const r = rubberRect()
+    if (!r || !rubberBase) return
+    const next = new Set(rubberBase)
+    const sel = `[data-${scope === 'dirs' ? 'dir-path' : 'prj-id'}]`
+    for (const el of hostEl.querySelectorAll(sel)) {
+      const box = el.getBoundingClientRect()
+      if (
+        box.left < host.left + r.left + r.width &&
+        box.right > host.left + r.left &&
+        box.top < host.top + r.top + r.height &&
+        box.bottom > host.top + r.top
+      ) {
+        next.add(scope === 'dirs' ? (el as HTMLElement).dataset.dirPath! : (el as HTMLElement).dataset.prjId!)
+      }
+    }
+    selected.value = next
+  }
+  const up = () => {
+    rubber.value = null
+    rubberBase = null
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+}
+
+/* 批量动作 */
+const confirmBatchDelete = ref(false)
+const moveTargetOpen = ref(false)
+const exporting = ref(false)
+
+function batchCopy(): void {
+  void (async () => {
+    if (selectScope.value === 'projects') {
+      const n = await ws.copyProjects(selectedProjects.value)
+      toast(n ? `已复制 ${n} 个项目` : '复制失败', n ? 'success' : 'error')
+    } else {
+      if (isTauri) {
+        const { pickDirectory } = await import('@/core/platform')
+        const parent = await pickDirectory('选择复制到的位置')
+        if (!parent) return
+        const n = await ws.copyDirs(selectedDirs.value, parent)
+        toast(n ? `已复制 ${n} 个目录` : '复制失败', n ? 'success' : 'error')
+      } else {
+        const n = await ws.copyDirs(selectedDirs.value, `Albumark/目录备份_${Date.now()}`, true)
+        toast(n ? `已复制 ${n} 个目录到 Documents/Albumark` : '复制失败', n ? 'success' : 'error')
+      }
+    }
+    exitSelect()
+  })()
+}
+
+function batchMove(): void {
+  if (selectScope.value === 'projects') {
+    if (ws.dirs.length < 2) {
+      toast('只有一个工作目录,无处可移动', 'error')
+      return
+    }
+    moveTargetOpen.value = true
+  } else {
+    void (async () => {
+      if (isTauri) {
+        const { pickDirectory } = await import('@/core/platform')
+        const parent = await pickDirectory('选择移动到的位置')
+        if (!parent) return
+      } else {
+        // 安卓目录搬移在应用数据目录内进行
+      }
+      const parent = isTauri
+        ? await import('@/core/platform').then((m) => m.pickDirectory('选择移动到的位置')).then((d) => d)
+        : 'AlbumarkMoved'
+      if (!parent) return
+      const n = await ws.moveDirs(selectedDirs.value, parent)
+      toast(n ? `已移动 ${n} 个目录` : '移动失败', n ? 'success' : 'error')
+      exitSelect()
+    })()
+  }
+}
+
+async function confirmMoveProjects(): Promise<void> {
+  const target = moveDirChoice.value
+  moveTargetOpen.value = false
+  if (!target) return
+  const n = await ws.moveProjects(selectedProjects.value, target)
+  toast(n ? `已移动 ${n} 个项目` : '移动失败', n ? 'success' : 'error')
+  exitSelect()
+}
+
+const moveDirChoice = ref<WorkDirMeta | null>(null)
+
+function batchDelete(): void {
+  confirmBatchDelete.value = true
+}
+
+async function confirmBatchDeleteRun(): Promise<void> {
+  confirmBatchDelete.value = false
+  if (selectScope.value === 'projects') {
+    const n = await ws.removeProjects(selectedProjects.value)
+    toast(n ? `已删除 ${n} 个项目` : '删除失败', n ? 'success' : 'error')
+  } else {
+    ws.removeDirs(selectedDirs.value)
+    toast(`已移除 ${selectedDirs.value.length} 条目录记录`, 'success')
+  }
+  exitSelect()
+}
+
+async function batchExport(): Promise<void> {
+  const scope = selectScope.value
+  if (!scope || exporting.value) return
+  exporting.value = true
+  try {
+    const { pickSavePath } = await import('@/core/platform')
+    const [{ zipFoldersTo }, { openWriter }] = await Promise.all([
+      import('@/core/archive'),
+      import('@/core/fs'),
+    ])
+    if (scope === 'projects') {
+      const roots = selectedProjects.value.map((p) => ({ name: p.name, path: p.path }))
+      if (isTauri) {
+        const dest = await pickSavePath('Albumark-projects.zip')
+        if (!dest) return
+        const w = await openWriter(dest, false)
+        try {
+          await zipFoldersTo(roots, (chunk) => w.write(chunk))
+        } finally {
+          await w.close()
+        }
+        toast(`已导出 ${roots.length} 个项目`, 'success')
+      } else {
+        const w = await openWriter(`Albumark/exports/projects_${Date.now()}.zip`, true)
+        try {
+          await zipFoldersTo(roots, (chunk) => w.write(chunk))
+        } finally {
+          await w.close()
+        }
+        toast(`已导出 ${roots.length} 个项目到 Documents/Albumark/exports`, 'success')
+      }
+    } else {
+      const roots = selectedDirs.value.map((d) => ({ name: d.name, path: d.path }))
+      if (isTauri) {
+        const dest = await pickSavePath('Albumark-directories.zip')
+        if (!dest) return
+        const w = await openWriter(dest, false)
+        try {
+          await zipFoldersTo(roots, (chunk) => w.write(chunk))
+        } finally {
+          await w.close()
+        }
+        toast(`已导出 ${roots.length} 个目录`, 'success')
+      } else {
+        const w = await openWriter(`Albumark/exports/dirs_${Date.now()}.zip`, true)
+        try {
+          await zipFoldersTo(roots, (chunk) => w.write(chunk))
+        } finally {
+          await w.close()
+        }
+        toast(`已导出 ${roots.length} 个目录到 Documents/Albumark/exports`, 'success')
+      }
+    }
+  } catch (e) {
+    toast(`导出失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+  } finally {
+    exporting.value = false
+  }
+}
 const renameName = ref('')
 /** 导出目标：交给 ExportProjectDialog */
 const exportTarget = ref<{ kind: 'project' | 'dir'; name: string; path: string } | null>(null)
@@ -135,6 +406,11 @@ watch(
 function onDirRowClick(d: WorkDirMeta, e: MouseEvent): void {
   const t = e.target as HTMLElement | null
   if (t?.closest('.dir-tool, .dropdown-menu')) return
+  // 多选模式:行点击 = 选中切换,不再进入目录
+  if (selectScope.value === 'dirs') {
+    toggleSel(d.path)
+    return
+  }
   enterDir(d)
 }
 
@@ -145,6 +421,15 @@ function enterDir(d: WorkDirMeta): void {
 
 function gotoDirs(): void {
   ws.gotoSubPage('dirs')
+}
+
+/** 项目卡点击:多选模式切换选中,普通模式打开项目 */
+function onPrjCardClick(p: ProjectMeta): void {
+  if (selectScope.value === 'projects') {
+    toggleSel(p.id)
+    return
+  }
+  void ws.openProject(p)
 }
 
 function startRename(kind: 'project' | 'dir', meta: ProjectMeta | WorkDirMeta): void {
@@ -194,8 +479,7 @@ function onCoarseChange(e: MediaQueryListEvent): void {
 function openProjectMenu(p: ProjectMeta, x: number, y: number): void {
   const items: ContextMenuItem[] = [
     { label: '打开', action: () => void ws.openProject(p) },
-    { label: '重命名', action: () => startRename('project', p) },
-    { label: '设置图标…', action: () => (emojiTarget.value = { kind: 'project', meta: p }) },
+    { label: '编辑信息…', action: () => openEditInfo(p) },
     { label: '导出…', action: () => (exportTarget.value = { kind: 'project', name: p.name, path: p.path }) },
     { label: '删除', danger: true, action: () => (removeTarget.value = { id: p.id, name: p.name }) },
   ]
@@ -277,32 +561,67 @@ onMounted(() => {
                 <h1>工作目录</h1>
                 <span class="sec-count">{{ ws.dirs.length }}</span>
               </div>
-              <div v-if="sandboxedFs" class="create-inline">
-                <input
-                  v-model="newDirName"
-                  class="text-input"
-                  placeholder="新目录名称"
-                  @keyup.enter="addDir"
-                />
-                <AppButton size="sm" variant="primary" :disabled="!newDirName.trim()" @click="addDir">
-                  <FolderPlus :size="14" />新建
+              <template v-if="selectScope === 'dirs'">
+                <span class="sel-count">已选 {{ selectedCount }}</span>
+                <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchCopy">
+                  <Copy :size="13" />复制
                 </AppButton>
-              </div>
-              <AppButton v-else size="sm" variant="ghost" @click="addDir">
-                <FolderPlus :size="13" />添加工作目录…
-              </AppButton>
+                <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchMove">
+                  <FolderInput :size="13" />移动
+                </AppButton>
+                <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchExport">
+                  <Archive :size="13" />导出
+                </AppButton>
+                <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchDelete">
+                  <Trash2 :size="13" />移除
+                </AppButton>
+                <AppButton size="sm" variant="ghost" @click="selectAllVisible">全选</AppButton>
+                <AppButton size="sm" variant="primary" @click="exitSelect">完成</AppButton>
+              </template>
+              <template v-else>
+                <AppButton size="sm" variant="ghost" @click="enterSelect('dirs')">
+                  <SquareDashed :size="13" />多选
+                </AppButton>
+                <div v-if="sandboxedFs" class="create-inline">
+                  <input
+                    v-model="newDirName"
+                    class="text-input"
+                    placeholder="新目录名称"
+                    @keyup.enter="addDir"
+                  />
+                  <AppButton size="sm" variant="primary" :disabled="!newDirName.trim()" @click="addDir">
+                    <FolderPlus :size="14" />新建
+                  </AppButton>
+                </div>
+                <AppButton v-else size="sm" variant="ghost" @click="addDir">
+                  <FolderPlus :size="13" />添加工作目录…
+                </AppButton>
+              </template>
             </header>
 
-            <ul v-if="ws.dirs.length" class="dir-list">
+            <!-- 选择条下的提示:进入多选后行点击变选中,不再进入目录 -->
+            <p v-if="selectScope === 'dirs'" class="select-hint">
+              点选或拖框选择目录，操作按钮在上方
+            </p>
+            <ul v-if="ws.dirs.length" class="dir-list" @pointerdown="onRubberDown('dirs', $event)">
               <li
                 v-for="d in ws.dirs"
                 :key="d.path"
                 class="dir-row"
-                :class="{ active: ws.dir?.path === d.path }"
+                :class="{ active: !isSelecting && ws.dir?.path === d.path, selecting: selectScope === 'dirs' && selected.has(d.path) }"
                 :data-dir-path="d.path"
                 @click="onDirRowClick(d, $event)"
                 v-on="dirPress"
               >
+                <span
+                  v-if="selectScope === 'dirs'"
+                  class="sel-dot"
+                  :class="{ on: selected.has(d.path) }"
+                  role="checkbox"
+                  :aria-checked="selected.has(d.path)"
+                >
+                  <Check v-if="selected.has(d.path)" :size="12" />
+                </span>
                 <span class="dir-icon" :class="{ emoji: !!d.emoji }">
                   <template v-if="d.emoji">{{ d.emoji }}</template>
                   <FolderOpen v-else :size="14" />
@@ -313,7 +632,7 @@ onMounted(() => {
                 </div>
                 <span class="dir-count">{{ d.projects ?? '—' }} 个项目</span>
                 <AppDropdown
-                  v-if="!isCoarse"
+                  v-if="!isCoarse && selectScope !== 'dirs'"
                   align="right"
                   :items="[
                     { label: '重命名', action: () => startRename('dir', d) },
@@ -333,6 +652,12 @@ onMounted(() => {
               </li>
             </ul>
             <p v-else class="empty">还没有工作目录</p>
+            <div
+              v-if="rubberStyle && selectScope === 'dirs'"
+              class="rubber"
+              :style="rubberStyle"
+              aria-hidden="true"
+            ></div>
           </section>
 
           <!-- 页面 ②：工作项目（返回可回工作目录页；安卓侧滑返回同一层级） -->
@@ -346,11 +671,34 @@ onMounted(() => {
                   <h1>工作项目</h1>
                   <span class="sec-count">{{ ws.projects.length }}</span>
                 </div>
-                <AppButton size="sm" variant="ghost" @click="importOpen = true">
+                <template v-if="selectScope === 'projects'">
+                  <span class="sel-count">已选 {{ selectedCount }}</span>
+                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchCopy">
+                    <Copy :size="13" />复制
+                  </AppButton>
+                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchMove">
+                    <FolderInput :size="13" />移动
+                  </AppButton>
+                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchExport">
+                    <Archive :size="13" />导出
+                  </AppButton>
+                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchDelete">
+                    <Trash2 :size="13" />删除
+                  </AppButton>
+                  <AppButton size="sm" variant="ghost" @click="selectAllVisible">全选</AppButton>
+                  <AppButton size="sm" variant="primary" @click="exitSelect">完成</AppButton>
+                </template>
+                <AppButton v-else size="sm" variant="ghost" @click="enterSelect('projects')">
+                  <SquareDashed :size="13" />多选
+                </AppButton>
+                <AppButton v-if="selectScope !== 'projects'" size="sm" variant="ghost" @click="importOpen = true">
                   <ArchiveRestore :size="13" />导入项目
                 </AppButton>
               </header>
               <p class="cur-dir">{{ ws.dir.emoji ? `${ws.dir.emoji} ` : '' }}{{ ws.dir.name }}</p>
+              <p v-if="selectScope === 'projects'" class="select-hint">
+                点选或拖框选择项目，操作按钮在上方
+              </p>
 
             <div class="create">
               <input
@@ -364,7 +712,7 @@ onMounted(() => {
               </AppButton>
             </div>
 
-            <div v-if="ws.projects.length" class="grid">
+            <div v-if="ws.projects.length" class="grid" @pointerdown="onRubberDown('projects', $event)">
               <!-- div[role=button]：卡片内要挂操作菜单，button 不能嵌套 button -->
               <div
                 v-for="p in ws.projects"
@@ -372,20 +720,31 @@ onMounted(() => {
                 class="prj-card"
                 role="button"
                 tabindex="0"
+                :class="{ selecting: selectScope === 'projects' && selected.has(p.id) }"
                 :data-prj-id="p.id"
-                @click="ws.openProject(p)"
-                @keyup.enter="ws.openProject(p)"
+                @click="onPrjCardClick(p)"
+                @keyup.enter="onPrjCardClick(p)"
                 v-on="prjPress"
               >
+                <span
+                  v-if="selectScope === 'projects'"
+                  class="sel-dot"
+                  :class="{ on: selected.has(p.id) }"
+                  role="checkbox"
+                  :aria-checked="selected.has(p.id)"
+                >
+                  <Check v-if="selected.has(p.id)" :size="12" />
+                </span>
                 <span class="prj-icon" :class="{ emoji: !!p.emoji }">
                   <template v-if="p.emoji">{{ p.emoji }}</template>
                   <Images v-else :size="17" />
                 </span>
                 <span class="prj-name">{{ p.name }}</span>
+                <span v-if="p.description" class="prj-desc">{{ p.description }}</span>
                 <span class="prj-count">{{ p.count }} 张照片</span>
                 <span v-if="p.createdAt" class="prj-date">{{ fmtDate(p.createdAt) }}</span>
                 <AppDropdown
-                  v-if="!isCoarse"
+                  v-if="!isCoarse && selectScope !== 'projects'"
                   class="prj-menu"
                   align="right"
                   :items="[
@@ -404,6 +763,12 @@ onMounted(() => {
               </div>
             </div>
             <p v-else class="empty">这个目录里还没有工作项目</p>
+            <div
+              v-if="rubberStyle && selectScope === 'projects'"
+              class="rubber"
+              :style="rubberStyle"
+              aria-hidden="true"
+            ></div>
           </template>
 
           <template v-else-if="fsAvailable && !sandboxedFs">
@@ -496,6 +861,89 @@ onMounted(() => {
       </div>
     </AppDialog>
 
+    <!-- 编辑信息：项目名 / 简介 / emoji 图标一次编辑 -->
+    <AppDialog
+      :open="!!editInfoTarget"
+      title="编辑项目信息"
+      :width="440"
+      @close="editInfoTarget = null"
+    >
+      <div class="edit-info">
+        <label class="field">
+          <span class="field-label">名称</span>
+          <input v-model="editName" class="text-input" placeholder="项目名称" />
+        </label>
+        <label class="field">
+          <span class="field-label">简介（可选）</span>
+          <textarea
+            v-model="editDesc"
+            class="text-input area"
+            rows="2"
+            placeholder="一句话介绍这个项目"
+          ></textarea>
+        </label>
+        <div class="field">
+          <span class="field-label">图标（可选）</span>
+          <EmojiPicker
+            :model-value="editEmoji"
+            @pick="editEmoji = $event"
+            @clear="editEmoji = ''"
+          />
+        </div>
+      </div>
+      <div class="confirm-btns">
+        <AppButton variant="ghost" @click="editInfoTarget = null">取消</AppButton>
+        <AppButton variant="primary" :disabled="!editName.trim()" @click="confirmEditInfo">
+          <Check :size="13" />保存
+        </AppButton>
+      </div>
+    </AppDialog>
+
+    <!-- 多选:批量删除二次确认(项目按平台区分回收站 / 直接删除文案) -->
+    <AppDialog
+      :open="confirmBatchDelete"
+      :title="selectScope === 'dirs' ? '移除目录记录' : '删除工作项目'"
+      :width="400"
+      @close="confirmBatchDelete = false"
+    >
+      <p class="confirm-text">
+        <template v-if="selectScope === 'dirs'">
+          将移除 {{ selectedCount }} 条工作目录记录。磁盘上的文件夹与项目不会被删除。
+        </template>
+        <template v-else-if="isTauri">
+          将把 {{ selectedCount }} 个项目文件夹移入系统回收站。确定删除吗？
+        </template>
+        <template v-else>
+          移动端没有回收站，{{ selectedCount }} 个项目将被<strong>直接删除</strong>，此操作<strong>不可撤销</strong>。确定删除吗？
+        </template>
+      </p>
+      <div class="confirm-btns">
+        <AppButton variant="ghost" @click="confirmBatchDelete = false">取消</AppButton>
+        <AppButton variant="danger" @click="confirmBatchDeleteRun">
+          <Trash2 :size="13" />{{ selectScope === 'dirs' ? '移除记录' : isTauri ? '移入回收站' : '直接删除' }}
+        </AppButton>
+      </div>
+    </AppDialog>
+
+    <!-- 多选:项目移动目标目录选择 -->
+    <AppDialog :open="moveTargetOpen" title="移动到工作目录" :width="380" @close="moveTargetOpen = false">
+      <ul class="move-list">
+        <li v-for="d in ws.dirs" :key="d.path">
+          <button
+            class="move-item"
+            :class="{ on: d.path === ws.dir?.path }"
+            :disabled="d.path === ws.dir?.path"
+            @click="moveDirChoice = d; confirmMoveProjects()"
+          >
+            <span v-if="d.emoji" class="move-emoji">{{ d.emoji }}</span>
+            <FolderOpen v-else :size="14" />
+            <span class="move-name">{{ d.name }}{{ d.path === ws.dir?.path ? '（当前）' : '' }}</span>
+            <span class="move-count">{{ d.projects ?? '—' }} 个项目</span>
+          </button>
+        </li>
+      </ul>
+    </AppDialog>
+
     <!-- 设置 emoji 图标：目录与项目共用一个选择器，选择即保存 -->
     <AppDialog
       :open="!!emojiTarget"
@@ -541,6 +989,10 @@ onMounted(() => {
   backdrop-filter: var(--blur-material);
   border: 1px solid var(--line);
   box-shadow: var(--shadow-2);
+}
+/* 两级页卡片:多选框选覆盖层的定位基准 */
+.card.grow.subpage {
+  position: relative;
 }
 .card.grow {
   width: 100%;
@@ -629,6 +1081,132 @@ onMounted(() => {
   place-items: center;
   color: var(--text-3);
   flex: none;
+}
+
+/* ---------- 多选模式 ---------- */
+.sel-count {
+  flex: none;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.select-hint {
+  margin: -4px 0 0;
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+}
+.rubber {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 3px;
+  pointer-events: none;
+}
+.sel-dot {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  /* deslop-ignore-next-line 19 —— 圆形选择圈，与基线内圆形控件同一有意设计 */
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  color: transparent;
+  transition: background var(--dur-hover) var(--ease-soft), border-color var(--dur-hover) var(--ease-soft);
+}
+.sel-dot.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.dir-row.selecting {
+  background: var(--hover);
+}
+.prj-card.selecting {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.prj-card .sel-dot {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+}
+.prj-desc {
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 编辑信息对话框 */
+.edit-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.edit-info .field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.edit-info .field-label {
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+}
+.text-input.area {
+  resize: vertical;
+  min-height: 52px;
+  font-family: inherit;
+  line-height: 1.5;
+}
+
+/* 移动目标目录选择 */
+.move-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.move-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: var(--r-m);
+  color: var(--text-2);
+  text-align: left;
+  transition: background var(--dur-hover) var(--ease-soft);
+}
+.move-item:hover:not(:disabled) {
+  background: var(--hover);
+}
+.move-item.on {
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+.move-emoji {
+  font-size: calc(14px * var(--ui-zoom, 1));
+  flex: none;
+}
+.move-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(12.5px * var(--ui-zoom, 1));
+}
+.move-count {
+  flex: none;
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
 }
 .dir-icon.emoji {
   font-size: calc(16px * var(--ui-zoom, 1));

@@ -21,7 +21,8 @@ const ws = useWorkspaceStore()
 type Phase = 'input' | 'running' | 'done'
 const phase = ref<Phase>('input')
 const progress = ref({ done: 0, name: '' })
-const imported = ref<ProjectMeta | null>(null)
+/** 导入结果:单项目 ZIP 一项,批量归档多项 */
+const imported = ref<ProjectMeta[]>([])
 const error = ref<string | null>(null)
 /** 触屏的 ZIP 选择器：WebView 的 input file 会调起系统文件选择，无需额外插件 */
 const zipInput = ref<HTMLInputElement | null>(null)
@@ -32,7 +33,7 @@ watch(
     if (!v) return
     phase.value = 'input'
     progress.value = { done: 0, name: '' }
-    imported.value = null
+    imported.value = []
     error.value = null
   },
 )
@@ -73,7 +74,7 @@ async function importZip(): Promise<void> {
   phase.value = 'running'
   progress.value = { done: 0, name: '' }
   try {
-    imported.value = await ws.importProjectZip(blob, fallback, (done, name) => {
+    imported.value = await ws.importProjectsZip(blob, fallback, (done, name) => {
       progress.value = { done, name }
     })
     phase.value = 'done'
@@ -91,7 +92,7 @@ async function importFolder(): Promise<void> {
   phase.value = 'running'
   progress.value = { done: 0, name: '复制文件夹…' }
   try {
-    imported.value = await ws.importProjectFolder(dir)
+    imported.value = [await ws.importProjectFolder(dir)]
     phase.value = 'done'
   } catch (e) {
     phase.value = 'input'
@@ -146,10 +147,10 @@ async function importFolder(): Promise<void> {
     <template v-else>
       <div class="count">
         <ArchiveRestore :size="15" />
-        <span>已导入「{{ imported?.name }}」</span>
+        <span>{{ imported.length > 1 ? `已导入 ${imported.length} 个工作项目` : `已导入「${imported[0]?.name ?? ''}」` }}</span>
       </div>
       <p class="dest">
-        {{ imported?.count ?? 0 }} 张照片 · 已加入当前工作目录的项目列表
+        {{ imported.reduce((n, p) => n + p.count, 0) }} 张照片 · 已加入当前工作目录的项目列表
       </p>
       <div class="btns">
         <AppButton variant="primary" @click="requestClose">完成</AppButton>

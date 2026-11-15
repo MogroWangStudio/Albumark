@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { loadJson, saveJson } from '@/core/storage'
-import { makeBorderLayer, makeTextLayer, useWatermarkStore } from './watermark'
+import { makeBackgroundLayer, makeBorderLayer, makeTextLayer, useWatermarkStore } from './watermark'
 import { toast } from './toast'
 import { migrateOffsetsToPx, type WatermarkTemplate } from '@/types/watermark'
 
@@ -92,6 +92,31 @@ function builtinTemplates(): WatermarkTemplate[] {
       colorLeft: '#211D19',
     }),
   ]
+  // 背景水印模板：BG 层默认 source 'self'（照片自身模糊填充），应用后
+  // 到工作室可继续调外扩 / 画幅 / 模糊；背景层随模板 layers 一起迁移
+  const blurCard = makeBackgroundLayer({
+    name: '虚化卡纸',
+    expand: 40,
+    blur: 45,
+    shadow: 30,
+    radius: 10,
+  })
+  const ratioCard = makeBackgroundLayer({
+    name: '画幅卡纸',
+    ratio: '4:5',
+    photoScale: 95,
+    blur: 60,
+    shadow: 20,
+  })
+  const cardSign = makeTextLayer({
+    name: '签名',
+    content: 'Albumark',
+    anchor: 'bottom-center',
+    offsetX: 0,
+    offsetY: 34,
+    scale: 2.6,
+  })
+
   return [
     { id: 'builtin-signature', name: '右下签名', builtin: true, layers: [signature], assets: [] },
     { id: 'builtin-tile', name: '全图平铺', builtin: true, layers: [tile], assets: [] },
@@ -102,6 +127,20 @@ function builtinTemplates(): WatermarkTemplate[] {
       name: '画廊双框',
       builtin: true,
       layers: galleryFrame,
+      assets: [],
+    },
+    {
+      id: 'builtin-bg-blur-card',
+      name: '虚化卡纸',
+      builtin: true,
+      layers: [blurCard, cardSign],
+      assets: [],
+    },
+    {
+      id: 'builtin-bg-ratio-card',
+      name: '4:5 画幅卡纸',
+      builtin: true,
+      layers: [ratioCard, cardSign],
       assets: [],
     },
   ]

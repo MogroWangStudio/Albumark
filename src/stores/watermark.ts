@@ -112,7 +112,7 @@ export function makeBorderLayer(patch: Partial<BorderLayer> = {}): BorderLayer {
   }
 }
 
-function makeBackgroundLayer(patch: Partial<BackgroundLayer> = {}): BackgroundLayer {
+export function makeBackgroundLayer(patch: Partial<BackgroundLayer> = {}): BackgroundLayer {
   return {
     id: uid(),
     type: 'background',

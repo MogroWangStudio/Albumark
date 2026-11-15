@@ -37,6 +37,8 @@ export async function processItem(item: ImageItem): Promise<Partial<ImageItem>> 
       const head = new Uint8Array(await item.blob.slice(0, 262144).arrayBuffer())
       // 按魔数分派头部解析：JPEG SOF 或 PNG IHDR，其余格式回退整图解码
       const size = jpegSize(head) ?? pngSize(head)
+      // PNG 保留透明：缩略图按源格式编码（JPEG 会把 alpha 拍平成黑块）
+      const isPng = item.blob.type === 'image/png' || pngSize(head) !== null
       const long = size ? Math.max(size.w, size.h) : 0
       const k = long > THUMB_LONG ? THUMB_LONG / long : 1
       const bmp = await createImageBitmap(
@@ -60,7 +62,9 @@ export async function processItem(item: ImageItem): Promise<Partial<ImageItem>> 
         const ctx = oc.getContext('2d')
         if (ctx) {
           ctx.drawImage(bmp, 0, 0, tw, th)
-          const thumb = await oc.convertToBlob({ type: 'image/jpeg', quality: 0.82 })
+          const thumb = await oc.convertToBlob(
+            isPng ? { type: 'image/png' } : { type: 'image/jpeg', quality: 0.82 },
+          )
           patch.thumbUrl = URL.createObjectURL(thumb)
         }
       } finally {
