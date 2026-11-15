@@ -12,7 +12,7 @@ import BootScreen from '@/components/BootScreen.vue'
 import FontPickerDialog from '@/components/FontPickerDialog.vue'
 import LogoMark from '@/components/brand/LogoMark.vue'
 import LogoText from '@/components/brand/LogoText.vue'
-import PlainstructMark from '@/components/brand/PlainstructMark.vue'
+
 import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platform'
 import {
   checkForUpdate,
@@ -706,7 +706,8 @@ async function relaunchOobe(): Promise<void> {
             href="https://www.mogrowangstudio.top"
             @click.prevent="openStudioSite"
           >
-            <PlainstructMark class="studio-logo" />
+            <!-- 官方工作室字标（彩色稿），来自 MogroWang Studio 品牌资产 -->
+            <img src="/brand/studio-logo.svg" alt="MogroWang Studio" class="studio-logo" />
             <span class="studio-hint">点击前往 MogroWang Studio 官方网站</span>
           </a>
         </div>
@@ -1184,8 +1185,10 @@ async function relaunchOobe(): Promise<void> {
   outline-offset: 3px;
 }
 .studio-logo {
-  height: 15px;
+  height: 14px;
   width: auto;
+  max-width: min(180px, 60vw);
+  object-fit: contain;
   display: block;
   transition: filter var(--dur-hover) var(--ease-soft), opacity var(--dur-hover) var(--ease-soft);
 }

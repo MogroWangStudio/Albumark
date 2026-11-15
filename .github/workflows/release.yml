@@ -19,8 +19,10 @@ name: Release
 # 与 build.yml 的关系：build.yml 已改为纯手动构建校验，不再监听任何推送，
 # 因此这里用内置 GITHUB_TOKEN 推 tag 不会触发第二条流水线。
 #
-# 产物统一为 zip 压缩包，名字只带平台架构不带版本号（版本只在 tag 路径里）；
-# 命名与前端 core/updater.ts 的 assetName() 单点对齐，改一处必须改另一处。
+# 产物统一为三个平台的 zip 压缩包：包名 = Albumark_{版本}_{平台架构}.zip（版本进包名，
+# 便于客户端核对版本与平台），包内安装包固定叫 Albumark.exe / .dmg / .apk。
+# 客户端按 Release 实际产物名反查平台与版本（core/updater.ts），不再硬拼文件名；
+# Release 只发布这三个压缩包，不发布散装可执行文件。
 
 on:
   push:
@@ -168,17 +170,22 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
+          # mainBinaryName 已把产物改名为 Albumark.exe；旧版 cargo 名作兜底
           $exe = Get-ChildItem "src-tauri/target/release" -Filter *.exe |
             Where-Object { $_.Name -match 'albumark' } |
             Sort-Object Length -Descending |
             Select-Object -First 1
-          if (-not $exe) { throw "未找到 albumark 可执行文件" }
+          if (-not $exe) { throw "未找到 Albumark 可执行文件" }
+          # 包内可执行程序固定叫 Albumark.exe（不带版本号），版本号只进压缩包名
           Copy-Item $exe.FullName artifacts/Albumark.exe
-          Compress-Archive -Path artifacts/Albumark.exe -DestinationPath artifacts/Albumark_windows-x64.zip -Force
+          Compress-Archive -Path artifacts/Albumark.exe `
+            -DestinationPath "artifacts/Albumark_${{ needs.prepare.outputs.version }}_windows-x64.zip" -Force
+          # 只发布压缩包：删掉用于打包的裸 exe，避免 Release 里多一个散装文件
+          Remove-Item artifacts/Albumark.exe
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Albumark-${{ needs.prepare.outputs.version }}-windows-x64-portable
+          name: Albumark-${{ needs.prepare.outputs.version }}-windows-x64
           path: artifacts/*
           if-no-files-found: error
 
@@ -228,9 +235,10 @@ jobs:
         run: |
           mkdir -p artifacts
           DMG=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
-          cp "$DMG" artifacts/Albumark_macos-arm64.dmg
-          zip -j artifacts/Albumark_macos-arm64.zip artifacts/Albumark_macos-arm64.dmg
-          rm artifacts/Albumark_macos-arm64.dmg
+          # 包内安装包固定叫 Albumark.dmg（不带版本号），版本号只进压缩包名
+          cp "$DMG" artifacts/Albumark.dmg
+          zip -j "artifacts/Albumark_${{ needs.prepare.outputs.version }}_macos-arm64.zip" artifacts/Albumark.dmg
+          rm artifacts/Albumark.dmg
 
       - uses: actions/upload-artifact@v4
         with:
@@ -300,8 +308,9 @@ jobs:
           mkdir -p artifacts
           APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)
           [ -n "$APK" ] || { echo "未找到 release APK" >&2; exit 1; }
+          # 包内安装包固定叫 Albumark.apk（不带版本号），版本号只进压缩包名
           cp "$APK" artifacts/Albumark.apk
-          zip -j artifacts/Albumark_android.zip artifacts/Albumark.apk
+          zip -j "artifacts/Albumark_${{ needs.prepare.outputs.version }}_android.zip" artifacts/Albumark.apk
           rm artifacts/Albumark.apk
 
       - uses: actions/upload-artifact@v4

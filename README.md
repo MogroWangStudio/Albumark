@@ -4,7 +4,7 @@
 
 **轻量 · 本地优先的图像批量水印与快速辑录工具**
 
-v2.0.0-beta3（2026-11-15） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· Capacitor（安卓端）
+v2.0.0-beta4（2026-11-15） · Vue 3 + TypeScript + Vite · Tauri 2（桌面端）· Capacitor（安卓端）
 
 </div>
 
@@ -281,14 +281,16 @@ npx cap open android   # 在 Android Studio 中构建运行
 - **Release（release.yml）**：推送到 `main` 自动发布——按 `package.json` 版本号判定渠道，
   纯数字 `x.x.x` 发正式 Release（latest），带后缀 `x.x.x-betaN` 发 Pre-Release；同版本重复推送
   自动跳过，手动触发可重发（tag 已存在则检出该 tag 构建）；发布说明取自 CHANGELOG 对应版本段，
-  三平台产物统一为 zip 包、只按平台架构命名不带版本号（应用内更新的下载源）
+  三平台产物统一为 zip 包（包名 `Albumark_{版本}_{平台架构}.zip`，包内安装包固定叫
+  `Albumark`，不发布散装可执行文件）；应用内更新按 Release 的实际产物名认领包体——
+  从文件名识别版本号与平台架构，命名规则换代也不会找不到包
 - **Build（build.yml）**：纯手动构建校验，不再随推送触发，产物在 Actions 页面下载
 
 | 产物（zip） | 说明 |
 | --- | --- |
-| `Albumark_windows-x64.zip` | 便携版 exe（目标机器需系统自带的 WebView2 运行时） |
-| `Albumark_macos-arm64.zip` | `.dmg`（未签名，DMG 内附「修复已损坏提示」脚本） |
-| `Albumark_android.zip` | 已签名 release APK（项目内置密钥统一签名，可覆盖安装升级） |
+| `Albumark_{版本}_windows-x64.zip` | 内含 `Albumark.exe`（目标机器需系统自带的 WebView2 运行时） |
+| `Albumark_{版本}_macos-arm64.zip` | 内含 `Albumark.dmg`（未签名，DMG 内附「修复已损坏提示」脚本） |
+| `Albumark_{版本}_android.zip` | 内含 `Albumark.apk`（项目内置密钥统一签名，可覆盖安装升级） |
 
 ### macOS 提示「已损坏，无法打开」的修复
 
@@ -299,7 +301,7 @@ npx cap open android   # 在 Android Studio 中构建运行
   **`修复已损坏提示.command`**，按提示完成即可；
 - **终端命令**：`xattr -cr /Applications/Albumark.app`
 
-## 已知限制（v2.0.0-beta3 · 2026-11-15）
+## 已知限制（v2.0.0-beta4 · 2026-11-15）
 
 - 仅支持 JPG / PNG 输入；导出为重编码 JPG / PNG——JPG 可保留原 EXIF 元数据（不含 XMP），
   PNG 不携带；Exif 段结构异常的源文件会宁缺毋滥地跳过回写

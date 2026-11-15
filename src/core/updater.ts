@@ -21,15 +21,20 @@ export interface UpdateInfo {
   notes: string
   /** 本平台对应的 Release 产物名（null = 没有对应包体，只能去发布页手动下载） */
   asset: string | null
+  /** 该产物的真实下载地址：优先用 Release 里查到的实际链接，缺失时才按模板拼 */
+  assetUrl: string | null
 }
 
+const REPO = 'MogroWangStudio/Albumark'
 /** 摘要源：github.com 主站提供，无 api 子域的限流问题 */
-const ATOM_URL = 'https://github.com/MogroWangStudio/Albumark/releases.atom'
+const ATOM_URL = `https://github.com/${REPO}/releases.atom`
 /** Atom link href 里 tag 的路径前缀，其后即 tag 本身 */
 const TAG_PATH = '/releases/tag/'
 /** 产物下载前缀（tag 带 v，产物名不带） */
-const DOWNLOAD_BASE = 'https://github.com/MogroWangStudio/Albumark/releases/download'
-const RELEASES_PAGE = 'https://github.com/MogroWangStudio/Albumark/releases'
+const DOWNLOAD_BASE = `https://github.com/${REPO}/releases/download`
+const RELEASES_PAGE = `https://github.com/${REPO}/releases`
+/** Release 资产清单（GitHub Releases 页面用的 HTML 片段，含每个资产的下载链接） */
+const EXPANDED_ASSETS = `https://github.com/${REPO}/releases/expanded_assets`
 
 /**
  * gh-proxy 加速前缀：按官方用法把原始 GitHub URL 整段拼在其后
@@ -154,25 +159,104 @@ export async function checkForUpdate(
     if (!best || isNewer(ver, best.version)) best = { version: ver, entry }
   }
   if (!best) return null
+
+  // 产物以 Release 里的实际文件名与链接为准：命名规则换过几轮（旧版 exe/dmg/apk、
+  // beta3 无版本号 zip、新格式带版本号 zip），硬拼文件名会在跨命名版本时 404
+  const picked = await resolveAsset(best.entry.tag, best.version, source)
   return {
     version: best.version,
     url: best.entry.url || RELEASES_PAGE,
     notes: best.entry.notes,
-    asset: assetName(),
+    asset: picked?.name ?? templateAssetName(best.version),
+    assetUrl: picked?.url ?? null,
   }
 }
 
-/**
- * 当前平台对应的 Release 产物名（与 .github/workflows/release.yml 的整理产物
- * 命名单点对齐；未列出的平台退回手动下载）。产物统一为 zip 压缩包，
- * 名字只带平台架构不带版本号——版本只体现在 tag 路径里。
- */
-function assetName(): string | null {
-  if (isCapacitor) return 'Albumark_android.zip'
+/** 当前平台标识，用于在 Release 产物名里认领对应包体 */
+function platformKey(): 'windows-x64' | 'macos-arm64' | 'android' | null {
+  if (isCapacitor) return 'android'
   const ua = navigator.userAgent
-  if (/Windows/i.test(ua)) return 'Albumark_windows-x64.zip'
-  if (/Mac/i.test(ua)) return 'Albumark_macos-arm64.zip'
+  if (/Windows/i.test(ua)) return 'windows-x64'
+  if (/Mac/i.test(ua)) return 'macos-arm64'
   return null
+}
+
+/** 从产物名里取版本号（Albumark_2.0.0-beta4_windows-x64.zip → 2.0.0-beta4） */
+function versionInName(name: string): string | null {
+  const m = name.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/)
+  return m ? m[0] : null
+}
+
+/** 产物名与当前平台是否匹配（只按名字里的系统与架构关键词判断） */
+function matchPlatform(name: string, key: ReturnType<typeof platformKey>): boolean {
+  const n = name.toLowerCase()
+  if (key === 'android') return n.includes('android') || n.endsWith('.apk')
+  if (key === 'windows-x64') {
+    return n.includes('windows') && (n.includes('x64') || n.includes('amd64') || n.includes('portable'))
+  }
+  if (key === 'macos-arm64') {
+    return (n.includes('macos') || n.includes('mac-arm') || n.includes('darwin')) &&
+      !n.includes('x64') // 本项目只出 arm64 macOS 包，x64 字样视为不符
+  }
+  return false
+}
+
+/**
+ * 拉取该 tag 的资产清单并认领本平台包体：命中平台后再按「版本号一致 > zip 优先」
+ * 排序。资产名里的版本号与 zip 内平台关键词是唯一判据，不依赖固定模板。
+ */
+async function resolveAsset(
+  tag: string,
+  version: string,
+  source: UpdateSource,
+): Promise<{ name: string; url: string } | null> {
+  const key = platformKey()
+  if (!key) return null
+  let list: { name: string; url: string }[]
+  try {
+    const html = await fetchText(viaSource(`${EXPANDED_ASSETS}/${tag}`, source))
+    list = parseAssetLinks(html)
+  } catch {
+    return null // 清单拉取失败：交给模板兜底
+  }
+  const hits = list.filter((a) => matchPlatform(a.name, key))
+  if (!hits.length) return null
+  const score = (a: { name: string }): number => {
+    const n = a.name.toLowerCase()
+    let s = 0
+    if (versionInName(a.name) === version) s += 10 // 名字里的版本与 tag 一致最可信
+    if (n.endsWith('.zip')) s += 5 // 新格式压缩包优先（内含安装包）
+    else if (n.endsWith('.dmg') || n.endsWith('.apk')) s += 2 // 旧版裸装包次之
+    else if (n.endsWith('.exe')) s += 1
+    return s
+  }
+  return hits.sort((a, b) => score(b) - score(a))[0]
+}
+
+/** 从资产清单 HTML 片段里取所有资产链接（相对路径补成绝对地址） */
+function parseAssetLinks(html: string): { name: string; url: string }[] {
+  const out: { name: string; url: string }[] = []
+  const re = /href="([^"]*\/releases\/download\/[^"]*)"/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html))) {
+    let href = m[1]
+    try {
+      href = decodeURIComponent(href)
+    } catch {
+      /* 非法编码原样使用 */
+    }
+    const url = href.startsWith('http') ? href : `https://github.com${href}`
+    const name = url.split('/').pop() ?? ''
+    if (name) out.push({ name, url })
+  }
+  return out
+}
+
+/** 清单不可达时的兜底命名（与 release.yml 的整理产物一致）：只用于拼 URL 提示，不做版本判断 */
+function templateAssetName(version: string): string | null {
+  const key = platformKey()
+  if (!key) return null
+  return `Albumark_${version}_${key}.zip`
 }
 
 export async function openReleasePage(url: string): Promise<void> {
@@ -287,6 +371,9 @@ async function fetchBytes(
         tauriFetch(url, { headers, signal }),
       )
     : await fetch(url, { headers, signal })
+  if (res.status === 404) {
+    throw new Error('该版本暂无适配当前平台的安装包，请前往发布页手动下载')
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const total = Number(res.headers.get('content-length') ?? 0)
   const reader = res.body?.getReader()
@@ -362,7 +449,9 @@ export async function downloadUpdate(
   if (!asset) {
     throw new Error('没有适配当前平台的更新包，请前往下载页手动获取')
   }
-  const url = viaSource(`${DOWNLOAD_BASE}/v${info.version}/${asset}`, source)
+  // 优先用清单里查到的真实链接（命名规则换代的版本也能对上），缺失才按模板拼
+  const rawUrl = info.assetUrl ?? `${DOWNLOAD_BASE}/v${info.version}/${asset}`
+  const url = viaSource(rawUrl, source)
   const bytes = await fetchBytes(url, onProgress, signal)
   onProgress(100)
   if (signal?.aborted) {

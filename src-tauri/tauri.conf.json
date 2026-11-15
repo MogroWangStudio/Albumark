@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Albumark",
-  "version": "2.0.0-beta3",
+  "mainBinaryName": "Albumark",
+  "version": "2.0.0-beta4",
   "identifier": "com.mws.albumark",
   "build": {
     "beforeDevCommand": "npm run dev",

@@ -5,6 +5,30 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 
+## [2.0.0-beta4] - 2026-11-15
+
+### 修复
+
+- **跨版本更新提示 HTTP 404**：客户端原先按固定模板硬拼安装包名，beta3 把产物
+  改名为不带版本号的 zip 后，旧代码自然找不到文件。现在改为**拉取该 Release 的
+  资产清单**，从实际文件名里识别版本号与平台架构（`Albumark_2.0.0-beta4_windows-x64.zip`
+  这类包按「版本一致 > zip 优先」排序认领），并用清单里的真实下载链接——命名规则
+  换过几代（旧版 exe / dmg / apk、beta3 无版本号 zip、新带版本号 zip）都能对上；
+  清单拉取失败时才回落到模板命名。404 也改为可读提示，不再只显示「HTTP 404」
+
+### 变更
+
+- **Release 产物收束为三个压缩包**：包名 `Albumark_{版本}_{平台架构}.zip`（版本进
+  包名，便于客户端核对），包内安装包固定叫 `Albumark.exe` / `Albumark.dmg` /
+  `Albumark.apk`；打包用的裸可执行文件不再上传，Release 里只有三个 zip
+- **可执行程序名统一为 Albumark**：tauri 配置新增 `mainBinaryName: "Albumark"`，
+  构建产物由 `albumark` 更名为 `Albumark`（Windows exe / macOS 可执行文件同名，
+  应用内更新原地覆盖即完成换名前的迁移）
+- **关于页工作室字标换成官方 logo**：开发者区块由 Plainstruct 字标改为
+  **MogroWang Studio 官方彩色字标**（品牌资产 `public/brand/studio-logo.svg`），
+  悬停 / 聚焦的模糊淡出与引导文字交互保持不变
+
+
 ## [2.0.0-beta3] - 2026-11-15
 
 ### 新增
