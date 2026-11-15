@@ -1898,14 +1898,18 @@ watch(
   { deep: true },
 )
 
-// 切换照片时回到适应视图；照片还没装载（打开项目后的渐进补齐未轮到）
-// 就按需读取这一张，预览不必等整批队列，装载完成后 watch 自动渲染
+// 打开项目后的第一张照片回到适应视图；浏览中切换照片保持当前缩放与
+// 视角（对比同一张的不同部位、或按固定比例过片时，视图不该被打断）。
+// 照片还没装载（渐进补齐未轮到）就按需读取这一张，预览不必等整批队列，
+// 装载完成后 watch 自动渲染
+let lastActiveId: string | null = null
 watch(
   () => active.value?.id,
   (id) => {
     // 换照片即结束取样：吸管是「当前这张」的动作，跨图保留会误点
     adjust.setPickingWb(false)
-    resetView()
+    if (!lastActiveId && id) resetView()
+    lastActiveId = id ?? null
     void ws.ensureImageLoaded(id)
   },
 )

@@ -1,7 +1,7 @@
 {
   "name": "albumark",
   "displayName": "辑印 Albumark",
-  "version": "2.0.0-beta5",
+  "version": "2.0.0-beta6",
   "private": true,
   "type": "module",
   "description": "轻量、本地优先的图像批量水印与快速辑录工具",

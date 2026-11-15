@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   ArchiveRestore,
   ArrowRight,
-  Check,
   FolderOpen,
   FolderPlus,
   HardDrive,
@@ -306,7 +305,6 @@ onMounted(() => {
               >
                 <span class="dir-icon" :class="{ emoji: !!d.emoji }">
                   <template v-if="d.emoji">{{ d.emoji }}</template>
-                  <Check v-else-if="ws.dir?.path === d.path" :size="14" />
                   <FolderOpen v-else :size="14" />
                 </span>
                 <div class="dir-main">
@@ -352,7 +350,7 @@ onMounted(() => {
                   <ArchiveRestore :size="13" />导入项目
                 </AppButton>
               </header>
-              <p class="cur-dir">{{ ws.dir.name }}</p>
+              <p class="cur-dir">{{ ws.dir.emoji ? `${ws.dir.emoji} ` : '' }}{{ ws.dir.name }}</p>
 
             <div class="create">
               <input

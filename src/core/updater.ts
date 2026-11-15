@@ -359,13 +359,39 @@ export async function probeSource(source: UpdateSource): Promise<SpeedTestResult
 
 /* ---------- 自动更新：下载与安装 ---------- */
 
-/** 流式下载到内存：content-length 可知时回报百分比，否则 null（不定进度）；signal 可中途取消 */
+/**
+ * 断点续传的下载缓冲：暂停时由调用方保留引用，恢复时原样传入
+ * downloadUpdate 的 resume 参数，从已下载偏移继续（Range 请求）。
+ */
+export interface DownloadBuffer {
+  chunks: Uint8Array[]
+  loaded: number
+  /** 本次包体总字节数（首个响应给出，续传时沿用） */
+  total: number
+}
+
+/**
+ * 流式下载到内存：
+ * - content-length 可知时回报百分比，否则 null（不定进度）
+ * - signal 可中途取消（AbortError）
+ * - 传入 buf 时从 buf.loaded 偏移发 Range 请求续传，数据累积进 buf；
+ *   服务端忽略 Range（返回 200）时清空 buf 从头下载
+ * - onProgress 携带采样速度（KB/s，≥400ms 才更新一次，避免逐块抖动）
+ */
 async function fetchBytes(
   url: string,
-  onProgress: (pct: number | null) => void,
+  onProgress: (pct: number | null, speedKBps: number | null) => void,
   signal?: AbortSignal,
+  buf?: DownloadBuffer,
 ): Promise<Uint8Array> {
-  const headers = { Accept: 'application/octet-stream' }
+  const headers: Record<string, string> = { Accept: 'application/octet-stream' }
+  const base = buf?.loaded ?? 0
+  if (base > 0) headers.Range = `bytes=${base}-`
+  // 暂停恰逢下载收尾（loaded 已达 total）：无需再请求，缓冲即完整数据
+  if (buf && buf.total > 0 && buf.loaded >= buf.total) {
+    onProgress(100, null)
+    return new Uint8Array(0)
+  }
   const res = isTauri
     ? await import('@tauri-apps/plugin-http').then(({ fetch: tauriFetch }) =>
         tauriFetch(url, { headers, signal }),
@@ -374,27 +400,76 @@ async function fetchBytes(
   if (res.status === 404) {
     throw new Error('该版本暂无适配当前平台的安装包，请前往发布页手动下载')
   }
+  // Range 超出文件末尾（total 与服务端不一致等）：缓冲视为已完整
+  if (res.status === 416 && buf && buf.loaded > 0) {
+    onProgress(100, null)
+    return new Uint8Array(0)
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const total = Number(res.headers.get('content-length') ?? 0)
+  // 服务端不支持 Range（整包 200）：续传缓冲作废，从头下载
+  let dropped = 0
+  if (base > 0 && res.status !== 206 && buf) {
+    dropped = base
+    buf.chunks = []
+    buf.loaded = 0
+  }
+  const partTotal = Number(res.headers.get('content-length') ?? 0)
+  const total = base > 0 && res.status === 206 && buf ? base + partTotal : partTotal
+  if (buf && total) buf.total = total
   const reader = res.body?.getReader()
   if (!reader) {
-    const buf = new Uint8Array(await res.arrayBuffer())
-    onProgress(100)
-    return buf
+    const ab = new Uint8Array(await res.arrayBuffer())
+    if (buf) {
+      buf.chunks.push(ab)
+      buf.loaded += ab.length
+    }
+    onProgress(100, null)
+    return ab
   }
-  const chunks: Uint8Array[] = []
+  const local: Uint8Array[] = []
   let loaded = 0
+  let lastT = performance.now()
+  let lastBytes = 0
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
     if (!value) continue
-    chunks.push(value)
+    local.push(value)
+    if (buf) {
+      buf.chunks.push(value)
+      buf.loaded += value.length
+    }
     loaded += value.length
-    onProgress(total ? Math.min(100, Math.round((loaded / total) * 100)) : null)
+    const now = performance.now()
+    const dt = now - lastT
+    // 进度按总字节算（含续传基量）；速度按 ≥400ms 的采样间隔算，稳定不抖
+    const absLoaded = (buf ? buf.loaded : loaded) - dropped
+    const pct = total ? Math.min(100, Math.round((absLoaded / total) * 100)) : null
+    if (dt >= 400) {
+      const speed = ((absLoaded - lastBytes) / 1024 / (dt / 1000)) | 0
+      lastT = now
+      lastBytes = absLoaded
+      onProgress(pct, speed > 0 ? speed : null)
+    } else {
+      onProgress(pct, null)
+    }
   }
+  onProgress(total ? Math.min(100, Math.round((((buf ? buf.loaded : loaded) / total) * 100) | 0)) : 100, null)
+  // 无 buf 时返回本轮合并；有 buf 时调用方改用 mergeBuffer(buf) 取全量
   const out = new Uint8Array(loaded)
   let off = 0
-  for (const c of chunks) {
+  for (const c of local) {
+    out.set(c, off)
+    off += c.length
+  }
+  return out
+}
+
+/** 合并续传缓冲里的全量字节（含暂停前已下载的部分） */
+function mergeBuffer(buf: DownloadBuffer): Uint8Array {
+  const out = new Uint8Array(buf.loaded)
+  let off = 0
+  for (const c of buf.chunks) {
     out.set(c, off)
     off += c.length
   }
@@ -432,18 +507,20 @@ async function clearStale(dir: string): Promise<void> {
 
 /**
  * 下载当前平台的更新包并暂存：
- * - Release 资产统一为 zip（Albumark_平台架构.zip），下载完解出里面的安装包，
- *   只取包内第一个文件（安装包与版本号无关，名字由 CI 打包保证）
+ * - Release 资产统一为 zip（Albumark_{版本}_{平台}.zip），下载完解出里面的
+ *   安装包，只取包内第一个文件（安装包与版本号无关，名字由 CI 打包保证）
  * - 桌面端：写入暂存目录（Windows 为程序目录 updates/，macOS 为应用数据目录
  *   updates/），返回 stagedPath，安装动作由设置页读秒后触发
  * - 安卓：APK 写入公共 Documents/Albumark/updates/，直接交给系统安装器
- * - signal 可中途取消下载：中断时抛 AbortError，由调用方静默处理
+ * - signal 可中途取消 / 暂停（AbortError）；传 resume 缓冲时从断点续传，
+ *   完整数据 = resume 缓冲 + 本轮字节
  */
 export async function downloadUpdate(
   info: UpdateInfo,
-  onProgress: (pct: number | null) => void,
+  onProgress: (pct: number | null, speedKBps: number | null) => void,
   signal?: AbortSignal,
   source: UpdateSource = 'github',
+  resume?: DownloadBuffer,
 ): Promise<DownloadResult> {
   const asset = info.asset
   if (!asset) {
@@ -452,15 +529,17 @@ export async function downloadUpdate(
   // 优先用清单里查到的真实链接（命名规则换代的版本也能对上），缺失才按模板拼
   const rawUrl = info.assetUrl ?? `${DOWNLOAD_BASE}/v${info.version}/${asset}`
   const url = viaSource(rawUrl, source)
-  const bytes = await fetchBytes(url, onProgress, signal)
-  onProgress(100)
+  const bytes = await fetchBytes(url, onProgress, signal, resume)
+  onProgress(100, null)
   if (signal?.aborted) {
     throw new DOMException('下载已取消', 'AbortError')
   }
+  // 续传时全量数据在缓冲里（暂停前的部分 + 本轮），合并后再解包
+  const full = resume ? mergeBuffer(resume) : bytes
 
   // 解包 zip：安装包（exe / dmg / apk）与版本号无关，zip 内只有一个文件
   const { unzipSync } = await import('fflate')
-  const files = unzipSync(bytes)
+  const files = unzipSync(full)
   const entry = Object.entries(files).find(([, data]) => data.length > 0)
   if (!entry) {
     throw new Error('更新包内容为空，请重新下载或前往下载页手动获取')

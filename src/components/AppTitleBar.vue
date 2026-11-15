@@ -120,7 +120,11 @@ onUnmounted(() => {
         :title="ws.current?.path || ws.dir?.path || '本次会话'"
         @click="emit('openWorkspace')"
       >
-        <FolderOpen :size="12" />
+        <!-- 打开项目的 emoji 优先，其次当前目录的；无图标回落文件夹图形 -->
+        <span v-if="ws.current?.emoji || ws.dir?.emoji" class="ws-chip-emoji">{{
+          ws.current?.emoji ?? ws.dir?.emoji
+        }}</span>
+        <FolderOpen v-else :size="12" />
         <span>{{ ws.current?.name ?? ws.dir?.name ?? '工作区' }}</span>
       </button>
     </div>
@@ -332,6 +336,11 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.ws-chip-emoji {
+  font-size: calc(12px * var(--ui-zoom, 1));
+  line-height: 1;
+  flex: none;
 }
 .ws-chip:hover {
   background: var(--hover);

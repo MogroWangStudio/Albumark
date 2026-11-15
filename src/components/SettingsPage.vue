@@ -20,6 +20,7 @@ import {
   installStagedUpdate,
   openReleasePage,
   probeSource,
+  type DownloadBuffer,
   type SpeedTestResult,
   type UpdateChannel,
   type UpdateInfo,
@@ -151,6 +152,7 @@ type UpdateState =
   | 'latest'
   | 'available'
   | 'downloading'
+  | 'paused'
   | 'ready'
   | 'installing'
   | 'error'
@@ -158,6 +160,12 @@ const updateState = ref<UpdateState>('idle')
 const updateInfo = ref<UpdateInfo | null>(null)
 /** 下载进度：null = 总大小未知，只显示进行中 */
 const updateProgress = ref<number | null>(null)
+/** 下载速度（KB/s）：≥400ms 采样一次，暂停 / 完成时归 null */
+const downloadSpeed = ref<number | null>(null)
+/** 断点续传缓冲：暂停时保留已下载字节，继续时原样传回 */
+let downloadBuf: DownloadBuffer | null = null
+/** 暂停标记：区分「暂停」与「取消」两种 abort */
+let pauseRequested = false
 /** 下载完成的暂存路径：读秒结束后派发替换脚本用 */
 const stagedPath = ref('')
 /** 读秒：N 秒后自动重启安装 */
@@ -249,23 +257,31 @@ async function runSpeedTest(): Promise<void> {
 }
 
 /** 下载更新包：安卓下载完直接交给系统安装器；桌面端暂存后进入读秒。
- *  下载中可取消（AbortController），取消后回到待更新态静默处理。 */
-async function installUpdate(): Promise<void> {
+ *  下载中可暂停（abort 保留断点缓冲）与取消；传 resume 即从断点续传。 */
+async function runDownload(resume?: DownloadBuffer): Promise<void> {
   if (!updateInfo.value || updateState.value === 'downloading') return
   updateState.value = 'downloading'
-  updateProgress.value = null
+  if (!resume) {
+    updateProgress.value = null
+    downloadBuf = { chunks: [], loaded: 0, total: 0 }
+  }
+  downloadSpeed.value = null
+  pauseRequested = false
   const ctl = new AbortController()
   downloadCtl = ctl
   try {
     const out = await downloadUpdate(
       updateInfo.value,
-      (pct) => {
-        updateProgress.value = pct
+      (pct, kbps) => {
+        if (pct !== null) updateProgress.value = pct
+        if (kbps !== null) downloadSpeed.value = kbps
       },
       ctl.signal,
       settings.updateSource,
+      resume ?? downloadBuf ?? undefined,
     )
-    if (ctl.signal.aborted) return // 已取消：丢弃结果，状态由 cancelDownload 复位
+    if (ctl.signal.aborted) return // 已中断：丢弃结果，状态由 pause/cancel 复位
+    downloadBuf = null
     if (out.kind === 'auto') {
       // 安卓：已交给系统安装器，回到待更新态（取消安装可再次拉起）
       toast(out.message, 'success')
@@ -277,9 +293,11 @@ async function installUpdate(): Promise<void> {
     startCountdown()
   } catch (err) {
     if (ctl.signal.aborted) {
-      updateState.value = 'available'
+      // 暂停：缓冲保留（updateProgress 不清），等「继续下载」从断点接着走
+      updateState.value = pauseRequested ? 'paused' : 'available'
       return
     }
+    // 传输层错误（断网 / 服务端异常）：缓冲保留，可从断点继续或放弃
     toast(`更新失败：${err instanceof Error ? err.message : '请稍后重试，或前往下载页手动获取'}`, 'error')
     updateState.value = 'available'
   } finally {
@@ -287,9 +305,31 @@ async function installUpdate(): Promise<void> {
   }
 }
 
-/** 取消下载：中断传输、保留待更新态（已下载的部分包会被下次下载前的清理清掉） */
-function cancelDownload(): void {
+function installUpdate(): void {
+  void runDownload()
+}
+
+/** 暂停下载：abort 但保留断点缓冲，回到可继续态 */
+function pauseDownload(): void {
+  if (updateState.value !== 'downloading') return
+  pauseRequested = true
   downloadCtl?.abort()
+  downloadSpeed.value = null
+  updateState.value = 'paused'
+}
+
+/** 继续下载：带上暂停前保留的缓冲从断点续传 */
+function resumeDownload(): void {
+  if (updateState.value !== 'paused' || !downloadBuf) return
+  void runDownload(downloadBuf)
+}
+
+/** 取消下载：中断传输、丢弃断点缓冲，回到待更新态 */
+function cancelDownload(): void {
+  pauseRequested = false
+  downloadCtl?.abort()
+  downloadBuf = null
+  updateProgress.value = null
   updateState.value = 'available'
 }
 
@@ -331,8 +371,15 @@ function deferInstall(): void {
 
 onBeforeUnmount(stopCountdown)
 
-const progressText = computed(() =>
-  updateProgress.value === null ? '下载中…' : `下载 ${updateProgress.value}%`,
+const progressText = computed(() => {
+  if (updateProgress.value === null) return '下载中…'
+  const speed = downloadSpeed.value
+  const kbps = speed !== null && speed >= 1024 ? `${(speed / 1024).toFixed(1)} MB/s` : speed !== null ? `${speed} KB/s` : null
+  return kbps ? `下载 ${updateProgress.value}% · ${kbps}` : `下载 ${updateProgress.value}%`
+})
+
+const pausedText = computed(() =>
+  updateProgress.value === null ? '下载已暂停' : `已暂停 · 已下载 ${updateProgress.value}%`,
 )
 
 const readyText = computed(() => `${countdown.value} 秒后自动重启安装`)
@@ -644,7 +691,19 @@ async function relaunchOobe(): Promise<void> {
                 <LoaderCircle v-if="isDownloading" :size="13" class="spin" />
                 <Download v-else :size="13" />{{ isDownloading ? progressText : '立即更新' }}
               </AppButton>
+              <AppButton v-if="isDownloading" size="sm" variant="ghost" @click="pauseDownload">
+                暂停
+              </AppButton>
               <AppButton v-if="isDownloading" size="sm" variant="ghost" @click="cancelDownload">
+                取消
+              </AppButton>
+            </template>
+            <template v-else-if="updateState === 'paused' && updateInfo">
+              <span class="update-hint">{{ pausedText }}</span>
+              <AppButton size="sm" variant="primary" @click="resumeDownload">
+                <Download :size="13" />继续下载
+              </AppButton>
+              <AppButton size="sm" variant="ghost" @click="cancelDownload">
                 取消
               </AppButton>
             </template>
