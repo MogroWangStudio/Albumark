@@ -31,8 +31,22 @@ const TAG_PATH = '/releases/tag/'
 const DOWNLOAD_BASE = 'https://github.com/MogroWangStudio/Albumark/releases/download'
 const RELEASES_PAGE = 'https://github.com/MogroWangStudio/Albumark/releases'
 
+/**
+ * gh-proxy 加速前缀：按官方用法把原始 GitHub URL 整段拼在其后
+ * （https://gh-proxy.org/https://github.com/...），支持 Range 与断点续传。
+ */
+const PROXY_PREFIX = 'https://gh-proxy.org/'
+
 /** 更新渠道：stable 只看正式 Release，beta 连 Pre-Release 测试版一起看 */
 export type UpdateChannel = 'stable' | 'beta'
+
+/** 更新下载线路：github 直连 / proxy 经 gh-proxy 加速 */
+export type UpdateSource = 'github' | 'proxy'
+
+/** 按线路改写 URL：代理线路在原始地址前拼代理前缀，直连原样返回 */
+export function viaSource(url: string, source: UpdateSource = 'github'): string {
+  return source === 'proxy' ? `${PROXY_PREFIX}${url}` : url
+}
 
 /** 解析版本号：主版本段 + 预发布标签（2.1.0-beta.1 → [2,1,0] + 'beta.1'） */
 function parseVersion(v: string): { core: number[]; pre: string } {
@@ -125,8 +139,11 @@ function htmlToText(html: string): string {
  * Atom 源按发布时间倒序列出最近若干条（正式与 Pre-Release 混排，draft 不在其中）；
  * 稳定通道过滤掉带「-」后缀的预发布 tag 后取语义化最新的一个。
  */
-export async function checkForUpdate(channel: UpdateChannel = 'stable'): Promise<UpdateInfo | null> {
-  const xml = await fetchText(ATOM_URL)
+export async function checkForUpdate(
+  channel: UpdateChannel = 'stable',
+  source: UpdateSource = 'github',
+): Promise<UpdateInfo | null> {
+  const xml = await fetchText(viaSource(ATOM_URL, source))
   const acceptPre = channel === 'beta'
   let best: { version: string; entry: FeedEntry } | null = null
   for (const entry of parseAtom(xml)) {
@@ -165,6 +182,95 @@ export async function openReleasePage(url: string): Promise<void> {
     return
   }
   window.open(url, '_blank', 'noopener')
+}
+
+/* ---------- 测速：线路有效性与速度 ---------- */
+
+/** 测速采样目标：仓库源码归档（按 Range 只取前 1MB）；经代理与直连同一路径 */
+const SPEED_TEST_URL = 'https://github.com/MogroWangStudio/Albumark/archive/refs/heads/main.tar.gz'
+/** 采样上限：取这么多字节就够算速度，不必整包下完 */
+const SPEED_TEST_BYTES = 1024 * 1024
+/** 硬超时：超过这么长时间仍未完成按已有数据结算 */
+const SPEED_TEST_TIMEOUT = 15_000
+
+export interface SpeedTestResult {
+  ok: boolean
+  /** 首字节耗时（ms） */
+  latencyMs: number
+  /** 平均下载速度（KB/s） */
+  kbps: number
+  /** 本次实际采样字节数 */
+  bytes: number
+  error?: string
+}
+
+/**
+ * 检测某条下载线路是否可用并估算速度：请求仓库归档的前 1MB，
+ * 汇报首字节延迟与平均速度。失败（网络不可达 / 非 2xx）返回 ok=false，
+ * 不抛错——测速是诊断手段，界面上只需要一个结论。
+ */
+export async function probeSource(source: UpdateSource): Promise<SpeedTestResult> {
+  const url = viaSource(SPEED_TEST_URL, source)
+  const ctl = new AbortController()
+  const started = performance.now()
+  let firstByteAt = 0
+  let bytes = 0
+  const timer = window.setTimeout(() => ctl.abort(), SPEED_TEST_TIMEOUT)
+  try {
+    const res = isTauri
+      ? await import('@tauri-apps/plugin-http').then(({ fetch: tauriFetch }) =>
+          tauriFetch(url, { headers: { Range: 'bytes=0-1048575' }, signal: ctl.signal }),
+        )
+      : await fetch(url, { headers: { Range: 'bytes=0-1048575' }, signal: ctl.signal })
+    if (!res.ok) {
+      return { ok: false, latencyMs: 0, kbps: 0, bytes: 0, error: `HTTP ${res.status}` }
+    }
+    firstByteAt = performance.now()
+    const reader = res.body?.getReader()
+    if (reader) {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (!value) continue
+        bytes += value.length
+        // 服务端可能忽略 Range（常见）：拿够采样量就主动断开，不把整包拖下来
+        if (bytes >= SPEED_TEST_BYTES) {
+          ctl.abort()
+          break
+        }
+      }
+    } else {
+      bytes = (await res.arrayBuffer()).byteLength
+    }
+    const elapsed = Math.max(1, performance.now() - (firstByteAt || started))
+    return {
+      ok: bytes > 0,
+      latencyMs: Math.round((firstByteAt || performance.now()) - started),
+      kbps: Math.round(bytes / 1024 / (elapsed / 1000)),
+      bytes,
+      error: bytes > 0 ? undefined : '响应为空',
+    }
+  } catch (err) {
+    // 采样到上限后主动断开属正常路径：已拿到的字节照常结算
+    if (bytes > 0) {
+      const elapsed = Math.max(1, performance.now() - (firstByteAt || started))
+      return {
+        ok: true,
+        latencyMs: Math.round((firstByteAt || performance.now()) - started),
+        kbps: Math.round(bytes / 1024 / (elapsed / 1000)),
+        bytes,
+      }
+    }
+    return {
+      ok: false,
+      latencyMs: 0,
+      kbps: 0,
+      bytes: 0,
+      error: err instanceof Error ? err.message : '网络不可达',
+    }
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 /* ---------- 自动更新：下载与安装 ---------- */
@@ -250,12 +356,13 @@ export async function downloadUpdate(
   info: UpdateInfo,
   onProgress: (pct: number | null) => void,
   signal?: AbortSignal,
+  source: UpdateSource = 'github',
 ): Promise<DownloadResult> {
   const asset = info.asset
   if (!asset) {
     throw new Error('没有适配当前平台的更新包，请前往下载页手动获取')
   }
-  const url = `${DOWNLOAD_BASE}/v${info.version}/${asset}`
+  const url = viaSource(`${DOWNLOAD_BASE}/v${info.version}/${asset}`, source)
   const bytes = await fetchBytes(url, onProgress, signal)
   onProgress(100)
   if (signal?.aborted) {

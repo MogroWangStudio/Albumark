@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { registerPlugin } from '@capacitor/core'
 import { isCapacitor, isTauri } from '@/core/platform'
 import { loadJson, saveJson } from '@/core/storage'
-import type { UpdateChannel } from '@/core/updater'
+import type { UpdateChannel, UpdateSource } from '@/core/updater'
 
 export type ThemeMode =
   | 'auto'
@@ -43,6 +43,12 @@ export const PREVIEW_CUSTOM_MAX = 2400
 export const UPDATE_CHANNELS: { value: UpdateChannel; label: string }[] = [
   { value: 'stable', label: '稳定通道' },
   { value: 'beta', label: '测试通道' },
+]
+
+/** 更新下载线路：直连 GitHub，或经 gh-proxy 加速代理（设置页下拉菜单与存档校验共用） */
+export const UPDATE_SOURCES: { value: UpdateSource; label: string; hint: string }[] = [
+  { value: 'github', label: 'GitHub 直连', hint: '直接连接 github.com' },
+  { value: 'proxy', label: 'GitHub 代理', hint: '经 gh-proxy.org 加速' },
 ]
 
 export interface ThemeDef {
@@ -211,6 +217,8 @@ interface AppSettings {
   wmSnap: boolean
   /** 更新渠道：stable 只看正式 Release，beta 连 Pre-Release 一起看 */
   updateChannel: UpdateChannel
+  /** 更新下载线路：github 直连 / proxy 经 gh-proxy 加速 */
+  updateSource: UpdateSource
   /** 软件数据目录（桌面端 OOBE 设置；空 = 便携版 exe 根目录） */
   dataDir: string
   /** 首次启动引导已完成 */
@@ -231,6 +239,7 @@ const DEFAULTS: AppSettings = {
   previewQualityValue: 1200,
   wmSnap: true,
   updateChannel: 'stable',
+  updateSource: 'github',
   dataDir: '',
   // 非桌面端没有本地数据目录概念，直接跳过引导
   oobeDone: !isTauri,
@@ -257,6 +266,10 @@ function load(): AppSettings {
   if (!UPDATE_CHANNELS.some((c) => c.value === data.updateChannel)) {
     data.updateChannel = DEFAULTS.updateChannel
   }
+  // 下载线路：未知值回落直连
+  if (!UPDATE_SOURCES.some((s) => s.value === data.updateSource)) {
+    data.updateSource = DEFAULTS.updateSource
+  }
   return data
 }
 
@@ -280,6 +293,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const previewQualityValue = ref(initial.previewQualityValue)
   const wmSnap = ref(initial.wmSnap)
   const updateChannel = ref<UpdateChannel>(initial.updateChannel)
+  const updateSource = ref<UpdateSource>(initial.updateSource)
   const dataDir = ref(initial.dataDir)
   const oobeDone = ref(initial.oobeDone)
 
@@ -299,6 +313,7 @@ export const useSettingsStore = defineStore('settings', () => {
       previewQualityValue: previewQualityValue.value,
       wmSnap: wmSnap.value,
       updateChannel: updateChannel.value,
+      updateSource: updateSource.value,
       dataDir: dataDir.value,
       oobeDone: oobeDone.value,
     })
@@ -365,6 +380,7 @@ export const useSettingsStore = defineStore('settings', () => {
     previewQualityValue,
     wmSnap,
     updateChannel,
+    updateSource,
     dataDir,
     oobeDone,
   }

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ArrowLeft, Check, Download, ExternalLink, HardDrive, LoaderCircle, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
+import { ArrowLeft, Check, ChevronDown, Download, ExternalLink, HardDrive, LoaderCircle, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
+import AppDropdown from '@/components/ui/AppDropdown.vue'
+import type { DropdownItem } from '@/components/ui/AppDropdown.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
@@ -17,8 +19,11 @@ import {
   downloadUpdate,
   installStagedUpdate,
   openReleasePage,
+  probeSource,
+  type SpeedTestResult,
   type UpdateChannel,
   type UpdateInfo,
+  type UpdateSource,
 } from '@/core/updater'
 import { toast } from '@/stores/toast'
 import { APP_VERSION } from '@/core/version'
@@ -33,6 +38,7 @@ import {
   PREVIEW_QUALITIES,
   THEMES,
   UPDATE_CHANNELS,
+  UPDATE_SOURCES,
   pickBootStyle,
   useSettingsStore,
   type BootStyle,
@@ -167,7 +173,7 @@ async function checkUpdate(): Promise<void> {
   updateState.value = 'checking'
   updateInfo.value = null
   try {
-    const info = await checkForUpdate(settings.updateChannel)
+    const info = await checkForUpdate(settings.updateChannel, settings.updateSource)
     updateInfo.value = info
     updateState.value = info ? 'available' : 'latest'
   } catch {
@@ -192,6 +198,56 @@ const channelDesc = computed(() =>
     : '仅检查正式发布的版本',
 )
 
+/* ---------- 下载线路与测速 ---------- */
+
+/** 测速状态：idle 未测 / testing 测速中 / ok 可用 / fail 不可用 */
+type SpeedState = 'idle' | 'testing' | 'ok' | 'fail'
+const speedState = ref<SpeedState>('idle')
+const speedResult = ref<SpeedTestResult | null>(null)
+
+const currentSource = computed(
+  () => UPDATE_SOURCES.find((s) => s.value === settings.updateSource) ?? UPDATE_SOURCES[0],
+)
+
+/** 线路描述：有测速结论时汇报结论，否则说明当前线路在做什么 */
+const sourceDesc = computed(() => {
+  const r = speedResult.value
+  if (speedState.value === 'testing') return '正在测速…'
+  if (!r) return currentSource.value.hint
+  if (!r.ok) return `不可用${r.error ? `：${r.error}` : ''}`
+  return `可用 · 延迟 ${r.latencyMs} ms · 约 ${r.kbps} KB/s`
+})
+
+const sourceItems = computed<DropdownItem[]>(() =>
+  UPDATE_SOURCES.map((s) => ({
+    label: s.label,
+    action: () => {
+      if (settings.updateSource === s.value) return
+      settings.updateSource = s.value as UpdateSource
+      // 线路变了：旧的检查结果与测速结论都基于旧线路，一并复位
+      stopCountdown()
+      updateState.value = 'idle'
+      updateInfo.value = null
+      speedState.value = 'idle'
+      speedResult.value = null
+    },
+  })),
+)
+
+let speedSeq = 0
+/** 测速当前线路：探测有效性并估算速度（换线路途中发起的结果直接丢弃） */
+async function runSpeedTest(): Promise<void> {
+  if (speedState.value === 'testing') return
+  const seq = ++speedSeq
+  speedState.value = 'testing'
+  speedResult.value = null
+  const source = settings.updateSource
+  const r = await probeSource(source)
+  if (seq !== speedSeq) return
+  speedResult.value = r
+  speedState.value = r.ok ? 'ok' : 'fail'
+}
+
 /** 下载更新包：安卓下载完直接交给系统安装器；桌面端暂存后进入读秒。
  *  下载中可取消（AbortController），取消后回到待更新态静默处理。 */
 async function installUpdate(): Promise<void> {
@@ -201,9 +257,14 @@ async function installUpdate(): Promise<void> {
   const ctl = new AbortController()
   downloadCtl = ctl
   try {
-    const out = await downloadUpdate(updateInfo.value, (pct) => {
-      updateProgress.value = pct
-    }, ctl.signal)
+    const out = await downloadUpdate(
+      updateInfo.value,
+      (pct) => {
+        updateProgress.value = pct
+      },
+      ctl.signal,
+      settings.updateSource,
+    )
     if (ctl.signal.aborted) return // 已取消：丢弃结果，状态由 cancelDownload 复位
     if (out.kind === 'auto') {
       // 安卓：已交给系统安装器，回到待更新态（取消安装可再次拉起）
@@ -608,6 +669,27 @@ async function relaunchOobe(): Promise<void> {
         </div>
         <div class="row">
           <div class="text">
+            <span class="label">下载线路</span>
+            <p class="desc" :class="{ 'desc-ok': speedState === 'ok', 'desc-err': speedState === 'fail' }">
+              {{ sourceDesc }}
+            </p>
+          </div>
+          <div class="btns">
+            <AppDropdown :items="sourceItems" align="right">
+              <template #trigger>
+                <span class="source-trigger">
+                  {{ currentSource.label }}<ChevronDown :size="12" />
+                </span>
+              </template>
+            </AppDropdown>
+            <AppButton size="sm" :disabled="speedState === 'testing'" @click="runSpeedTest">
+              <LoaderCircle v-if="speedState === 'testing'" :size="13" class="spin" />
+              <RefreshCw v-else :size="13" />测速
+            </AppButton>
+          </div>
+        </div>
+        <div class="row">
+          <div class="text">
             <span class="label">项目主页</span>
             <p class="desc">github.com/MogroWangStudio/Albumark</p>
           </div>
@@ -737,6 +819,30 @@ async function relaunchOobe(): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 测速结论：只借语义色区分可用 / 不可用，其余保持既有 desc 层级 */
+.desc.desc-ok {
+  color: var(--ok);
+}
+.desc.desc-err {
+  color: var(--danger);
+}
+/* 线路下拉触发器：与项目里其它下拉同构的轻量按钮外观 */
+.source-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: var(--r-s);
+  font-size: calc(12px * var(--ui-zoom, 1));
+  color: var(--text-2);
+  white-space: nowrap;
+  transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
+}
+.source-trigger:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 .btns {
   display: flex;
