@@ -9,10 +9,14 @@ import { useImagesStore } from '@/stores/images'
 import {
   CROP_MIN,
   CROP_RATIOS,
-  cropInnerBounds,
+  CROP_ROT_MAX,
+  CROP_ROT_MIN,
+  containCropRect,
+  cropQuad,
   cropRatioOf,
   cropRot,
   cropSourceSize,
+  fitScaleInQuad,
   isPlainFullCrop,
   type Crop,
 } from '@/types/adjust'
@@ -20,7 +24,7 @@ import {
 const adjust = useAdjustStore()
 const images = useImagesStore()
 
-/** 裁剪后输出的像素尺寸（含拉直 / 翻转），显示在标题行 */
+/** 裁剪后输出的像素尺寸（含旋转 / 翻转），显示在标题行 */
 const draftState = computed(() => {
   const d = adjust.cropDraft
   const a = images.active
@@ -32,57 +36,43 @@ const draftState = computed(() => {
 const draftRot = computed(() => cropRot(adjust.cropDraft ?? undefined))
 
 /**
- * 拉直角度变化：保留用户已经框好的构图，只把它映射进新的活动范围。
+ * 旋转角度变化：角度只决定画面的姿态，裁剪框尽量留在原位不动。
  *
- * 旧实现每次都把框重置为居中的最大内接矩形——裁好再拉直，裁剪就被抹掉了。
- * 现在按「相对原内接框的位置与占比」映射到新内接框（未裁剪时占比为 100%，
- * 结果与旧行为一致），比例预设存在时再按比例收敛。
+ * 框的坐标是相对「旋转后包围盒」的，所以转动后同一组数值仍然对应屏幕上的
+ * 同一块区域；只有框角真的被转到图片外时才向内收（先滑动、再等比缩小），
+ * 保证任何时候都不越出图片。
  */
 function setRot(v: number): void {
   const d = adjust.cropDraft
   const a = images.active
   if (!d || !a?.width || !a.height) return
-  const rot = Math.round(Math.max(-45, Math.min(45, v)) * 2) / 2
-  const prev = cropInnerBounds(a.width, a.height, { rot: cropRot(d), flipH: d.flipH, flipV: d.flipV })
-  const next = cropInnerBounds(a.width, a.height, { rot, flipH: d.flipH, flipV: d.flipV })
+  const rot = Math.round(Math.max(CROP_ROT_MIN, Math.min(CROP_ROT_MAX, v)) * 2) / 2
+  if (rot === cropRot(d)) return
+  const next: Crop = { ...d, rot }
+  const rect = containCropRect({ x: d.x, y: d.y, w: d.w, h: d.h }, a.width, a.height, next)
 
-  const prevW = Math.max(1e-6, prev.x1 - prev.x0)
-  const prevH = Math.max(1e-6, prev.y1 - prev.y0)
-  const relX = (d.x - prev.x0) / prevW
-  const relY = (d.y - prev.y0) / prevH
-  const relW = d.w / prevW
-  const relH = d.h / prevH
-
-  const nextW = next.x1 - next.x0
-  const nextH = next.y1 - next.y0
-  let w = Math.min(nextW, Math.max(CROP_MIN, relW * nextW))
-  let h = Math.min(nextH, Math.max(CROP_MIN, relH * nextH))
-  let x = next.x0 + relX * nextW
-  let y = next.y0 + relY * nextH
-
+  // 有比例锁时旋转会改变画幅比（源尺寸随角度变化），先按比例把框收回可放范围
   const ratio = cropRatioOf(adjust.cropRatio)
-  const src = cropSourceSize(a.width, a.height, { rot, flipH: d.flipH, flipV: d.flipV })
-  if (ratio && src.h > 0) {
-    // 归一化高 = 归一化宽 × (源宽 / 源高) / 比例
-    const k = src.w / src.h / ratio
-    h = w * k
-    if (h > nextH) {
-      h = nextH
-      w = h / k
-    }
-    if (w > nextW) {
-      w = nextW
-      h = w * k
-    }
+  if (ratio) {
+    const src = cropSourceSize(a.width, a.height, next)
+    const k = src.w / src.h / ratio // 归一化高 = 归一化宽 × k
+    const cx = rect.x + rect.w / 2
+    const cy = rect.y + rect.h / 2
+    const quad = cropQuad(a.width, a.height, next)
+    const s = fitScaleInQuad(cx, cy, rect.w, rect.w * k, quad)
+    const w = Math.max(CROP_MIN, rect.w * s)
+    const h = Math.max(CROP_MIN, w * k)
+    const locked = containCropRect(
+      { x: cx - w / 2, y: cy - h / 2, w, h },
+      a.width,
+      a.height,
+      next,
+    )
+    adjust.cropDraft = { ...next, ...locked }
+    return
   }
 
-  // 越界时先收进范围，尽量保持原中心
-  const cx = Math.min(Math.max(x + w / 2, next.x0 + w / 2), next.x1 - w / 2)
-  const cy = Math.min(Math.max(y + h / 2, next.y0 + h / 2), next.y1 - h / 2)
-  x = Math.min(Math.max(next.x0, cx - w / 2), next.x1 - w)
-  y = Math.min(Math.max(next.y0, cy - h / 2), next.y1 - h)
-
-  adjust.cropDraft = { ...d, rot, x, y, w, h }
+  adjust.cropDraft = { ...next, ...rect }
 }
 
 function toggleFlip(axis: 'h' | 'v'): void {
@@ -177,10 +167,11 @@ function onCustomRatio(e: Event): void {
       <AppSlider
         class="rot"
         :model-value="draftRot"
-        :min="-45"
-        :max="45"
+        :min="CROP_ROT_MIN"
+        :max="CROP_ROT_MAX"
         :step="0.5"
-        label="拉直"
+        :bend="1"
+        label="旋转"
         :format="(v) => `${v}°`"
         :default="0"
         @update:model-value="setRot"

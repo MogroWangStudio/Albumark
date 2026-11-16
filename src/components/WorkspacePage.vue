@@ -561,42 +561,45 @@ onMounted(() => {
                 <h1>工作目录</h1>
                 <span class="sec-count">{{ ws.dirs.length }}</span>
               </div>
-              <template v-if="selectScope === 'dirs'">
-                <span class="sel-count">已选 {{ selectedCount }}</span>
-                <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchCopy">
-                  <Copy :size="13" />复制
-                </AppButton>
-                <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchMove">
-                  <FolderInput :size="13" />移动
-                </AppButton>
-                <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchExport">
-                  <Archive :size="13" />导出
-                </AppButton>
-                <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchDelete">
-                  <Trash2 :size="13" />移除
-                </AppButton>
-                <AppButton size="sm" variant="ghost" @click="selectAllVisible">全选</AppButton>
-                <AppButton size="sm" variant="primary" @click="exitSelect">完成</AppButton>
-              </template>
-              <template v-else>
-                <AppButton size="sm" variant="ghost" @click="enterSelect('dirs')">
-                  <SquareDashed :size="13" />多选
-                </AppButton>
-                <div v-if="sandboxedFs" class="create-inline">
-                  <input
-                    v-model="newDirName"
-                    class="text-input"
-                    placeholder="新目录名称"
-                    @keyup.enter="addDir"
-                  />
-                  <AppButton size="sm" variant="primary" :disabled="!newDirName.trim()" @click="addDir">
-                    <FolderPlus :size="14" />新建
+              <div class="sec-actions">
+                <template v-if="selectScope === 'dirs'">
+                  <span class="sel-count">已选 {{ selectedCount }}</span>
+                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchCopy">
+                    <Copy :size="13" />复制
                   </AppButton>
-                </div>
-                <AppButton v-else size="sm" variant="ghost" @click="addDir">
-                  <FolderPlus :size="13" />添加工作目录…
-                </AppButton>
-              </template>
+                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchMove">
+                    <FolderInput :size="13" />移动
+                  </AppButton>
+                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchExport">
+                    <Archive :size="13" />导出
+                  </AppButton>
+                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchDelete">
+                    <Trash2 :size="13" />移除
+                  </AppButton>
+                  <AppButton size="sm" variant="ghost" @click="selectAllVisible">全选</AppButton>
+                  <AppButton size="sm" variant="primary" @click="exitSelect">完成</AppButton>
+                </template>
+                <template v-else>
+                  <!-- 多选固定在添加按钮左侧：两个按钮同属一组，位置不随标题宽度漂移 -->
+                  <AppButton size="sm" variant="ghost" @click="enterSelect('dirs')">
+                    <SquareDashed :size="13" />多选
+                  </AppButton>
+                  <div v-if="sandboxedFs" class="create-inline">
+                    <input
+                      v-model="newDirName"
+                      class="text-input"
+                      placeholder="新目录名称"
+                      @keyup.enter="addDir"
+                    />
+                    <AppButton size="sm" variant="primary" :disabled="!newDirName.trim()" @click="addDir">
+                      <FolderPlus :size="14" />新建
+                    </AppButton>
+                  </div>
+                  <AppButton v-else size="sm" variant="ghost" @click="addDir">
+                    <FolderPlus :size="13" />添加工作目录…
+                  </AppButton>
+                </template>
+              </div>
             </header>
 
             <!-- 选择条下的提示:进入多选后行点击变选中,不再进入目录 -->
@@ -671,29 +674,34 @@ onMounted(() => {
                   <h1>工作项目</h1>
                   <span class="sec-count">{{ ws.projects.length }}</span>
                 </div>
-                <template v-if="selectScope === 'projects'">
-                  <span class="sel-count">已选 {{ selectedCount }}</span>
-                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchCopy">
-                    <Copy :size="13" />复制
-                  </AppButton>
-                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchMove">
-                    <FolderInput :size="13" />移动
-                  </AppButton>
-                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchExport">
-                    <Archive :size="13" />导出
-                  </AppButton>
-                  <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchDelete">
-                    <Trash2 :size="13" />删除
-                  </AppButton>
-                  <AppButton size="sm" variant="ghost" @click="selectAllVisible">全选</AppButton>
-                  <AppButton size="sm" variant="primary" @click="exitSelect">完成</AppButton>
-                </template>
-                <AppButton v-else size="sm" variant="ghost" @click="enterSelect('projects')">
-                  <SquareDashed :size="13" />多选
-                </AppButton>
-                <AppButton v-if="selectScope !== 'projects'" size="sm" variant="ghost" @click="importOpen = true">
-                  <ArchiveRestore :size="13" />导入项目
-                </AppButton>
+                <div class="sec-actions">
+                  <template v-if="selectScope === 'projects'">
+                    <span class="sel-count">已选 {{ selectedCount }}</span>
+                    <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchCopy">
+                      <Copy :size="13" />复制
+                    </AppButton>
+                    <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchMove">
+                      <FolderInput :size="13" />移动
+                    </AppButton>
+                    <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchExport">
+                      <Archive :size="13" />导出
+                    </AppButton>
+                    <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchDelete">
+                      <Trash2 :size="13" />删除
+                    </AppButton>
+                    <AppButton size="sm" variant="ghost" @click="selectAllVisible">全选</AppButton>
+                    <AppButton size="sm" variant="primary" @click="exitSelect">完成</AppButton>
+                  </template>
+                  <template v-else>
+                    <!-- 多选固定在导入项目左侧：两者同属一组，位置不随标题宽度漂移 -->
+                    <AppButton size="sm" variant="ghost" @click="enterSelect('projects')">
+                      <SquareDashed :size="13" />多选
+                    </AppButton>
+                    <AppButton size="sm" variant="ghost" @click="importOpen = true">
+                      <ArchiveRestore :size="13" />导入项目
+                    </AppButton>
+                  </template>
+                </div>
               </header>
               <p class="cur-dir">{{ ws.dir.emoji ? `${ws.dir.emoji} ` : '' }}{{ ws.dir.name }}</p>
               <p v-if="selectScope === 'projects'" class="select-hint">
@@ -1015,6 +1023,17 @@ onMounted(() => {
   gap: 10px;
   margin-bottom: 12px;
 }
+/* 右侧动作组：多选 / 导入 等按钮成组靠右，间距一致，
+   不与标题平分剩余空间（space-between 会把中间那颗按钮甩到中线） */
+.sec-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
 .sec-title {
   display: flex;
   align-items: center;
@@ -1040,6 +1059,7 @@ onMounted(() => {
 }
 .create-inline {
   display: flex;
+  align-items: center;
   gap: 6px;
 }
 .create-inline .text-input {

@@ -2,7 +2,22 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch } from 'vue'
 import { ChevronUp, Pipette } from 'lucide-vue-next'
 import type { BackgroundLayer, WatermarkLayer } from '@/types/watermark'
-import { clamp01, CROP_MIN, cropInnerBounds, cropRatioOf, cropRot, cropSourceSize, FULL_CROP, type Crop } from '@/types/adjust'
+import {
+  clamp01,
+  CROP_MIN,
+  cropQuad,
+  cropRatioOf,
+  cropRot,
+  cropSourceSize,
+  fitRectInQuad,
+  fitScaleInQuad,
+  FULL_CROP,
+  moveRectInQuad,
+  isCropRotated,
+  type Crop,
+  type CropQuad,
+  type CropRect,
+} from '@/types/adjust'
 import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
 import { drawLayers, type AssetMap } from '@/core/draw'
 import {
@@ -529,7 +544,7 @@ async function renderBase(draft: boolean): Promise<void> {
   srcBitmap = null // 即将转移给 Worker
   try {
     // 裁剪编辑中渲染「变换后全图」（框外要可见），确认后按矩形取样；
-    // 翻转与拉直在两种状态下都生效。crops 里存的是响应式代理，
+    // 翻转与旋转在两种状态下都生效。crops 里存的是响应式代理，
     // 传 Worker 前必须拍平为纯数据，否则结构化克隆失败、渲染静默中断
     const d = adjust.cropMode ? adjust.cropDraft : undefined
     const sel = adjust.cropMode
@@ -576,9 +591,9 @@ async function renderBase(draft: boolean): Promise<void> {
   }
 }
 
-/* ---------- 拉直 / 翻转的即时粗渲：低清位图缓存 + 主线程绘制 ---------- */
+/* ---------- 旋转 / 翻转的即时粗渲：低清位图缓存 + 主线程绘制 ---------- */
 
-/** 裁剪模式下的一次性低清解码：拖动拉直时主线程逐帧绘制，不再每帧进 Worker */
+/** 裁剪模式下的一次性低清解码：拖动旋转时主线程逐帧绘制，不再每帧进 Worker */
 let cropPreviewBmp: ImageBitmap | null = null
 let cropPreviewId: string | null = null
 
@@ -609,7 +624,7 @@ function releaseCropPreview(): void {
 }
 
 /**
- * 拉直 / 翻转的即时粗渲：按 Worker 同一几何（翻转 → 旋转 → 轴对齐包围盒）
+ * 旋转 / 翻转的即时粗渲：按 Worker 同一几何（翻转 → 旋转 → 轴对齐包围盒）
  * 把低清全图画到底图画布并更新映射，拖动中实时跟手；停顿后仍由 Worker 精修。
  */
 function drawRotatedDraft(): void {
@@ -618,7 +633,7 @@ function drawRotatedDraft(): void {
   const d = adjust.cropDraft
   if (!canvas || !d || !a) return
   // 低清位图必须属于当前照片：切照片后缓存还挂着旧图时，
-  // 拉直粗渲会把上一张画出来旋转（随后精修又跳回，肉眼可见串图）
+  // 旋转粗渲会把上一张画出来旋转（随后精修又跳回，肉眼可见串图）
   if (!cropPreviewBmp || cropPreviewId !== a.id) {
     void ensureCropPreview().then((bmp) => {
       if (bmp && adjust.cropDraft) drawRotatedDraft()
@@ -799,7 +814,7 @@ function overlayPxScale(): number {
 /** 水印叠加层：主线程矢量绘制，拖动时只重绘这一层，不再经过 Worker。 */
 function drawOverlay(): void {
   const canvas = cvOverlay.value
-  // 映射始终基于 resultMap：正常路径为 Worker 输出位图，拉直粗渲时为
+  // 映射始终基于 resultMap：正常路径为 Worker 输出位图，旋转粗渲时为
   // 「旋转包围盒 × 低清尺寸」——保证叠加层与底图共用同一坐标系不错位
   if (!canvas || !resultMap.w || !resultMap.h) return
   const dpr = Math.min(view.dpr || 1, perf.value.dprCap)
@@ -897,6 +912,7 @@ function drawCropChrome(ctx: CanvasRenderingContext2D, d: Crop, scale: number, o
   const y0 = d.y * H
   const x1 = (d.x + d.w) * W
   const y1 = (d.y + d.h) * H
+  const img = active.value
 
   ctx.save()
   ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'
@@ -904,6 +920,24 @@ function drawCropChrome(ctx: CanvasRenderingContext2D, d: Crop, scale: number, o
   ctx.fillRect(0, y1, W, H - y1)
   ctx.fillRect(0, y0, x0, y1 - y0)
   ctx.fillRect(x1, y0, W - x1, y1 - y0)
+
+  // 旋转后图片是一块斜着的四边形：虚线勾出真实边界，提示框能贴到这条线为止
+  if (img?.width && img.height && isCropRotated(d)) {
+    const quad = cropQuad(img.width, img.height, d)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.34)'
+    ctx.lineWidth = 1 / scale
+    ctx.setLineDash([5 / scale, 4 / scale])
+    ctx.beginPath()
+    quad.forEach((pt, i) => {
+      const px = pt.x * W
+      const py = pt.y * H
+      if (i === 0) ctx.moveTo(px, py)
+      else ctx.lineTo(px, py)
+    })
+    ctx.closePath()
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
 
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'
   ctx.lineWidth = 1 / scale
@@ -941,14 +975,16 @@ function drawCropChrome(ctx: CanvasRenderingContext2D, d: Crop, scale: number, o
 
   // 裁剪后尺寸（原图像素）：按叠加层自身密度绘制，保证任何缩放下字号一致。
   // 图片坐标 → 底图设备像素（resultMap）→ 乘 k（叠加层/底图密度比）→ 叠加层像素
-  const a = active.value
-  if (!a?.width || !a.height) return
+  if (!img?.width || !img.height) return
   const k = oDpr / (view.dpr || 1)
   const cx = (resultMap.ox + ((x0 + x1) / 2) * scale) * k
   const devY = (resultMap.oy + y0 * scale) * k
   ctx.save()
   ctx.setTransform(1, 0, 0, 1, 0, 0)
-  const text = `${Math.round(d.w * a.width)} × ${Math.round(d.h * a.height)}`
+  // 尺寸按「旋转后源图」换算：裁剪矩形定义在旋转包围盒上，直接乘原图宽高
+  // 在转过角度后会把包围盒放大 / 换向的那部分算漏，角标与面板数值对不上
+  const src = cropSourceSize(img.width, img.height, d)
+  const text = `${Math.round(d.w * src.w)} × ${Math.round(d.h * src.h)}`
   ctx.font = `600 ${10.5 * oDpr}px ${getComputedStyle(document.documentElement).fontFamily}`
   const tw = ctx.measureText(text).width
   const chipW = tw + 14 * oDpr
@@ -1230,18 +1266,26 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
 
 /* ---------- 裁剪：框几何 ---------- */
 
-/** 拉直（rot≠0）时框的活动范围：变换后源图中不含透明角落的内接矩形（归一化）。 */
-function cropBounds(): { x0: number; y0: number; x1: number; y1: number } {
+/** 单位方形：框的允许范围上限（真正的边界是旋转后的图片多边形） */
+const UNIT_BOUNDS = { x0: 0, y0: 0, x1: 1, y1: 1 }
+
+/** 当前照片旋转后的图片多边形（归一化）：裁剪框必须完整落在里面 */
+function cropQuadOf(): CropQuad {
   const d = adjust.cropDraft
   const a = active.value
-  if (!d || !a?.width || !a.height) return { x0: 0, y0: 0, x1: 1, y1: 1 }
-  return cropInnerBounds(a.width, a.height, d)
+  if (!d || !a?.width || !a.height) return [
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 1, y: 1 },
+    { x: 0, y: 1 },
+  ]
+  return cropQuad(a.width, a.height, d)
 }
 
 /**
- * 把矩形收敛到活动范围内（含最小边）。
- * base 用于保留矩形之外的几何量（拉直角度 / 翻转）：只调整选框时绝不能
- * 把 rot 丢掉——旧实现返回裸矩形，拖动选框或换比例就等于「拉直归零」。
+ * 把矩形收敛到 [0,1] 内（含最小边）。
+ * base 用于保留矩形之外的几何量（旋转角度 / 翻转）：只调整选框时绝不能
+ * 把 rot 丢掉——旧实现返回裸矩形，拖动选框或换比例就等于「旋转归零」。
  */
 function clampRect(
   x0: number,
@@ -1378,32 +1422,27 @@ function hitCropHandle(p: { x: number; y: number }): CropHandle | null {
   return null
 }
 
-/** 选择比例后把当前框调整为该比例的最大内接矩形（保持中心，限制在活动范围内）。 */
+/** 选择比例后把当前框调整为该比例（保持中心，收进图片内）。 */
 function applyRatioToDraft(): void {
   const d = adjust.cropDraft
   const a = active.value
   const ratio = cropRatioOf(adjust.cropRatio)
   if (!d || !ratio) return
-  // 比例换算用「变换后源图」的宽高比，而不是当前画面映射：
-  // 刚改完拉直、精修位图还没回来时，resultMap 仍是旧角度的尺寸
+  // 比例换算用「旋转后源图」的宽高比，而不是当前画面映射：
+  // 刚改完旋转、精修位图还没回来时，resultMap 仍是旧角度的尺寸
   const src = a?.width && a.height ? cropSourceSize(a.width, a.height, d) : { w: resultMap.w, h: resultMap.h }
   if (!src.w || !src.h) return
-  const k = src.w / src.h / ratio
-  const bd = cropBounds()
+  const k = src.w / src.h / ratio // 归一化高 = 归一化宽 × k
+  const quad = cropQuadOf()
   const cx = d.x + d.w / 2
   const cy = d.y + d.h / 2
-  const availW = Math.min(2 * (cx - bd.x0), 2 * (bd.x1 - cx))
-  const availH = Math.min(2 * (cy - bd.y0), 2 * (bd.y1 - cy))
-  let w = Math.min(d.w, availW)
-  let h = w * k
-  if (h > availH) {
-    h = availH
-    w = h / k
-  }
-  w = Math.max(w, CROP_MIN)
-  h = Math.max(h, CROP_MIN)
-  // 只换比例，拉直角度与翻转必须原样带走（否则换比例等于把拉直清空）
-  adjust.cropDraft = { ...d, ...clampRect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, bd) }
+  // 以现有宽度换算高度，放不下就绕中心等比收缩——比例始终保持严格成立
+  const s = fitScaleInQuad(cx, cy, d.w, d.w * k, quad)
+  const w = Math.max(CROP_MIN, d.w * s)
+  const h = Math.max(CROP_MIN, w * k)
+  const rect: CropRect = { x: cx - w / 2, y: cy - h / 2, w, h }
+  // 只换比例，旋转角度与翻转必须原样带走（否则换比例等于把旋转清空）
+  adjust.cropDraft = { ...d, ...fitRectInQuad(d, rect, quad) }
 }
 
 function onPointerDown(e: PointerEvent): void {
@@ -1566,25 +1605,29 @@ function onPointerMove(e: PointerEvent): void {
     const nx = clamp01(p.x / resultMap.w)
     const ny = clamp01(p.y / resultMap.h)
     const d = gesture.startCrop
-    const bd = cropBounds()
+    const quad = cropQuadOf()
     if (gesture.handle === 'move') {
-      // 拉直后活动范围会小于已有框：先把框收进范围，再按位移移动，
-      // 否则 bd.x1 - d.w 会小于 bd.x0，框被推到范围外（看起来像「裁剪被重置」）
-      const w = Math.min(d.w, Math.max(CROP_MIN, bd.x1 - bd.x0))
-      const h = Math.min(d.h, Math.max(CROP_MIN, bd.y1 - bd.y0))
-      const x = Math.min(Math.max(bd.x0, d.x + nx - gesture.startNx), Math.max(bd.x0, bd.x1 - w))
-      const y = Math.min(Math.max(bd.y0, d.y + ny - gesture.startNy), Math.max(bd.y0, bd.y1 - h))
-      adjust.cropDraft = { x, y, w, h, rot: d.rot, flipH: d.flipH, flipV: d.flipV }
+      // 自由拖动：整块平移、尺寸不变，贴到图片边界才停住。
+      // 旧实现把框锁在居中的内接矩形里，旋转后几乎无处可动。
+      const target: CropRect = {
+        x: d.x + nx - gesture.startNx,
+        y: d.y + ny - gesture.startNy,
+        w: d.w,
+        h: d.h,
+      }
+      adjust.cropDraft = { ...d, ...moveRectInQuad(d, target, quad) }
     } else {
       const ratio = cropRatioOf(adjust.cropRatio)
-      // 与比例换算同源：以变换后源图为准，避免精修位图未回来时用到旧角度尺寸
+      // 与比例换算同源：以旋转后源图为准，避免精修位图未回来时用到旧角度尺寸
       const img = active.value
       const src =
         img?.width && img.height
           ? cropSourceSize(img.width, img.height, d)
           : { w: resultMap.w, h: resultMap.h }
       const imgAspect = src.w / Math.max(1, src.h)
-      adjust.cropDraft = resizeCrop(d, gesture.handle, nx, ny, ratio, imgAspect, bd)
+      const raw = resizeCrop(d, gesture.handle, nx, ny, ratio, imgAspect, UNIT_BOUNDS)
+      // 手柄拖到图片外时沿拖动方向收到边界上（比例仍然严格成立）
+      adjust.cropDraft = { ...raw, ...fitRectInQuad(d, raw, quad) }
     }
     drawOverlay()
     return
@@ -1976,7 +2019,7 @@ watch(
   { deep: true },
 )
 
-// 翻转 / 拉直变化：先在主线程用低清位图即时粗渲（拖动中实时跟手），
+// 翻转 / 旋转变化：先在主线程用低清位图即时粗渲（拖动中实时跟手），
 // 停顿 140ms 后再交给 Worker 精修（保留防抖，只在停顿时渲染一次）
 watch(
   () => {

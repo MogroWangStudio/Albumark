@@ -31,7 +31,7 @@ const wm = useWatermarkStore()
 
 const emit = defineEmits<{ photoCtx: [e: MouseEvent, id: string] }>()
 
-/* 几何签名：裁剪 / 翻转 / 拉直 / 边框 / 背景水印变化后防抖重建缩略图，让图库与输出构图一致 */
+/* 几何签名：裁剪 / 翻转 / 旋转 / 边框 / 背景水印变化后防抖重建缩略图，让图库与输出构图一致 */
 const geoSig = computed(() =>
   JSON.stringify(
     images.items.map((i) => ({

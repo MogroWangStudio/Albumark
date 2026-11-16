@@ -11,7 +11,7 @@ import {
 } from '../core/bg'
 import { drawLayers, type AssetMap } from '../core/draw'
 import type { BackgroundLayer, BorderLayer, WatermarkLayer } from '../types/watermark'
-import { isCurvesNeutral, isCurveNeutral, isHslNeutral, type Adjustments, type Crop } from '../types/adjust'
+import { cropRot, isCurvesNeutral, isCurveNeutral, isHslNeutral, type Adjustments, type Crop } from '../types/adjust'
 
 export interface RenderJob {
   id: number
@@ -63,9 +63,9 @@ self.addEventListener('message', (e: MessageEvent<{ job: RenderJob }>) => {
 
 async function handle(job: RenderJob): Promise<void> {
   let src: ImageBitmap | OffscreenCanvas = job.bitmap
-  // 几何变换先行：翻转 → 绕中心拉直旋转（包围盒画布，四角留空），裁剪矩形即定义在变换后的源上
+  // 几何变换先行：翻转 → 绕中心旋转（包围盒画布，四角留空），裁剪矩形即定义在变换后的源上
   const c = job.crop
-  const rot = c?.rot ? Math.max(-45, Math.min(45, c.rot)) : 0
+  const rot = cropRot(c)
   const flipH = !!c?.flipH
   const flipV = !!c?.flipV
   if (flipH || flipV || rot !== 0) {

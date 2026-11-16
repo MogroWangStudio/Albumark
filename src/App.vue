@@ -27,6 +27,7 @@ import WorkspacePage from '@/components/WorkspacePage.vue'
 import AppTabs from '@/components/ui/AppTabs.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import { isCapacitor, isTauri, pickImagePaths } from '@/core/platform'
+import { isImportableImage } from '@/core/imageFormat'
 import { projectMomentum, springTo, type SpringHandle } from '@/core/spring'
 import { baseName } from '@/core/fs'
 import { toast } from '@/stores/toast'
@@ -90,8 +91,14 @@ const pendingImport = ref<PendingImport[]>([])
 const canLinkImport = computed(() => isTauri && pendingImport.value.every((i) => !!i.path))
 
 function queueImport(items: PendingImport[]): void {
-  if (!items.length || !inProject.value) return
-  pendingImport.value = items
+  if (!inProject.value) return
+  // 只把 JPG / PNG 送进预览窗：拖入整个文件夹时，夹带的杂项文件不应算进
+  // 「已选择 N 张照片」，也不该在确认后才被告知跳过
+  const picked = items.filter((i) => isImportableImage(i.name))
+  const skipped = items.length - picked.length
+  if (skipped > 0) toast(`已跳过 ${skipped} 个非 JPG/PNG 文件`)
+  if (!picked.length) return
+  pendingImport.value = picked
   importPreviewOpen.value = true
 }
 

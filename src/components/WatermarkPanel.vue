@@ -30,7 +30,7 @@ watch(
   },
 )
 
-/** 像素距离基于当前照片的生效尺寸（裁剪 / 拉直后的长边） */
+/** 像素距离基于当前照片的生效尺寸（裁剪 / 旋转后的长边） */
 const imgW = computed(() => {
   const a = images.active
   if (!a?.width) return 1600

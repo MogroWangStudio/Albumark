@@ -2,20 +2,13 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { readExif } from '@/core/exif'
+import { formatOfName } from '@/core/imageFormat'
 import { jpegSize } from '@/core/jpeg'
 import { pngSize } from '@/core/png'
 import { fetchImageBlob } from '@/core/platform'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
 import { useSettingsStore } from './settings'
-
-function isJpegName(name: string): boolean {
-  return /\.jpe?g$/i.test(name)
-}
-
-function isPngName(name: string): boolean {
-  return /\.png$/i.test(name)
-}
 
 /** 图库缩略图长边（px）：60px 缩略图按 2x DPR 留足余量 */
 const THUMB_LONG = 240
@@ -190,7 +183,7 @@ export const useImagesStore = defineStore('images', () => {
   async function addFromUrl(url: string): Promise<void> {
     const blob = await fetchImageBlob(url)
     const supported =
-      blob.type === 'image/jpeg' || blob.type === 'image/png' || isJpegName(url) || isPngName(url)
+      blob.type === 'image/jpeg' || blob.type === 'image/png' || formatOfName(url) !== null
     if (!supported) throw new Error('仅支持 JPG/PNG 图片链接')
     let name: string
     try {
@@ -199,7 +192,7 @@ export const useImagesStore = defineStore('images', () => {
       name = ''
     }
     if (!name) name = 'photo'
-    if (!isJpegName(name) && !isPngName(name)) name += blob.type === 'image/png' ? '.png' : '.jpg'
+    if (!formatOfName(name)) name += blob.type === 'image/png' ? '.png' : '.jpg'
     await addBlobs([{ blob, name }])
   }
 

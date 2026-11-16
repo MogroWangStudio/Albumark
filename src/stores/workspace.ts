@@ -6,6 +6,12 @@ import * as fs from '@/core/fs'
 import { probeZipBatch, probeZipManifest, unzipTo } from '@/core/archive'
 import { appDataDir, executableDir, isTauri, pickDirectory } from '@/core/platform'
 import { createDebouncedSaver } from '@/core/storage'
+import {
+  imageExt,
+  imageMime,
+  isImportableImage,
+  resolveImageFormat,
+} from '@/core/imageFormat'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
 import { processItem, useImagesStore } from './images'
@@ -609,7 +615,11 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       }
     }
     if (!bytes) return { missing: true }
-    const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'image/jpeg' })
+    // MIME 按字节识别：PNG 若被标成 image/jpeg，缩略图编码会把透明区拍平
+    const format = resolveImageFormat(bytes, r.storedAs ?? r.sourcePath ?? '')
+    const blob = new Blob([bytes.slice().buffer as ArrayBuffer], {
+      type: imageMime(format ?? 'jpg'),
+    })
     // processItem 只读 blob：不需要完整条目
     const patch = await processItem({
       id: '',
@@ -932,8 +942,15 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!current.value) return
     const prjPath = current.value.path
     let toldFallback = false
+    let skipped = 0
     for (const { file, path } of files) {
       const bytes = new Uint8Array(await file.arrayBuffer())
+      // 只收 JPG / PNG：其它格式写进 images/ 也解不出来，不如在入口挡掉
+      const format = resolveImageFormat(bytes, file.name)
+      if (!format) {
+        skipped++
+        continue
+      }
       const code = await sha256Hex(bytes)
       const ref: PrjImageRef = { id: uid(), name: file.name, code, kind: mode }
       if (fsAvailable && prjPath) {
@@ -945,7 +962,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
             toast('拿不到文件的源路径，已改为复制', 'info')
           }
           ref.kind = 'copy'
-          ref.storedAs = `${ref.id}.jpg`
+          ref.storedAs = `${ref.id}.${imageExt(format)}`
           await fs.writeFile(await fs.joinPath(prjPath, 'images', ref.storedAs), bytes)
         }
       } else {
@@ -957,29 +974,36 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       void processItem(item).then((patch) => images.patchItem(item.id, patch))
       scheduleSave()
     }
+    if (skipped > 0) toast(`已跳过 ${skipped} 个非 JPG/PNG 文件`)
   }
 
   /** 桌面端拖入/对话框选择的照片（带绝对路径），复制或链接按 mode 决定。 */
   async function addFromPaths(paths: string[], mode: ImportMode = importMode.value): Promise<void> {
     if (!current.value || !isTauri) return
-    const jpgs = paths.filter((p) => /\.jpe?g$/i.test(p))
-    const skipped = paths.length - jpgs.length
-    if (skipped > 0) toast(`已跳过 ${skipped} 个非 JPG 文件`)
-    for (const path of jpgs) {
+    const supported = paths.filter((p) => isImportableImage(p))
+    const skipped = paths.length - supported.length
+    if (skipped > 0) toast(`已跳过 ${skipped} 个非 JPG/PNG 文件`)
+    for (const path of supported) {
       try {
         const bytes = await fs.readFile(path)
         const name = fs.baseName(path)
+        // 内容优先：扩展名写错（例如被改名的 PNG）也按真实格式落盘
+        const format = resolveImageFormat(bytes, name)
+        if (!format) {
+          toast(`无法识别：${name}`, 'error')
+          continue
+        }
         const code = await sha256Hex(bytes)
         const ref: PrjImageRef = { id: uid(), name, code, kind: mode }
         if (mode === 'link') {
           ref.sourcePath = path
         } else if (current.value.path) {
-          ref.storedAs = `${ref.id}.jpg`
+          ref.storedAs = `${ref.id}.${imageExt(format)}`
           await fs.writeFile(await fs.joinPath(current.value.path, 'images', ref.storedAs), bytes)
         }
         const item = makeItem(
           ref,
-          new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'image/jpeg' }),
+          new Blob([bytes.slice().buffer as ArrayBuffer], { type: imageMime(format) }),
         )
         manifest.value?.images.push(ref)
         images.adopt(item)
@@ -1020,7 +1044,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         return
       }
       ref.sourcePath = newPath
-      const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: 'image/jpeg' })
+      const format = resolveImageFormat(bytes, newPath)
+      const blob = new Blob([bytes.slice().buffer as ArrayBuffer], {
+        type: imageMime(format ?? 'jpg'),
+      })
       const item: ImageItem = {
         id: ref.id,
         name: ref.name,

@@ -10,7 +10,7 @@ import {
 import type { BackgroundLayer, BorderLayer } from '@/types/watermark'
 
 /**
- * 合成照片的几何缩略图：翻转 / 拉直 → 裁剪取样 → 逐层加边框（有背景水印时
+ * 合成照片的几何缩略图：翻转 / 旋转 → 裁剪取样 → 逐层加边框（有背景水印时
  * 边框为照片外围环带、背景铺满画布、照片带缩放 / 圆角 / 阴影），
  * 与 Worker 的输出构图一致（不含调色与文字 / 图片水印）。失败返回 null。
  */

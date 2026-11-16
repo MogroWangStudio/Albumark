@@ -16,6 +16,12 @@ const props = withDefaults(
     title?: string
     /** 归位值：提供后，数值偏离它时显示行内重置按钮 */
     default?: number
+    /**
+     * 中段细腻度：0 = 轨道与数值线性对应（默认）。
+     * > 0 时按幂曲线压缩两端——中段占更多行程、越靠近 0 越细腻，
+     * 用于跨度很大但常用值集中在中间附近的参数（如整圈旋转）。
+     */
+    bend?: number
   }>(),
   {
     min: 0,
@@ -27,6 +33,7 @@ const props = withDefaults(
     disabled: false,
     title: '双击复位',
     default: undefined,
+    bend: 0,
   },
 )
 
@@ -44,18 +51,41 @@ const display = computed(() =>
   props.format ? props.format(props.modelValue) : String(props.modelValue),
 )
 
+/* ---------- 轨道映射：默认线性；bend>0 时中段细腻 ---------- */
+
+/** 幂指数：bend 越大，中段越占行程（bend=0 时为 1，即完全线性） */
+const bendK = computed(() => (props.bend > 0 ? 1 / (1 + props.bend) : 1))
+const bendMid = computed(() => (props.min + props.max) / 2)
+const bendHalf = computed(() => Math.max(1e-9, (props.max - props.min) / 2))
+const bent = computed(() => bendK.value !== 1)
+
+/** 数值 → 轨道位置（0–1） */
+function toTrack(v: number): number {
+  const span = props.max - props.min || 1
+  if (!bent.value) return (v - props.min) / span
+  const u = Math.min(1, Math.max(-1, (v - bendMid.value) / bendHalf.value))
+  return 0.5 + 0.5 * Math.sign(u) * Math.abs(u) ** bendK.value
+}
+
+/** 轨道位置（0–1）→ 数值 */
+function fromTrack(p: number): number {
+  if (!bent.value) return props.min + p * (props.max - props.min)
+  const t = Math.min(1, Math.max(0, p)) * 2 - 1
+  return bendMid.value + Math.sign(t) * Math.abs(t) ** (1 / bendK.value) * bendHalf.value
+}
+
 /** 中点归零的滑杆（-100~100）从中间起填充，其余从最小值起填充。 */
 const fillStyle = computed(() => {
-  const range = props.max - props.min
-  const pct = ((props.modelValue - props.min) / range) * 100
-  const center = props.min < 0 && props.max > 0 ? ((0 - props.min) / range) * 100 : 0
+  const pct = toTrack(props.modelValue) * 100
+  const center = props.min < 0 && props.max > 0 ? toTrack(0) * 100 : 0
   const lo = Math.min(pct, center)
   const hi = Math.max(pct, center)
   return { '--lo': `${lo}%`, '--hi': `${hi}%` }
 })
 
 function onInput(e: Event): void {
-  emit('update:modelValue', Number((e.target as HTMLInputElement).value))
+  const raw = Number((e.target as HTMLInputElement).value)
+  emit('update:modelValue', quantize(bent.value ? fromTrack(raw) : raw))
 }
 
 /* ---------- 双击数值：键盘直接输入 ---------- */
@@ -105,12 +135,11 @@ let scrub: { startX: number; startVal: number; active: boolean } | null = null
 /** 拖满 SCRUB_RANGE px 走完整个范围，比轨道宽度更缓，便于细调；按 step 取整 */
 function applyScrub(dx: number): void {
   if (!scrub) return
-  let v = scrub.startVal + (dx / SCRUB_RANGE) * (props.max - props.min)
-  v = Math.min(props.max, Math.max(props.min, v))
-  if (props.step > 0) {
-    v = Math.round((v - props.min) / props.step) * props.step + props.min
-    v = Number(v.toFixed(4))
-  }
+  const v = quantize(
+    bent.value
+      ? fromTrack(toTrack(scrub.startVal) + dx / SCRUB_RANGE)
+      : scrub.startVal + (dx / SCRUB_RANGE) * (props.max - props.min),
+  )
   if (v !== props.modelValue) emit('update:modelValue', v)
 }
 
@@ -196,11 +225,11 @@ let track: {
   pad: number
 } | null = null
 
-/** 手指位置映射到值（轨道 content box 内线性插值） */
+/** 手指位置映射到值（轨道 content box 内插值） */
 function valueAt(clientX: number, t: { rect: DOMRect; pad: number }): number {
   const inner = Math.max(1, t.rect.width - t.pad * 2)
   const frac = Math.min(1, Math.max(0, (clientX - t.rect.left - t.pad) / inner))
-  return props.min + frac * (props.max - props.min)
+  return fromTrack(frac)
 }
 
 function quantize(v: number): number {
@@ -225,7 +254,7 @@ function onTrackDown(e: PointerEvent): void {
   }
   const rect = el.getBoundingClientRect()
   const pad = parseFloat(getComputedStyle(el).paddingLeft) || 0
-  const frac = (props.modelValue - props.min) / (props.max - props.min || 1)
+  const frac = toTrack(props.modelValue)
   const thumbX = rect.left + pad + frac * (rect.width - pad * 2)
   track = {
     startX: e.clientX,
@@ -250,7 +279,7 @@ function onTrackMove(e: PointerEvent): void {
   if (t.grabbed) {
     // 从拇指当前位置按位移连续调整（与轨道等宽的 1:1 灵敏度）
     const inner = Math.max(1, t.rect.width - t.pad * 2)
-    v = t.startVal + ((e.clientX - t.startX) / inner) * (props.max - props.min)
+    v = fromTrack(toTrack(t.startVal) + (e.clientX - t.startX) / inner)
   } else {
     v = valueAt(e.clientX, t)
   }
@@ -314,10 +343,10 @@ function onTrackUp(e: PointerEvent): void {
       <input
         ref="trackEl"
         type="range"
-        :min="min"
-        :max="max"
-        :step="step"
-        :value="modelValue"
+        :min="bent ? 0 : min"
+        :max="bent ? 1 : max"
+        :step="bent ? 0.0005 : step"
+        :value="bent ? toTrack(modelValue) : modelValue"
         :disabled="disabled"
         :class="{ dragging: trackActive, locked }"
         :style="fillStyle"
