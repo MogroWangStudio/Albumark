@@ -133,10 +133,17 @@ function parseAtom(xml: string): FeedEntry[] {
   return out
 }
 
-/** HTML → 纯文本：parse 成独立文档取 textContent（外部内容绝不注入页面 DOM），截 3000 字符 */
+/** HTML → 纯文本：parse 成独立文档取 textContent（外部内容绝不注入页面 DOM）。
+ *  块级元素后补换行——textContent 直接拼接会把列表/段落粘成一坨；截 3000 字符 */
 function htmlToText(html: string): string {
   const doc = new DOMParser().parseFromString(html, 'text/html')
-  return (doc.body.textContent ?? '').trim().slice(0, 3000)
+  for (const el of doc.body.querySelectorAll('p,li,div,h1,h2,h3,h4,h5,h6,tr,blockquote,pre')) {
+    el.after(doc.createTextNode('\n'))
+  }
+  return (doc.body.textContent ?? '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 3000)
 }
 
 /**

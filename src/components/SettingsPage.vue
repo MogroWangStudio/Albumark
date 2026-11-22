@@ -15,18 +15,12 @@ import LogoText from '@/components/brand/LogoText.vue'
 
 import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platform'
 import {
-  checkForUpdate,
-  downloadUpdate,
-  installStagedUpdate,
   openReleasePage,
   probeSource,
-  type DownloadBuffer,
   type SpeedTestResult,
   type UpdateChannel,
-  type UpdateInfo,
   type UpdateSource,
 } from '@/core/updater'
-import { toast } from '@/stores/toast'
 import { APP_VERSION } from '@/core/version'
 import { FONT_CATEGORY_LABELS, useFontsStore, type FontCategory } from '@/stores/fonts'
 import {
@@ -49,12 +43,14 @@ import {
   type ThemeMode,
 } from '@/stores/settings'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { useUpdaterStore } from '@/stores/updater'
 
 const emit = defineEmits<{ back: [] }>()
 
 const settings = useSettingsStore()
 const ws = useWorkspaceStore()
 const fonts = useFontsStore()
+const updater = useUpdaterStore()
 
 const themeModel = computed({
   get: () => settings.theme,
@@ -144,59 +140,19 @@ function onFontPicked(family: string): void {
   settings.fontFamily = family
 }
 
-/* ---------- 检查更新与自动更新 ---------- */
-
-type UpdateState =
-  | 'idle'
-  | 'checking'
-  | 'latest'
-  | 'available'
-  | 'downloading'
-  | 'paused'
-  | 'ready'
-  | 'installing'
-  | 'error'
-const updateState = ref<UpdateState>('idle')
-const updateInfo = ref<UpdateInfo | null>(null)
-/** 下载进度：null = 总大小未知，只显示进行中 */
-const updateProgress = ref<number | null>(null)
-/** 下载速度（KB/s）：≥400ms 采样一次，暂停 / 完成时归 null */
-const downloadSpeed = ref<number | null>(null)
-/** 断点续传缓冲：暂停时保留已下载字节，继续时原样传回 */
-let downloadBuf: DownloadBuffer | null = null
-/** 暂停标记：区分「暂停」与「取消」两种 abort */
-let pauseRequested = false
-/** 下载完成的暂存路径：读秒结束后派发替换脚本用 */
-const stagedPath = ref('')
-/** 读秒：N 秒后自动重启安装 */
-const countdown = ref(0)
-let countdownTimer: number | undefined
-/** 下载中的取消句柄：downloadUpdate 的 AbortController */
-let downloadCtl: AbortController | null = null
-
-/** 下载完成后自动重启安装的读秒秒数 */
-const AUTO_INSTALL_SEC = 6
-
-async function checkUpdate(): Promise<void> {
-  updateState.value = 'checking'
-  updateInfo.value = null
-  try {
-    const info = await checkForUpdate(settings.updateChannel, settings.updateSource)
-    updateInfo.value = info
-    updateState.value = info ? 'available' : 'latest'
-  } catch {
-    updateState.value = 'error'
-  }
-}
+/* ---------- 检查更新与自动更新 ----------
+   状态机在 stores/updater.ts 全局常驻：设置页是 v-if 覆盖页，切走即卸载，
+   局部状态会让下载与读秒安装静默丢失。本页只负责检查入口、状态摘要与
+   「查看更新…」入口，下载 / 暂停 / 安装动作收敛在 UpdateDialog 弹窗内 */
+const updateState = computed(() => updater.updateState)
+const updateInfo = computed(() => updater.updateInfo)
 
 /* 更新渠道：切换后旧渠道的检查结果不再适用，复位等待重新检查 */
 const channelModel = computed({
   get: () => settings.updateChannel,
   set: (v: unknown) => {
     settings.updateChannel = v as UpdateChannel
-    stopCountdown()
-    updateState.value = 'idle'
-    updateInfo.value = null
+    updater.resetCheck()
   },
 })
 
@@ -233,9 +189,7 @@ const sourceItems = computed<DropdownItem[]>(() =>
       if (settings.updateSource === s.value) return
       settings.updateSource = s.value as UpdateSource
       // 线路变了：旧的检查结果与测速结论都基于旧线路，一并复位
-      stopCountdown()
-      updateState.value = 'idle'
-      updateInfo.value = null
+      updater.resetCheck()
       speedState.value = 'idle'
       speedResult.value = null
     },
@@ -255,136 +209,6 @@ async function runSpeedTest(): Promise<void> {
   speedResult.value = r
   speedState.value = r.ok ? 'ok' : 'fail'
 }
-
-/** 下载更新包：安卓下载完直接交给系统安装器；桌面端暂存后进入读秒。
- *  下载中可暂停（abort 保留断点缓冲）与取消；传 resume 即从断点续传。 */
-async function runDownload(resume?: DownloadBuffer): Promise<void> {
-  if (!updateInfo.value || updateState.value === 'downloading') return
-  updateState.value = 'downloading'
-  if (!resume) {
-    updateProgress.value = null
-    downloadBuf = { chunks: [], loaded: 0, total: 0 }
-  }
-  downloadSpeed.value = null
-  pauseRequested = false
-  const ctl = new AbortController()
-  downloadCtl = ctl
-  try {
-    const out = await downloadUpdate(
-      updateInfo.value,
-      (pct, kbps) => {
-        if (pct !== null) updateProgress.value = pct
-        if (kbps !== null) downloadSpeed.value = kbps
-      },
-      ctl.signal,
-      settings.updateSource,
-      resume ?? downloadBuf ?? undefined,
-    )
-    if (ctl.signal.aborted) return // 已中断：丢弃结果，状态由 pause/cancel 复位
-    downloadBuf = null
-    if (out.kind === 'auto') {
-      // 安卓：已交给系统安装器，回到待更新态（取消安装可再次拉起）
-      toast(out.message, 'success')
-      updateState.value = 'available'
-      return
-    }
-    stagedPath.value = out.stagedPath
-    updateState.value = 'ready'
-    startCountdown()
-  } catch (err) {
-    if (ctl.signal.aborted) {
-      // 暂停：缓冲保留（updateProgress 不清），等「继续下载」从断点接着走
-      updateState.value = pauseRequested ? 'paused' : 'available'
-      return
-    }
-    // 传输层错误（断网 / 服务端异常）：缓冲保留，可从断点继续或放弃
-    toast(`更新失败：${err instanceof Error ? err.message : '请稍后重试，或前往下载页手动获取'}`, 'error')
-    updateState.value = 'available'
-  } finally {
-    if (downloadCtl === ctl) downloadCtl = null
-  }
-}
-
-function installUpdate(): void {
-  void runDownload()
-}
-
-/** 暂停下载：abort 但保留断点缓冲，回到可继续态 */
-function pauseDownload(): void {
-  if (updateState.value !== 'downloading') return
-  pauseRequested = true
-  downloadCtl?.abort()
-  downloadSpeed.value = null
-  updateState.value = 'paused'
-}
-
-/** 继续下载：带上暂停前保留的缓冲从断点续传 */
-function resumeDownload(): void {
-  if (updateState.value !== 'paused' || !downloadBuf) return
-  void runDownload(downloadBuf)
-}
-
-/** 取消下载：中断传输、丢弃断点缓冲，回到待更新态 */
-function cancelDownload(): void {
-  pauseRequested = false
-  downloadCtl?.abort()
-  downloadBuf = null
-  updateProgress.value = null
-  updateState.value = 'available'
-}
-
-function startCountdown(): void {
-  stopCountdown()
-  countdown.value = AUTO_INSTALL_SEC
-  countdownTimer = window.setInterval(() => {
-    countdown.value -= 1
-    if (countdown.value <= 0) void installStaged()
-  }, 1000)
-}
-
-function stopCountdown(): void {
-  if (countdownTimer !== undefined) {
-    window.clearInterval(countdownTimer)
-    countdownTimer = undefined
-  }
-}
-
-/** 立即或读秒归零后安装：派发替换脚本，应用随即退出 */
-async function installStaged(): Promise<void> {
-  if (updateState.value !== 'ready') return
-  stopCountdown()
-  updateState.value = 'installing'
-  try {
-    await installStagedUpdate(stagedPath.value)
-    // 正常路径：替换脚本已在等本进程退出，界面随之消失
-  } catch (err) {
-    toast(`安装失败：${err instanceof Error ? err.message : '请重试，或前往下载页手动获取'}`, 'error')
-    updateState.value = 'available'
-  }
-}
-
-/** 稍后：停表保留已下载的包，回到等待手动更新 */
-function deferInstall(): void {
-  stopCountdown()
-  updateState.value = 'available'
-}
-
-onBeforeUnmount(stopCountdown)
-
-const progressText = computed(() => {
-  if (updateProgress.value === null) return '下载中…'
-  const speed = downloadSpeed.value
-  const kbps = speed !== null && speed >= 1024 ? `${(speed / 1024).toFixed(1)} MB/s` : speed !== null ? `${speed} KB/s` : null
-  return kbps ? `下载 ${updateProgress.value}% · ${kbps}` : `下载 ${updateProgress.value}%`
-})
-
-const pausedText = computed(() =>
-  updateProgress.value === null ? '下载已暂停' : `已暂停 · 已下载 ${updateProgress.value}%`,
-)
-
-const readyText = computed(() => `${countdown.value} 秒后自动重启安装`)
-
-const isDownloading = computed(() => updateState.value === 'downloading')
 
 /** 开发者 MogroWang Studio 官方网站，与项目主页同一外部打开通道 */
 function openStudioSite(): void {
@@ -659,64 +483,36 @@ async function relaunchOobe(): Promise<void> {
             <p class="desc">v{{ APP_VERSION }}</p>
           </div>
           <div class="btns">
-            <!-- 下载完成进入读秒：数字就地走字，两个动作都可点（Agency） -->
+            <!-- 状态摘要就地走字；下载/暂停/安装动作在更新弹窗内，这里留入口 -->
             <template v-if="updateState === 'ready' || updateState === 'installing'">
-              <span class="update-hint">{{ readyText }}</span>
-              <AppButton
-                size="sm"
-                variant="primary"
-                :disabled="updateState === 'installing'"
-                @click="installStaged"
-              >
-                <LoaderCircle v-if="updateState === 'installing'" :size="13" class="spin" />
-                <RefreshCw v-else :size="13" />立即重启安装
-              </AppButton>
-              <AppButton
-                size="sm"
-                variant="ghost"
-                :disabled="updateState === 'installing'"
-                @click="deferInstall"
-              >
-                稍后
-              </AppButton>
+              <span class="update-hint">{{ updater.readyText }}</span>
             </template>
             <template v-else-if="updateState === 'available' && updateInfo">
               <span class="update-hint"><Check :size="13" />新版本 v{{ updateInfo.version }}</span>
-              <AppButton
-                size="sm"
-                variant="primary"
-                :disabled="isDownloading"
-                @click="installUpdate"
-              >
-                <LoaderCircle v-if="isDownloading" :size="13" class="spin" />
-                <Download v-else :size="13" />{{ isDownloading ? progressText : '立即更新' }}
-              </AppButton>
-              <AppButton v-if="isDownloading" size="sm" variant="ghost" @click="pauseDownload">
-                暂停
-              </AppButton>
-              <AppButton v-if="isDownloading" size="sm" variant="ghost" @click="cancelDownload">
-                取消
-              </AppButton>
             </template>
             <template v-else-if="updateState === 'paused' && updateInfo">
-              <span class="update-hint">{{ pausedText }}</span>
-              <AppButton size="sm" variant="primary" @click="resumeDownload">
-                <Download :size="13" />继续下载
-              </AppButton>
-              <AppButton size="sm" variant="ghost" @click="cancelDownload">
-                取消
-              </AppButton>
+              <span class="update-hint">{{ updater.pausedText }}</span>
             </template>
-            <template v-else>
-              <span v-if="updateState === 'latest'" class="update-hint">
-                <Check :size="13" />已是最新版本
-              </span>
-              <span v-else-if="updateState === 'error'" class="update-hint err">检查失败，稍后再试</span>
-              <AppButton size="sm" :disabled="updateState === 'checking'" @click="checkUpdate">
-                <LoaderCircle v-if="updateState === 'checking'" :size="13" class="spin" />
-                <Download v-else :size="13" />检查更新
-              </AppButton>
+            <template v-else-if="updateState === 'downloading'">
+              <span class="update-hint">{{ updater.progressText }}</span>
             </template>
+            <span v-else-if="updateState === 'latest'" class="update-hint">
+              <Check :size="13" />已是最新版本
+            </span>
+            <span v-else-if="updateState === 'error'" class="update-hint err">检查失败，稍后再试</span>
+            <AppButton size="sm" :disabled="updateState === 'checking'" @click="updater.checkUpdate">
+              <LoaderCircle v-if="updateState === 'checking'" :size="13" class="spin" />
+              <Download v-else :size="13" />检查更新
+            </AppButton>
+            <!-- 检查到新版本后弹窗已自动弹出；此按钮是切走页面后的重开入口 -->
+            <AppButton
+              v-if="updateInfo"
+              size="sm"
+              variant="ghost"
+              @click="updater.openDialog"
+            >
+              查看更新…
+            </AppButton>
           </div>
         </div>
         <div class="row">

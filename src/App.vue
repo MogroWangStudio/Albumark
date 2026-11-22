@@ -20,6 +20,7 @@ import ImportPreviewDialog from '@/components/ImportPreviewDialog.vue'
 import LibraryStrip from '@/components/LibraryStrip.vue'
 import PreviewCanvas from '@/components/PreviewCanvas.vue'
 import SettingsPage from '@/components/SettingsPage.vue'
+import UpdateDialog from '@/components/UpdateDialog.vue'
 import UrlImportDialog from '@/components/UrlImportDialog.vue'
 import WatermarkPanel from '@/components/WatermarkPanel.vue'
 import WatermarkStudio from '@/components/WatermarkStudio.vue'
@@ -671,6 +672,8 @@ onBeforeUnmount(() => {
     />
     <AppContextMenu :state="ctxMenu" @close="closeCtxMenu" />
     <ToastHost />
+    <!-- 更新弹窗：全局常驻，下载中切走设置页仍可查看日志与进度 -->
+    <UpdateDialog />
 
     <input
       ref="fileInput"
