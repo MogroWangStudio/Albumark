@@ -633,9 +633,10 @@ async function relaunchOobe(): Promise<void> {
   padding: 16px 18px;
   border-radius: var(--r-l);
   border: 1px solid var(--line);
-  background: var(--surface);
-  backdrop-filter: var(--blur-material);
-  -webkit-backdrop-filter: var(--blur-material);
+  /* 实色表面：设置页是全屏页，卡片底下只有纯色背景，毛玻璃没有
+     内容可“透”，blur(20px)×5 卡片却要全量采样合成——WebView2 上
+     叠加入场动画就是打开设置瞬间的掉帧来源 */
+  background: var(--surface-solid);
 }
 .group h2 {
   font-size: calc(12px * var(--ui-zoom, 1));
