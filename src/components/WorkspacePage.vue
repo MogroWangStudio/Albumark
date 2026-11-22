@@ -391,14 +391,61 @@ const importOpen = ref(false)
 
 /* ---------- 两级页面：工作目录页 ⇄ 工作项目页 ---------- */
 
-/** 切换方向决定过渡编排：进项目页推入、回目录页弹出，路径对称可回放 */
+/** 两级页过渡的容器：高度由内容决定。目录页（矮列表）⇄ 项目页（高网格）
+ *  高度差很大，切换瞬间高度突变会让 .ws-page 的垂直居中排版整体跳一下 */
+const projectsWrap = ref<HTMLElement | null>(null)
+
+/** 切换方向决定过渡编排：进项目页推入、回目录页弹出，路径对称可回放。
+ *  flush pre 在 DOM 更新前触发——此刻旧页仍独占文档流，是容器旧高度
+ *  唯一可靠的测量点（过渡开始后两页短暂同流，测出的混合高度不可用） */
 const navDir = ref<'push' | 'pop'>('push')
+let wrapH0 = 0
 watch(
   () => ws.subPage,
   (v) => {
     navDir.value = v === 'projects' ? 'push' : 'pop'
+    wrapH0 = projectsWrap.value?.offsetHeight ?? 0
   },
 )
+
+/** 高度过渡时长与 CSS 侧对齐（reduce 档降为 200ms 纯透明度） */
+function wspHeightMs(): number {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 200 : 300
+}
+
+/** 入场开始时锁定容器高度并过渡到新页自然高度。
+ *  Vue Transition 的执行顺序是旧页先离场、新页后插入——before-leave
+ *  时新页还不在 DOM，测不到目标高度；enter 钩子在 patch 完成后的
+ *  微任务尾段、浏览器渲染首帧之前触发，此刻新页（el）已在流内，
+ *  offsetHeight 即其自然高度（transform/opacity 不影响）。
+ *  消除的是「撑高 / 塌缩」的瞬间跳动：居中位置随高度一起渐变。
+ *  快速反向切换时 wrapH0 读到的是过渡中间态（offsetHeight 即当前布局值），
+ *  新过渡天然从当前高度续接，不回跳——高度是布局动画，成本仅限本容器
+ *  子树（两页均为静态文本布局），换来零跳动 */
+function onWspEnter(el: Element): void {
+  const wrap = projectsWrap.value
+  if (!wrap || wrapH0 <= 0) return
+  const to = el instanceof HTMLElement ? el.offsetHeight : 0
+  if (to <= 0 || Math.abs(to - wrapH0) < 1) return
+  wrap.style.height = `${wrapH0}px`
+  wrap.style.transition = `height ${wspHeightMs()}ms var(--ease-soft)`
+  void wrap.offsetHeight // 强制布局，确保过渡从旧高度起步
+  wrap.style.height = `${to}px`
+}
+
+/** 任一页过渡结束都清锁高（幂等）：auto 恰为新页自然高度，回落无跳 */
+function onWspAfterEnter(): void {
+  clearWspHeight()
+}
+function onWspAfterLeave(): void {
+  clearWspHeight()
+}
+function clearWspHeight(): void {
+  const wrap = projectsWrap.value
+  if (!wrap) return
+  wrap.style.height = ''
+  wrap.style.transition = ''
+}
 
 /** 点击目录行 / 「使用」：切换到该目录并进入工作项目页。
  *  ⋯ 触发器与其下拉面板上的点击不算「进入目录」——不能在这里
@@ -551,8 +598,13 @@ onMounted(() => {
       </div>
 
       <!-- ② 工作区：工作目录页 ⇄ 工作项目页 两级导航 -->
-      <div v-else key="projects" class="projects-wrap">
-        <Transition :name="navDir === 'push' ? 'wsp-push' : 'wsp-pop'">
+      <div v-else key="projects" class="projects-wrap" ref="projectsWrap">
+        <Transition
+          :name="navDir === 'push' ? 'wsp-push' : 'wsp-pop'"
+          @enter="onWspEnter"
+          @after-enter="onWspAfterEnter"
+          @after-leave="onWspAfterLeave"
+        >
           <!-- 页面 ①：工作目录（列表式管理，点击行进入该项目目录的工作项目页） -->
           <section v-if="fsAvailable && ws.subPage === 'dirs'" key="dirs" class="card grow subpage">
             <header class="sec-head">
@@ -1488,27 +1540,33 @@ h1 {
     opacity 300ms var(--ease-soft),
     transform 300ms var(--ease-soft);
 }
-.wsp-push-leave-active,
-.wsp-pop-leave-active {
+/* 离场页必须脱离文档流叠在新页之上；选择器带上 .card.grow.subpage
+   提权——卡片自身的 position: relative（框选基准）优先级更高，
+   会被覆盖成 relative，离场页留在流内把两页高度叠在一起，过渡全程炸跳 */
+.card.grow.subpage.wsp-push-leave-active,
+.card.grow.subpage.wsp-pop-leave-active {
   position: absolute;
   inset: 0 auto auto 0;
   width: 100%;
 }
+/* 位移幅度不超 .ws-page 的 24px padding：transform 溢出会计入滚动区域，
+   超出 padding 就会短暂顶出横向滚动条、挤压内容高度，叠进入场动画里
+   就是一下横向抖动。24/20 与 pop 侧保持镜像，路径对称可回放 */
 .wsp-push-enter-from {
   opacity: 0;
-  transform: translateX(36px);
+  transform: translateX(24px);
 }
 .wsp-push-leave-to {
   opacity: 0;
-  transform: translateX(-28px);
+  transform: translateX(-20px);
 }
 .wsp-pop-enter-from {
   opacity: 0;
-  transform: translateX(-28px);
+  transform: translateX(-20px);
 }
 .wsp-pop-leave-to {
   opacity: 0;
-  transform: translateX(36px);
+  transform: translateX(24px);
 }
 @media (prefers-reduced-motion: reduce) {
   .wsp-push-enter-active,
