@@ -7,6 +7,7 @@ import {
   Droplets,
   Link2,
   Link2Off,
+  LoaderCircle,
   MapPin,
   SlidersHorizontal,
   Square,
@@ -14,15 +15,16 @@ import {
 } from 'lucide-vue-next'
 import { exifSummaryLine } from '@/core/exif'
 import { composeThumb } from '@/core/compose'
-import { isTauri, pickImagePaths } from '@/core/platform'
+import { isTauri, pickDirectory } from '@/core/platform'
 import { croppedSize, isPlainFullCrop } from '@/types/adjust'
 import type { BackgroundLayer, BorderLayer } from '@/types/watermark'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useWatermarkStore } from '@/stores/watermark'
-import { useWorkspaceStore } from '@/stores/workspace'
+import { useWorkspaceStore, type RelinkCandidate } from '@/stores/workspace'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
+import RelinkDialog from '@/components/RelinkDialog.vue'
 
 const images = useImagesStore()
 const ws = useWorkspaceStore()
@@ -137,11 +139,34 @@ const mixedKinds = computed(() => {
   return false
 })
 
-async function relinkActive(): Promise<void> {
-  const a = active.value
-  if (!a) return
-  const [path] = await pickImagePaths('定位原文件')
-  if (path) await ws.relink(a.id, path)
+/* ---------- 失联重定位：选文件夹按文件名匹配，确认窗口里逐条勾选 ---------- */
+
+const relinkOpen = ref(false)
+/** 选文件夹后的扫描与确认后的批量执行都置忙：按钮与窗口按钮就地走字 */
+const relinkBusy = ref(false)
+const relinkCandidates = ref<RelinkCandidate[] | null>(null)
+
+async function relinkFolder(): Promise<void> {
+  if (relinkBusy.value) return
+  const dir = await pickDirectory('选择可能包含源文件的文件夹（按文件名匹配）')
+  if (!dir) return
+  relinkBusy.value = true
+  try {
+    relinkCandidates.value = await ws.matchMissing(dir)
+    relinkOpen.value = true
+  } finally {
+    relinkBusy.value = false
+  }
+}
+
+async function confirmRelink(list: { id: string; path: string; force: boolean }[]): Promise<void> {
+  relinkBusy.value = true
+  try {
+    await ws.relinkBatch(list)
+    relinkOpen.value = false
+  } finally {
+    relinkBusy.value = false
+  }
 }
 
 async function removeSelected(): Promise<void> {
@@ -318,9 +343,11 @@ const marqueeStyle = computed(() => {
       <button
         v-if="isTauri && missingCount > 0"
         class="link warn"
-        @click="relinkActive()"
+        :disabled="relinkBusy"
+        @click="relinkFolder()"
       >
-        <MapPin :size="12" />{{ missingCount }} 张源文件失联，重新定位
+        <LoaderCircle v-if="relinkBusy" :size="12" class="spin" />
+        <MapPin v-else :size="12" />{{ missingCount }} 张源文件失联，重新定位
       </button>
       <template v-if="images.multiSelect">
         <button class="link" @click="images.selectAll()"><Square :size="12" />全选</button>
@@ -345,6 +372,15 @@ const marqueeStyle = computed(() => {
         <AppButton variant="danger" size="sm" @click="confirmRemove">移除</AppButton>
       </div>
     </AppDialog>
+
+    <!-- 失联重定位：文件夹同名匹配结果确认（识别码一致默认勾选） -->
+    <RelinkDialog
+      :open="relinkOpen"
+      :candidates="relinkCandidates ?? []"
+      :busy="relinkBusy"
+      @close="relinkOpen = false"
+      @confirm="confirmRelink"
+    />
   </div>
 </template>
 
@@ -528,5 +564,16 @@ const marqueeStyle = computed(() => {
 }
 .link.warn:hover {
   color: var(--accent-strong);
+}
+.link.warn:disabled {
+  cursor: default;
+}
+.spin {
+  animation: strip-spin 0.9s linear infinite;
+}
+@keyframes strip-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

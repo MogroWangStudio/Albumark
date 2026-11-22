@@ -55,6 +55,17 @@ interface PrjImageRef {
   code: string
 }
 
+/** 失联照片的文件夹匹配候选：确认窗口里逐条展示并让用户勾选 */
+export interface RelinkCandidate {
+  id: string
+  /** 失联照片的原文件名（匹配依据） */
+  name: string
+  /** 文件夹里同名文件的路径；null = 没找到同名文件 */
+  path: string | null
+  /** 同名文件的内容识别码是否与原照片一致 */
+  codeOk: boolean
+}
+
 interface ProjectManifest {
   id: string
   name: string
@@ -1043,31 +1054,105 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         toast('识别码不符：选择的不是原来的那张图', 'error')
         return
       }
-      ref.sourcePath = newPath
-      const format = resolveImageFormat(bytes, newPath)
-      const blob = new Blob([bytes.slice().buffer as ArrayBuffer], {
-        type: imageMime(format ?? 'jpg'),
-      })
-      const item: ImageItem = {
-        id: ref.id,
-        name: ref.name,
-        baseName: ref.name.replace(/\.[^.]+$/, ''),
-        blob,
-        thumbUrl: '',
-        width: 0,
-        height: 0,
-        code: ref.code,
-        sourcePath: newPath,
-        kind: ref.kind,
-        missing: false,
-      }
-      const patch = await processItem(item)
-      images.patchItem(id, { ...item, ...patch })
-      scheduleSave()
+      await applyRelink(ref, bytes, newPath, code)
       toast('已重新链接到源文件', 'success')
     } catch {
       toast('无法读取选择的文件', 'error')
     }
+  }
+
+  /** 把一条引用重连到新文件：写入新路径与识别码、重建内存条目与缩略图。
+   *  单张 relink 与批量 relinkBatch 共用；识别码一致性由调用方负责 */
+  async function applyRelink(ref: PrjImageRef, bytes: Uint8Array, newPath: string, newCode: string): Promise<void> {
+    ref.sourcePath = newPath
+    ref.code = newCode
+    const format = resolveImageFormat(bytes, newPath)
+    const blob = new Blob([bytes.slice().buffer as ArrayBuffer], {
+      type: imageMime(format ?? 'jpg'),
+    })
+    const item: ImageItem = {
+      id: ref.id,
+      name: ref.name,
+      baseName: ref.name.replace(/\.[^.]+$/, ''),
+      blob,
+      thumbUrl: '',
+      width: 0,
+      height: 0,
+      code: newCode,
+      sourcePath: newPath,
+      kind: ref.kind,
+      missing: false,
+    }
+    const patch = await processItem(item)
+    images.patchItem(ref.id, { ...item, ...patch })
+    scheduleSave()
+  }
+
+  /** 按文件名在所选文件夹里匹配失联照片并预校验识别码（仅扫第一层）。
+   *  同名即候选；识别码当场比对，确认窗口据此区分「相符 / 内容不符」 */
+  async function matchMissing(dirPath: string): Promise<RelinkCandidate[]> {
+    const missing = images.items.filter((i) => i.missing)
+    if (!missing.length || !isTauri) return []
+    const entries = await fs.readDir(dirPath).catch(() => [])
+    const files = entries.filter((e) => !e.isDir)
+    const out: RelinkCandidate[] = []
+    for (const m of missing) {
+      const hit = files.find((e) => e.name === m.name)
+      if (!hit) {
+        out.push({ id: m.id, name: m.name, path: null, codeOk: false })
+        continue
+      }
+      const path = await fs.joinPath(dirPath, hit.name)
+      let codeOk = false
+      try {
+        const bytes = await fs.readFile(path)
+        codeOk = !!m.code && (await sha256Hex(bytes)) === m.code
+      } catch {
+        /* 读不到按内容不符处理 */
+      }
+      out.push({ id: m.id, name: m.name, path, codeOk })
+    }
+    return out
+  }
+
+  /** 批量重定位确认后的执行：force 项接受同名但内容有差异的文件，
+   *  识别码随新内容更新（此后失联重定位按新码校对）。逐张读盘校验，
+   *  结果按「成功（含强制数）/ 失败」合并汇报 */
+  async function relinkBatch(list: { id: string; path: string; force: boolean }[]): Promise<void> {
+    if (!manifest.value || !isTauri) return
+    let ok = 0
+    let forced = 0
+    let failed = 0
+    for (const it of list) {
+      const ref = manifest.value.images.find((r) => r.id === it.id)
+      if (!ref) {
+        failed++
+        continue
+      }
+      try {
+        const bytes = await fs.readFile(it.path)
+        const code = await sha256Hex(bytes)
+        const changed = code !== ref.code
+        if (changed && !it.force) {
+          failed++
+          continue
+        }
+        await applyRelink(ref, bytes, it.path, code)
+        ok++
+        if (changed) forced++
+      } catch {
+        failed++
+      }
+    }
+    if (ok) {
+      toast(
+        forced
+          ? `已重新链接 ${ok} 张（其中 ${forced} 张为同名但内容有差异的文件）`
+          : `已重新链接 ${ok} 张源文件`,
+        'success',
+      )
+    }
+    if (failed) toast(`${failed} 张未能重新链接`, 'error')
   }
 
   return {
@@ -1115,6 +1200,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     addFromPaths,
     removeImage,
     relink,
+    matchMissing,
+    relinkBatch,
     flushSave,
   }
 })
