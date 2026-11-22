@@ -19,8 +19,8 @@
 | 路径 | 职责 |
 | --- | --- |
 | `src/core/` | 平台无关纯逻辑：`fs`（文件系统抽象，桌面 plugin-fs / 安卓 Capacitor / 浏览器无能力三态）、`platform`（平台判定）、`archive`（ZIP 流式打包与解包，fflate）、`imageFormat`（按魔数识别 JPG/PNG）、`bg`（背景水印四处同源）、`updater`（更新检查/下载/暂停续传）、`storage` / `format` / `viewmotion` / `longpress` 等工具 |
-| `src/stores/` | Pinia 状态：`workspace`（目录/项目/两级页导航/多选批量）、`watermark`（图层与模板）、`images`、`settings`（主题/更新渠道）、`history`（撤销重做）、`export`、`templates`、`ctxMenu`、`toast` 等 |
-| `src/components/` | 页面与业务组件：`WorkspacePage`（工作目录⇄工作项目两级页）、`PreviewCanvas`、`WatermarkPanel`、`SettingsPage`、`AppTitleBar`（自绘窗控）；`ui/` 通用件（AppButton / AppDialog / AppSlider / AppDropdown / EmojiPicker…） |
+| `src/stores/` | Pinia 状态：`workspace`（目录/项目/两级页导航/多选批量）、`watermark`（图层与模板）、`images`、`settings`（主题/更新渠道）、`updater`（全局更新状态机：检查/下载/暂停/读秒安装/弹窗开合）、`history`（撤销重做）、`export`、`templates`、`ctxMenu`、`toast` 等 |
+| `src/components/` | 页面与业务组件：`WorkspacePage`（工作目录⇄工作项目两级页）、`PreviewCanvas`、`WatermarkPanel`、`SettingsPage`、`UpdateDialog`（软件更新弹窗）、`AppTitleBar`（自绘窗控）；`ui/` 通用件（AppButton / AppDialog / AppSlider / AppDropdown / EmojiPicker…） |
 | `src/workers/` | `render.worker.ts`：底图解码 + 调节的 Worker 合成 |
 | `src-tauri/src/` | Rust 侧：`update.rs` / `relaunch.rs`（下载后退出替换安装包）、`move_to_trash` 回收站命令 |
 | `android/` | Capacitor 工程；版本号在 `android/app/build.gradle` |
@@ -42,7 +42,9 @@
 5. **操作面板与导出**：水印/调节/裁剪/导出四页签；导出范围自选、预计
    大小实算、JPG 保留 EXIF
 6. **设置与通用**：八款主题、自动更新（stable/beta 渠道，GitHub Releases
-   检查 + 下载 + 暂停续传 + 速度显示 + 代理线路切换测速）
+   检查 + 下载 + 暂停续传 + 速度显示 + 代理线路切换测速；检查到新版本
+   自动弹出更新弹窗，集中展示更新日志与下载进度，下载中切走设置页在
+   后台继续）
 
 ## 工作约定（重要）
 
@@ -56,10 +58,12 @@
   （如 `npx vite --port 5201`），浏览器端无文件系统能力时可在 index.html
   临时注入 `window.Capacitor` mock 验证沙箱分支（验证后删除，勿提交）
 - **更新链路命名对齐四项**（动 updater/relaunch/release.yml 前必查）：
-  ① 打包名 `Albumark_{版本}_{平台架构}.zip` ↔ 前端 `templateAssetName()`
-  兜底；② 预发布判定「tag 含 `-`」前端过滤与 CI 一致；③ zip 内文件名
-  固定 Albumark.exe/.dmg/.apk；④ 客户端认领以 Release 实际产物名为准
-  （抓 expanded_assets 片段解析），不要退回硬拼模板
+  1. 打包名 `Albumark_{版本}_{平台架构}.zip` 对应前端 `templateAssetName()`
+     兜底；
+  2. 预发布判定「tag 含 `-`」前端过滤与 CI 一致；
+  3. zip 内文件名固定 Albumark.exe/.dmg/.apk；
+  4. 客户端认领以 Release 实际产物名为准（抓 expanded_assets 片段解析），
+     不要退回硬拼模板
 - **UI 改动调用 kill-ai-slop 与 apple-design 两个 skill**：项目是克制的
   单强调色系统（品牌橙 #FFA72F），新 UI 沿用现有 token（`--dur-hover` /
   `--ease-soft` 等，见 `src/styles/tokens.css`，CSS 变量 43 个全在用）；
@@ -70,6 +74,11 @@
   容器高度过渡钩子挂在 `enter`（Vue Transition 先卸后插，`before-leave`
   时新页还不在 DOM）；位移幅度不得超过 `.ws-page` 的 24px padding
   （transform 溢出会计入滚动区域）
+- **更新链路实现要点**：更新状态机在 `stores/updater.ts` 全局常驻（设置页
+  是 v-if 覆盖页，局部状态会让下载与读秒安装随切页丢失）；更新弹窗
+  `UpdateDialog.vue` 挂在 App.vue 全局层，检查到新版本自动弹出，动作
+  （下载/暂停/继续/取消/安装）收敛在弹窗内，设置页只留检查入口、状态
+  摘要与「查看更新…」重开入口
 - **commit 规范**：中文，`feat|fix: 描述（版本号）` 格式，正文分点；
   完成任务即 commit、**暂不推送**（推送由用户决定）
 - **验收边界**：Tauri WebView 的 UI 用 computer-use 抓不到，真机效果
