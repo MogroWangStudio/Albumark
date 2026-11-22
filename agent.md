@@ -91,6 +91,10 @@
   （SettingsPage.vue 的 navSections / activeSection）；新增设置分组时
   同步更新 navSections 与模板 v-show；选中语言用 --accent-soft + accent
   文字（与 AppTabs 一致），窄屏 ≤640px 折叠为顶部横滑页签
+- **设置项说明用 ui/SettingInfo**：ⓘ 图标放主标题右侧，悬停所在 row
+  浮现、悬停图标弹说明气泡，触屏常显点击切换；只有「说明」类文案收进
+  按钮——动态值（数据路径 / 版本号 / 项目主页）与状态（测速
+  desc-ok/err）保留常显 desc
 - **commit 规范**：中文，`feat|fix: 描述（版本号）` 格式，正文分点；
   完成任务即 commit、**暂不推送**（推送由用户决定）
 - **验收边界**：Tauri WebView 的 UI 用 computer-use 抓不到，真机效果
