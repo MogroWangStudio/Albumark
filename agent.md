@@ -87,6 +87,10 @@
   卡片底下只有纯色背景，毛玻璃没有内容可透却要全量采样合成，叠加入场
   动画每帧重采样，WebView2 上就是切页瞬间的掉帧来源（设置页卡片已改
   `--surface-solid` 实色）；小面积悬浮胶囊（如水印工作室顶栏）不受限
+- **设置页是分栏结构**：左侧 nav 页面列表 + 右侧各组 v-show 内容
+  （SettingsPage.vue 的 navSections / activeSection）；新增设置分组时
+  同步更新 navSections 与模板 v-show；选中语言用 --accent-soft + accent
+  文字（与 AppTabs 一致），窄屏 ≤640px 折叠为顶部横滑页签
 - **commit 规范**：中文，`feat|fix: 描述（版本号）` 格式，正文分点；
   完成任务即 commit、**暂不推送**（推送由用户决定）
 - **验收边界**：Tauri WebView 的 UI 用 computer-use 抓不到，真机效果
