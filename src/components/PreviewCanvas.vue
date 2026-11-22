@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch } from 'vue'
-import { ChevronUp, Pipette } from 'lucide-vue-next'
+import { ChevronUp, Link2Off, MapPin, Pipette } from 'lucide-vue-next'
+import AppButton from '@/components/ui/AppButton.vue'
 import type { BackgroundLayer, WatermarkLayer } from '@/types/watermark'
 import {
   clamp01,
@@ -51,7 +52,7 @@ const props = withDefaults(
   { panelInset: 0, panelSide: 'right', panelBottomInset: 0 },
 )
 
-const emit = defineEmits<{ ctx: [e: MouseEvent] }>()
+const emit = defineEmits<{ ctx: [e: MouseEvent]; relink: [id: string] }>()
 
 const images = useImagesStore()
 const wm = useWatermarkStore()
@@ -181,6 +182,8 @@ let ro: ResizeObserver | null = null
 const assetBmps: AssetMap = new Map()
 
 const active = computed(() => images.active)
+/** 当前照片源文件失联：底图渲染不出内容，占位视图说明原因并给重定位入口 */
+const activeMissing = computed(() => active.value?.missing === true)
 const hasSelection = computed(() => !!wm.selectedId)
 const minZoom = computed(() => Math.min(1, Math.max(0.3, settings.minZoom)))
 const perf = computed(() => perfFor(settings.previewQuality, settings.previewQualityValue))
@@ -2106,6 +2109,22 @@ onBeforeUnmount(() => {
         @contextmenu="emit('ctx', $event)"
       />
       <canvas ref="cvOverlay" class="canvas overlay" aria-hidden="true" />
+      <!-- 源文件失联：底图无内容可渲染，占位说明原因并给重定位入口 -->
+      <div
+        v-if="activeMissing"
+        class="missing-view"
+        @contextmenu="emit('ctx', $event)"
+      >
+        <Link2Off :size="30" :stroke-width="1.6" class="missing-glyph" />
+        <h2>源文件失联</h2>
+        <p v-if="active?.sourcePath" class="missing-path" :title="active.sourcePath">
+          {{ active.sourcePath }}
+        </p>
+        <p class="missing-hint">照片以链接方式入库，源文件被移动 / 删除或暂不可读</p>
+        <AppButton size="sm" variant="primary" @click="emit('relink', active!.id)">
+          <MapPin :size="13" />重新定位源文件…
+        </AppButton>
+      </div>
       <div
         v-if="hasSelection && selRect"
         class="sel"
@@ -2229,6 +2248,43 @@ onBeforeUnmount(() => {
   -webkit-backdrop-filter: var(--blur-material);
   font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-2);
+}
+/* 源文件失联占位：居中说明 + 重定位入口，压住无内容可渲染的画布 */
+.missing-view {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 24px;
+}
+.missing-glyph {
+  color: var(--text-3);
+  margin-bottom: 2px;
+}
+.missing-view h2 {
+  font-size: calc(15px * var(--ui-zoom, 1));
+  font-weight: 600;
+  color: var(--text);
+}
+.missing-path {
+  max-width: min(72%, 520px);
+  /* deslop-ignore-next-line 34 —— 文件路径属代码类内容，与设置页数据位置的 mono 同语义 */
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.missing-hint {
+  font-size: calc(12px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  margin-bottom: 6px;
 }
 .render-spin {
   width: 10px;

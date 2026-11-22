@@ -388,16 +388,16 @@ function onPhotoCtx(e: MouseEvent, id: string): void {
     },
     ...presetItems,
     item?.missing
-      ? {
-          label: '重新定位源文件…',
-          action: () => {
-            void pickImagePaths('定位原文件').then(([p]) => {
-              if (p) void ws.relink(id, p)
-            })
-          },
-        }
+      ? { label: '重新定位源文件…', action: () => relinkOne(id) }
       : { label: '从项目中移除', danger: true, action: () => void ws.removeImage(id) },
   ])
+}
+
+/** 单张重定位：选文件 → 识别码校对 → 重新链接（预览占位按钮与右键共用） */
+function relinkOne(id: string): void {
+  void pickImagePaths('定位原文件').then(([p]) => {
+    if (p) void ws.relink(id, p)
+  })
 }
 
 const previewRef = ref<InstanceType<typeof PreviewCanvas> | null>(null)
@@ -598,6 +598,7 @@ onBeforeUnmount(() => {
               :panel-side="panelSide"
               :panel-bottom-inset="panelBottomInset"
               @ctx="onPreviewCtx"
+              @relink="relinkOne"
             />
             <ImportOverlay
               v-show="!hasImages"
