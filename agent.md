@@ -86,7 +86,13 @@
 - **性能红线**：全屏页（设置页等）卡片禁止大面积 `backdrop-filter`——
   卡片底下只有纯色背景，毛玻璃没有内容可透却要全量采样合成，叠加入场
   动画每帧重采样，WebView2 上就是切页瞬间的掉帧来源（设置页卡片已改
-  `--surface-solid` 实色）；小面积悬浮胶囊（如水印工作室顶栏）不受限
+  `--surface-solid` 实色）；小面积悬浮胶囊（如水印工作室顶栏）不受限；
+  持久化写盘一律走 `core/storage.ts` 的防抖保存器，禁止在 watch /
+  watchEffect 里直接同步 localStorage
+- **安全基线**：更新资产下载域白名单见 `core/updater.ts` 的
+  TRUSTED_ASSET_HOSTS（github.com / objects.githubusercontent.com），
+  新增检查源时同步维护；zip 解包必须过 sanitizeEntry（zip-slip 防御）；
+  CSP 当前为 null——发版前建议收紧（需真机回归验证）
 - **设置页是分栏结构**：左侧 nav 页面列表 + 右侧各组 v-show 内容
   （SettingsPage.vue 的 navSections / activeSection）；新增设置分组时
   同步更新 navSections 与模板 v-show；选中语言用 --accent-soft + accent
