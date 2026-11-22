@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ArrowLeft, Check, ChevronDown, Download, ExternalLink, HardDrive, LoaderCircle, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
+import { ArrowLeft, Check, ChevronDown, Download, Droplets, ExternalLink, Eye, HardDrive, Info, LoaderCircle, Palette, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
 import type { DropdownItem } from '@/components/ui/AppDropdown.vue'
@@ -51,6 +51,23 @@ const settings = useSettingsStore()
 const ws = useWorkspaceStore()
 const fonts = useFontsStore()
 const updater = useUpdaterStore()
+
+/* ---------- 侧边页面列表：点击左侧分组，右侧只显示该组内容 ---------- */
+
+type SettingsSection = 'appearance' | 'preview' | 'import' | 'data' | 'about'
+const activeSection = ref<SettingsSection>('appearance')
+
+/** 分组沿用既有内容划分；「数据」组仅桌面有 */
+const navSections = computed<{ id: SettingsSection; label: string; icon: Component }[]>(() => {
+  const list: { id: SettingsSection; label: string; icon: Component }[] = [
+    { id: 'appearance', label: '外观', icon: Palette },
+    { id: 'preview', label: '预览', icon: Eye },
+    { id: 'import', label: '水印与导入', icon: Droplets },
+  ]
+  if (isTauri) list.push({ id: 'data', label: '数据', icon: HardDrive })
+  list.push({ id: 'about', label: '关于', icon: Info })
+  return list
+})
 
 const themeModel = computed({
   get: () => settings.theme,
@@ -255,8 +272,25 @@ async function relaunchOobe(): Promise<void> {
       <AppWindowControls />
     </header>
 
-    <div class="body">
-      <section class="group">
+    <div class="shell">
+      <!-- 侧边页面列表：与 macOS 系统设置同构的分页导航；选中语言同 AppTabs -->
+      <aside class="nav" role="tablist" aria-label="设置分组">
+        <button
+          v-for="s in navSections"
+          :key="s.id"
+          class="nav-item"
+          :class="{ on: activeSection === s.id }"
+          role="tab"
+          :aria-selected="activeSection === s.id"
+          @click="activeSection = s.id"
+        >
+          <component :is="s.icon" :size="15" />
+          <span>{{ s.label }}</span>
+        </button>
+      </aside>
+
+      <div class="body">
+      <section v-show="activeSection === 'appearance'" class="group">
         <h2>外观</h2>
         <div class="row col">
           <div class="text">
@@ -395,7 +429,7 @@ async function relaunchOobe(): Promise<void> {
         </template>
       </section>
 
-      <section class="group">
+      <section v-show="activeSection === 'preview'" class="group">
         <h2>预览</h2>
         <div class="row col">
           <div class="text">
@@ -441,7 +475,7 @@ async function relaunchOobe(): Promise<void> {
         </div>
       </section>
 
-      <section class="group">
+      <section v-show="activeSection === 'import'" class="group">
         <h2>水印与导入</h2>
         <div class="row">
           <div class="text">
@@ -457,7 +491,7 @@ async function relaunchOobe(): Promise<void> {
         </div>
       </section>
 
-      <section v-if="isTauri" class="group">
+      <section v-if="isTauri" v-show="activeSection === 'data'" class="group">
         <h2>数据</h2>
         <div class="row col">
           <div class="text">
@@ -471,7 +505,7 @@ async function relaunchOobe(): Promise<void> {
         </div>
       </section>
 
-      <section class="group">
+      <section v-show="activeSection === 'about'" class="group">
         <h2>关于</h2>
         <!-- 软件文字标识：与顶栏左上角同一品牌资产，居中展示 -->
         <div class="brand-lockup" aria-hidden="true">
@@ -567,6 +601,7 @@ async function relaunchOobe(): Promise<void> {
           </a>
         </div>
       </section>
+      </div>
     </div>
 
     <!-- 试播层：与启动时同一个组件，按当前选择播放一次后自动卸载 -->
@@ -616,9 +651,53 @@ async function relaunchOobe(): Promise<void> {
 .flex {
   flex: 1;
 }
-.body {
+/* 左右分栏：侧边页面列表 + 当前组内容（macOS 系统设置同构） */
+.shell {
   flex: 1;
   min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+.nav {
+  width: 200px;
+  flex: none;
+  border-right: 1px solid var(--line);
+  padding: 14px 10px calc(14px + var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  user-select: none;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 12px;
+  border-radius: var(--r-m);
+  border: none;
+  background: none;
+  text-align: left;
+  font-size: calc(13px * var(--ui-zoom, 1));
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background var(--dur-hover) var(--ease-soft),
+    color var(--dur-hover) var(--ease-soft);
+}
+.nav-item:hover:not(.on) {
+  background: var(--hover);
+  color: var(--text);
+}
+/* 选中语言与 AppTabs 一致：柔色底 + 主题色文字，不加新色相 */
+.nav-item.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.body {
+  flex: 1;
+  min-width: 0;
   overflow-y: auto;
   /* 切页时滚动条常驻，居中内容不会横向抖一下 */
   scrollbar-gutter: stable both-edges;
@@ -627,6 +706,28 @@ async function relaunchOobe(): Promise<void> {
   flex-direction: column;
   gap: 14px;
   align-items: center;
+}
+/* 窄屏（安卓竖屏）：侧边列表折叠为顶部横滑页签 */
+@media (max-width: 640px) {
+  .shell {
+    flex-direction: column;
+  }
+  .nav {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .nav-item {
+    flex: none;
+    padding: 6px 14px;
+    border-radius: 999px;
+  }
 }
 .group {
   width: min(640px, 100%);
