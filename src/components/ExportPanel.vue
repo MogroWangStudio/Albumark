@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Check, FolderOpen, Images, Package, Share2 } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
+import ExportPickDialog from '@/components/ExportPickDialog.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
@@ -78,6 +79,16 @@ watch(
   },
 )
 
+/* ---------- 自选快捷操作：全选 / 清空 / 框选弹窗 ---------- */
+
+const pickDialogOpen = ref(false)
+
+/** 框选弹窗确认：整批替换自选集合 */
+function applyPicked(ids: Set<string>): void {
+  ex.setPicked(ids)
+  pickDialogOpen.value = false
+}
+
 const scopeCountText = computed(() =>
   ex.scope === 'picked' ? `已选 ${ex.pickedCount} / ${images.items.length} 张` : `共 ${images.items.length} 张`,
 )
@@ -152,6 +163,14 @@ async function start(): Promise<void> {
             { value: 'picked', label: '自选' },
           ]"
         />
+        <!-- 自选快捷操作：批量勾选不必逐张点击 -->
+        <div v-if="ex.scope === 'picked'" class="pick-actions">
+          <AppButton size="sm" variant="ghost" @click="ex.pickAll">全部选择</AppButton>
+          <AppButton size="sm" variant="ghost" :disabled="!ex.pickedCount" @click="ex.clearPick">
+            取消全选
+          </AppButton>
+          <AppButton size="sm" variant="ghost" @click="pickDialogOpen = true">多个框选…</AppButton>
+        </div>
         <!-- 自选网格：点击缩略图勾选 / 取消，超出面板高度内部滚动 -->
         <div v-if="ex.scope === 'picked'" class="pick-grid">
           <button
@@ -284,6 +303,15 @@ async function start(): Promise<void> {
         </div>
       </div>
     </template>
+
+    <!-- 框选弹窗：拖框 / shift 连续选段，确认后整批替换自选集合 -->
+    <ExportPickDialog
+      :open="pickDialogOpen"
+      :items="images.items"
+      :initial="ex.picked"
+      @close="pickDialogOpen = false"
+      @apply="applyPicked"
+    />
   </div>
 </template>
 
@@ -319,6 +347,11 @@ async function start(): Promise<void> {
   font-size: calc(11px * var(--ui-zoom, 1));
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
+}
+.pick-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
 }
 .pick-grid {
   display: grid;

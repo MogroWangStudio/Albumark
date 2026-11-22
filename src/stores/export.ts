@@ -39,6 +39,16 @@ export const useExportStore = defineStore('export', () => {
     picked.value = new Set(images.items.map((i) => i.id))
   }
 
+  /** 清空自选勾选（取消全选按钮；框选弹窗的替换式应用也走这里） */
+  function clearPick(): void {
+    picked.value = new Set()
+  }
+
+  /** 整批替换自选集合：框选弹窗确认后应用 */
+  function setPicked(ids: Set<string>): void {
+    picked.value = ids
+  }
+
   const pickedCount = computed(() => picked.value.size)
 
   const phase = ref<'idle' | 'running' | 'done'>('idle')
@@ -231,6 +241,8 @@ export const useExportStore = defineStore('export', () => {
     pickedCount,
     togglePick,
     pickAll,
+    clearPick,
+    setPicked,
     estimate,
     estimating,
     refreshEstimate,
