@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
 import { ArrowLeft, Check, ChevronDown, Download, Droplets, ExternalLink, Eye, HardDrive, Info, LoaderCircle, Palette, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
+import SettingInfo from '@/components/ui/SettingInfo.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
 import type { DropdownItem } from '@/components/ui/AppDropdown.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
@@ -368,16 +369,14 @@ async function relaunchOobe(): Promise<void> {
         </div>
         <div class="row">
           <div class="text">
-            <span class="label">启动动画</span>
-            <p class="desc">启动时的品牌动画，关闭后直接进入界面</p>
+            <span class="label">启动动画<SettingInfo tip="启动时的品牌动画，关闭后直接进入界面" /></span>
           </div>
           <AppSwitch v-model="settings.bootEnabled" />
         </div>
         <template v-if="settings.bootEnabled">
           <div class="row col">
             <div class="text">
-              <span class="label">动画款式</span>
-              <p class="desc">八款编排各不相同；「随机」会在每次启动时抽一款</p>
+              <span class="label">动画款式<SettingInfo tip="八款编排各不相同；「随机」会在每次启动时抽一款" /></span>
             </div>
             <div class="styles" role="radiogroup" aria-label="启动动画款式">
               <button
@@ -403,8 +402,7 @@ async function relaunchOobe(): Promise<void> {
           </div>
           <div class="row col">
             <div class="text">
-              <span class="label">动画时长</span>
-              <p class="desc">整段动画的总长，随机款式同样按这个时长播放</p>
+              <span class="label">动画时长<SettingInfo tip="整段动画的总长，随机款式同样按这个时长播放" /></span>
             </div>
             <AppSlider
               v-model="bootDurationModel"
@@ -419,8 +417,7 @@ async function relaunchOobe(): Promise<void> {
           </div>
           <div class="row preview-row">
             <div class="text">
-              <span class="label">预览效果</span>
-              <p class="desc">按当前款式与时长播放一次，不会改动任何设置</p>
+              <span class="label">预览效果<SettingInfo tip="按当前款式与时长播放一次，不会改动任何设置" /></span>
             </div>
             <AppButton size="sm" @click="previewBoot">
               <Play :size="13" />{{ previewing ? '重新预览' : '预览动画' }}
@@ -551,8 +548,7 @@ async function relaunchOobe(): Promise<void> {
         </div>
         <div class="row">
           <div class="text">
-            <span class="label">更新通道</span>
-            <p class="desc">{{ channelDesc }}</p>
+            <span class="label">更新通道<SettingInfo :tip="channelDesc" /></span>
           </div>
           <AppSegment v-model="channelModel" :options="UPDATE_CHANNELS" small />
         </div>
