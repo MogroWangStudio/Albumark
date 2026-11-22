@@ -39,7 +39,9 @@
 3. **水印工作室**：独立页面，图层式（文本/图像/EXIF 令牌），九宫格锚点
    + 像素距离定位，平铺整图，按工作项目隔离，内置模板 7 个
 4. **快速辑录 + 预览画布**：Worker 分层渲染、切图保持缩放、方向键切图、
-   自定义右键菜单（`core/longpress.ts` + `stores/ctxMenu.ts`）、性能档位
+   自定义右键菜单（`core/longpress.ts` + `stores/ctxMenu.ts`）、性能档位；
+   失联照片渲染区占位（`PreviewCanvas.vue` 的 missing-view，relink 事件
+   由 App.vue 的 relinkOne 处理）
 5. **操作面板与导出**：水印/调节/裁剪/导出四页签；导出范围自选（全部
    选择/取消全选/框选弹窗 `ExportPickDialog.vue`——拖框相交 + Shift 连续
    选段）、预计大小实算、JPG 保留 EXIF
