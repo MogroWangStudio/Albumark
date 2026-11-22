@@ -240,6 +240,11 @@ async function resolveAsset(
   return hits.sort((a, b) => score(b) - score(a))[0]
 }
 
+/** 资产下载只认 GitHub 的发布域：清单 HTML 若被注入第三方绝对链接
+ *  （gh-proxy 代理链路会转发任意目标），更新链路不能沦为任意内容
+ *  下载通道——非受信域的条目直接跳过 */
+const TRUSTED_ASSET_HOSTS = new Set(['github.com', 'objects.githubusercontent.com'])
+
 /** 从资产清单 HTML 片段里取所有资产链接（相对路径补成绝对地址） */
 function parseAssetLinks(html: string): { name: string; url: string }[] {
   const out: { name: string; url: string }[] = []
@@ -252,9 +257,15 @@ function parseAssetLinks(html: string): { name: string; url: string }[] {
     } catch {
       /* 非法编码原样使用 */
     }
-    const url = href.startsWith('http') ? href : `https://github.com${href}`
-    const name = url.split('/').pop() ?? ''
-    if (name) out.push({ name, url })
+    let parsed: URL
+    try {
+      parsed = new URL(href.startsWith('http') ? href : `https://github.com${href}`)
+    } catch {
+      continue
+    }
+    if (!TRUSTED_ASSET_HOSTS.has(parsed.hostname)) continue
+    const name = parsed.pathname.split('/').pop() ?? ''
+    if (name) out.push({ name, url: parsed.toString() })
   }
   return out
 }

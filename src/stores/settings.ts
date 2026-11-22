@@ -2,7 +2,7 @@ import { ref, watchEffect } from 'vue'
 import { defineStore } from 'pinia'
 import { registerPlugin } from '@capacitor/core'
 import { isCapacitor, isTauri } from '@/core/platform'
-import { loadJson, saveJson } from '@/core/storage'
+import { createDebouncedSaver, loadJson, saveJson } from '@/core/storage'
 import type { UpdateChannel, UpdateSource } from '@/core/updater'
 
 export type ThemeMode =
@@ -355,11 +355,19 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  /* persist 走防抖：拖滑杆（时长 / 质量值 / 字号）等连续变更曾每帧同步
+     JSON.stringify + 写 localStorage（主线程阻塞 I/O），合并为静默 300ms
+     一次；beforeunload flush 保证退出前落盘 */
+  const persistSaver = createDebouncedSaver(persist, 300)
+  window.addEventListener('beforeunload', () => {
+    persistSaver.flush()
+  })
+
   watchEffect(() => {
     applyTheme()
     applyFont()
     applyZoom()
-    persist()
+    persistSaver.schedule()
     void syncSystemBars()
   })
 
