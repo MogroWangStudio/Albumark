@@ -3,6 +3,7 @@ import { applyAdjustments } from '../core/adjust'
 import {
   backgroundAspect,
   blurRadiusPx,
+  borderTotals,
   layoutBackgroundFrame,
   paintBorderBand,
   paintOverlay,
@@ -23,6 +24,13 @@ export interface RenderJob {
   crop?: Crop
   /** 长边上限（像素），0 表示原图尺寸 */
   maxSize: number
+  /**
+   * 解码位图相对原图的缩放（≤1）。水印偏移 / 边框宽度 / 背景偏移与圆角都是
+   * 「原图尺度」像素，必须按「原图 → 当前画布」的系数换算；预览为省内存会
+   * 先把源图降采样解码，此时取样系数 scale 只到解码位图为止，两者相乘才是
+   * 与导出（全分辨率解码）同源的 pxScale。缺省 1（导出 / 全分辨率解码）。
+   */
+  sourceScale?: number
   /** JPEG 质量 0-1（PNG 编码忽略） */
   quality: number
   want: 'bitmap' | 'jpeg' | 'png'
@@ -91,6 +99,13 @@ async function handle(job: RenderJob): Promise<void> {
 
   const long = Math.max(sw, sh)
   const scale = job.maxSize > 0 ? Math.min(1, job.maxSize / long) : 1
+  /**
+   * 「原图尺度」长度（水印偏移 / 边框宽度 / 背景偏移与圆角）→ 本次画布的
+   * 换算系数。预览会把源图先降采样再交给 Worker，scale 只能换算到解码位图；
+   * 乘上 sourceScale 才回到原图基准，与导出（全分辨率解码、sourceScale=1）
+   * 完全同源——这是缩放查看时水印 / 圆角不漂移的前提。
+   */
+  const pxScale = scale * Math.max(0.0001, job.sourceScale ?? 1)
   const w = Math.max(1, Math.round(sw * scale))
   const h = Math.max(1, Math.round(sh * scale))
 
@@ -136,7 +151,7 @@ async function handle(job: RenderJob): Promise<void> {
   // 组合（拖动 / 滑杆零 Worker 往返），Worker 只输出照片 + 边框环带位图；
   // 导出（jpeg/png）在这里完整合成
   const composeBg = job.want !== 'bitmap' && bgLayers.length > 0
-  const scaled = (v: number): number => (v > 0 ? Math.max(1, Math.round(v * scale)) : 0)
+  const scaled = (v: number): number => (v > 0 ? Math.max(1, Math.round(v * pxScale)) : 0)
   let framed: OffscreenCanvas = canvas
   let fw = w
   let fh = h
@@ -145,12 +160,12 @@ async function handle(job: RenderJob): Promise<void> {
   if (bgLayers.length > 0) {
     // 边框环带：贴照片外围，不扩展画布（预览 / 导出同一实现）。
     // 传入的 canvas 必是 OffscreenCanvas：无边框时原样返回、有边框时返回新画布
-    const band = paintBorderBand(canvas, borders, scale)
+    const band = paintBorderBand(canvas, borders, pxScale)
     framed = band as OffscreenCanvas
     if (composeBg) {
       // 完整合成（导出）：背景 → 照片（缩放 / 偏移 / 圆角 / 阴影）→ 水印
       const bg = bgLayers[0]
-      const layout = layoutBackgroundFrame(bg, w, h, backgroundAspect(bg, w, h), scale)
+      const layout = layoutBackgroundFrame(bg, w, h, backgroundAspect(bg, w, h), pxScale)
       const frame = new OffscreenCanvas(layout.frameW, layout.frameH)
       const fctx = frame.getContext('2d') as OffscreenCanvasRenderingContext2D
       // 列表靠前者更贴近照片（更上层）：从列表末尾往前画
@@ -168,19 +183,24 @@ async function handle(job: RenderJob): Promise<void> {
         fctx.drawImage(blurred, 0, 0)
         paintOverlay(fctx, b, layout.frameW, layout.frameH)
       }
-      paintPhotoOnBackground(fctx, band, w, h, layout, bg, borders, scale)
+      paintPhotoOnBackground(fctx, band, w, h, layout, bg, borders, pxScale)
       measureCtx()
-      // pxScale = scale：水印 offset 是原图尺度像素，与边框 / 背景偏移同样折算
-      drawLayers(fctx, layout.frameW, layout.frameH, pictureLayers, assetCache, scale)
+      // pxScale：水印 offset 是原图尺度像素，与边框 / 背景偏移同样折算
+      drawLayers(fctx, layout.frameW, layout.frameH, pictureLayers, assetCache, pxScale)
       framed = frame
       fw = layout.frameW
       fh = layout.frameH
       photoOffset = { x: Math.round(layout.photoX), y: Math.round(layout.photoY) }
     } else {
-      // 预览：输出照片 + 环带位图，几何信息交给主线程组合
+      // 预览：输出照片 + 环带位图，几何信息交给主线程组合。
+      // 环带左右 / 上下可以不等宽，照片偏移按各自的环带宽度报（不能再用居中假设）
+      const tot = borderTotals(borders)
       fw = band.width
       fh = band.height
-      photoOffset = { x: Math.round((fw - w) / 2), y: Math.round((fh - h) / 2) }
+      photoOffset = {
+        x: Math.round(tot.left * pxScale),
+        y: Math.round(tot.top * pxScale),
+      }
     }
   } else {
     // 无背景水印：边框逐层向外扩展画布，图层列表靠前者更贴近照片。
@@ -224,8 +244,8 @@ async function handle(job: RenderJob): Promise<void> {
 
   measureCtx()
   const outCtx = framed.getContext('2d') as OffscreenCanvasRenderingContext2D
-  // pxScale = scale：水印 offset 是原图尺度像素，预览（缩小渲染）与导出必须同一折算
-  drawLayers(outCtx, fw, fh, pictureLayers, assetCache, scale)
+  // pxScale：水印偏移是原图尺度像素，预览（缩小 / 降采样渲染）与导出必须同一折算
+  drawLayers(outCtx, fw, fh, pictureLayers, assetCache, pxScale)
 
   if (job.want === 'bitmap') {
     const out = await createImageBitmap(framed)
@@ -237,7 +257,8 @@ async function handle(job: RenderJob): Promise<void> {
         /** 照片（不含边框环带）在输出位图中的位置与尺寸，预览主线程组合用 */
         photoOffset,
         photoSize: { w, h },
-        renderScale: scale,
+        /** 原图尺度 → 输出位图的真实换算系数（已含解码降采样） */
+        renderScale: pxScale,
       },
       [out, job.bitmap],
     )

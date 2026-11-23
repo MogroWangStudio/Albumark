@@ -5,6 +5,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import { APP_VERSION } from '@/core/version'
 import { openReleasePage } from '@/core/updater'
+import { isCapacitor } from '@/core/platform'
 import { useUpdaterStore } from '@/stores/updater'
 
 const updater = useUpdaterStore()
@@ -18,7 +19,7 @@ const fillWidth = computed(() =>
 <template>
   <AppDialog
     :open="updater.dialogOpen"
-    title="软件更新"
+    :title="updater.isDowngrade ? '版本回退' : '软件更新'"
     :width="520"
     @close="updater.closeDialog"
   >
@@ -27,7 +28,16 @@ const fillWidth = computed(() =>
       <div class="ver-row">
         <span class="ver">v{{ APP_VERSION }}</span>
         <ArrowRight :size="14" class="ver-arrow" />
-        <span class="ver new">v{{ updater.updateInfo.version }}</span>
+        <span class="ver new" :class="{ down: updater.isDowngrade }">v{{ updater.updateInfo.version }}</span>
+      </div>
+
+      <!-- 降级警告：覆盖安装、不可自动回滚，先讲清代价再给下载入口 -->
+      <div v-if="updater.isDowngrade" class="downgrade-warn">
+        <p>
+          这是降级安装：旧版本会覆盖当前版本，且不会自动回滚。项目数据与设置可能已被新版本改写，
+          旧版本未必能完整读取，可能出现不可逆的 bug——建议先备份工作目录。
+        </p>
+        <p v-if="isCapacitor">安卓系统不允许覆盖安装更低版本，需先卸载当前应用，本地应用数据会一并清除。</p>
       </div>
 
       <!-- 下载与安装状态：进度条 + 就地走字的状态行 -->
@@ -92,7 +102,7 @@ const fillWidth = computed(() =>
           </template>
           <template v-else>
             <AppButton size="sm" variant="primary" @click="updater.installUpdate">
-              <Download :size="13" />立即更新
+              <Download :size="13" />{{ updater.isDowngrade ? '下载并降级' : '立即更新' }}
             </AppButton>
             <AppButton size="sm" variant="ghost" @click="openReleasePage(updater.updateInfo.url)">
               <ExternalLink :size="13" />发布页
@@ -130,8 +140,26 @@ const fillWidth = computed(() =>
   color: var(--accent);
   font-weight: 600;
 }
+.ver.new.down {
+  color: var(--danger);
+}
 .ver-arrow {
   color: var(--text-3);
+}
+
+/* 降级警告：与版本列表里的确认块同语义（危险色描边 + 低浓背景） */
+.downgrade-warn {
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border-radius: var(--r-s);
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  font-size: calc(12px * var(--ui-zoom, 1));
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.downgrade-warn p + p {
+  margin-top: 4px;
 }
 
 .progress-area {

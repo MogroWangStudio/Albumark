@@ -108,7 +108,9 @@ export class RenderClient {
   }
 
   /** 预览渲染：返回合成结果位图，源位图随 srcBack 归还以供复用。
-   *  含背景水印时位图为「照片 + 边框环带」，几何信息随结果返回供主线程组合。 */
+   *  含背景水印时位图为「照片 + 边框环带」，几何信息随结果返回供主线程组合。
+   *  sourceScale：传给 Worker 的源图相对原图缩放（预览降采样解码时 <1），
+   *  用于把水印偏移 / 边框 / 背景偏移换算到原图基准，与导出保持一致。 */
   async renderPreview(
     src: ImageBitmap,
     assets: AssetPayload[],
@@ -116,6 +118,7 @@ export class RenderClient {
     adjustments: Adjustments,
     maxSize: number,
     crop?: Crop,
+    sourceScale = 1,
   ): Promise<{
     bitmap: ImageBitmap
     srcBack: ImageBitmap
@@ -124,7 +127,17 @@ export class RenderClient {
     renderScale: number
   }> {
     const res = await this.request(
-      { bitmap: src, assets, layers, adjustments, crop, maxSize, quality: 0.92, want: 'bitmap' },
+      {
+        bitmap: src,
+        assets,
+        layers,
+        adjustments,
+        crop,
+        maxSize,
+        quality: 0.92,
+        want: 'bitmap',
+        sourceScale,
+      },
       [src],
     )
     if (!res.bitmap) throw new Error('预览渲染失败')

@@ -35,6 +35,8 @@ const DOWNLOAD_BASE = `https://github.com/${REPO}/releases/download`
 const RELEASES_PAGE = `https://github.com/${REPO}/releases`
 /** Release 资产清单（GitHub Releases 页面用的 HTML 片段，含每个资产的下载链接） */
 const EXPANDED_ASSETS = `https://github.com/${REPO}/releases/expanded_assets`
+/** 版本列表：REST 接口一次取全（含预发布与全部资产），失败再退回 atom 摘要源 */
+const API_RELEASES = `https://api.github.com/repos/${REPO}/releases?per_page=100`
 
 /**
  * gh-proxy 加速前缀：按官方用法把原始 GitHub URL 整段拼在其后
@@ -63,35 +65,81 @@ function parseVersion(v: string): { core: number[]; pre: string } {
 
 /** 比较 semver：a 是否比 b 新（支持 2.1.0-beta.1 这类预发布号，规则同 semver） */
 function isNewer(a: string, b: string): boolean {
+  return compareVersions(a, b) > 0
+}
+
+/**
+ * 版本号比较：a 比 b 新返回正数，旧返回负数，相同返回 0。
+ * 主版本段按数值比；正式版比预发布新；预发布段按下方自然序规则比。
+ * 导出给设置页的版本列表排序与「当前 / 更新 / 降级」判定共用。
+ */
+export function compareVersions(a: string, b: string): number {
   const pa = parseVersion(a)
   const pb = parseVersion(b)
   const len = Math.max(pa.core.length, pb.core.length)
   for (let i = 0; i < len; i++) {
     const x = pa.core[i] ?? 0
     const y = pb.core[i] ?? 0
-    if (x !== y) return x > y
+    if (x !== y) return x > y ? 1 : -1
   }
-  // 主版本段相同：正式版比预发布新；都是预发布按点段比较（数字段比数值，缺段的更旧）
-  if (!pa.pre || !pb.pre) return !pa.pre && !!pb.pre
-  const sa = pa.pre.split('.')
-  const sb = pb.pre.split('.')
+  // 主版本段相同：正式版比预发布新
+  if (!pa.pre && !pb.pre) return 0
+  if (!pa.pre) return 1
+  if (!pb.pre) return -1
+  return comparePrerelease(pa.pre, pb.pre)
+}
+
+/** 预发布标签逐段比较（beta.10 > beta.9；缺段的一方更旧） */
+function comparePrerelease(a: string, b: string): number {
+  const sa = a.split('.')
+  const sb = b.split('.')
   for (let i = 0; i < Math.max(sa.length, sb.length); i++) {
     const x = sa[i]
     const y = sb[i]
-    if (x === undefined) return false
-    if (y === undefined) return true
+    if (x === undefined) return -1
+    if (y === undefined) return 1
     if (x === y) continue
-    const nx = Number(x)
-    const ny = Number(y)
-    const numCmp = !Number.isNaN(nx) && !Number.isNaN(ny)
-    // semver：数字标识符总比字母标识符新；同为字母按字典序
-    if (numCmp) return nx > ny
-    const xIsNum = !Number.isNaN(Number(x))
-    const yIsNum = !Number.isNaN(Number(y))
-    if (xIsNum !== yIsNum) return xIsNum
-    return x > y
+    const c = compareIdentifier(x, y)
+    if (c !== 0) return c
   }
-  return false
+  return 0
+}
+
+/**
+ * 单段标识符比较：段内再按「字母段 / 数字段」自然切分——本项目版本号写作
+ * beta1…beta10，整段按字典序比会把 beta10 判成比 beta9 旧（'1' < '9'），
+ * 于是 beta10 用户被提示「有新版本 beta9」。数字段按数值比，字母段按字典序；
+ * 数字段比字母段新（semver）。
+ */
+function compareIdentifier(a: string, b: string): number {
+  const ra = a.match(/\d+|\D+/g) ?? []
+  const rb = b.match(/\d+|\D+/g) ?? []
+  for (let i = 0; i < Math.max(ra.length, rb.length); i++) {
+    const x = ra[i]
+    const y = rb[i]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    if (x === y) continue
+    const xNum = /^\d+$/.test(x)
+    const yNum = /^\d+$/.test(y)
+    if (xNum && yNum) {
+      const c = compareNumeric(x, y)
+      if (c !== 0) return c
+      continue
+    }
+    if (xNum !== yNum) return xNum ? 1 : -1
+    return x < y ? -1 : 1
+  }
+  return 0
+}
+
+/** 纯数字串比较：去前导零后先比长度再比字典序（避免 Number 精度与大数溢出） */
+function compareNumeric(a: string, b: string): number {
+  const x = a.replace(/^0+(?=\d)/, '')
+  const y = b.replace(/^0+(?=\d)/, '')
+  if (x.length !== y.length) return x.length > y.length ? 1 : -1
+  if (x === y) return 0
+  return x > y ? 1 : -1
 }
 
 async function fetchText(url: string): Promise<string> {
@@ -110,6 +158,7 @@ interface FeedEntry {
   tag: string
   url: string
   notes: string
+  publishedAt: string
 }
 
 /**
@@ -128,7 +177,8 @@ function parseAtom(xml: string): FeedEntry[] {
     const tag = decodeURIComponent(href.slice(href.indexOf(TAG_PATH) + TAG_PATH.length))
     if (!tag) continue
     const html = entry.getElementsByTagName('content')[0]?.textContent ?? ''
-    out.push({ tag, url: href, notes: htmlToText(html) })
+    const publishedAt = entry.getElementsByTagName('updated')[0]?.textContent ?? ''
+    out.push({ tag, url: href, notes: htmlToText(html), publishedAt })
   }
   return out
 }
@@ -217,8 +267,6 @@ async function resolveAsset(
   version: string,
   source: UpdateSource,
 ): Promise<{ name: string; url: string } | null> {
-  const key = platformKey()
-  if (!key) return null
   let list: { name: string; url: string }[]
   try {
     const html = await fetchText(viaSource(`${EXPANDED_ASSETS}/${tag}`, source))
@@ -226,6 +274,19 @@ async function resolveAsset(
   } catch {
     return null // 清单拉取失败：交给模板兜底
   }
+  return pickAsset(list, version)
+}
+
+/**
+ * 在一组资产里认领本平台包体：先按平台关键词筛，再按「版本号一致 > zip 优先」
+ * 排序。版本列表接口已带回资产，不必再抓 expanded_assets。
+ */
+function pickAsset(
+  list: { name: string; url: string }[],
+  version: string,
+): { name: string; url: string } | null {
+  const key = platformKey()
+  if (!key) return null
   const hits = list.filter((a) => matchPlatform(a.name, key))
   if (!hits.length) return null
   const score = (a: { name: string }): number => {
@@ -275,6 +336,174 @@ function templateAssetName(version: string): string | null {
   const key = platformKey()
   if (!key) return null
   return `Albumark_${version}_${key}.zip`
+}
+
+/* ---------- 版本列表：全部 Release（含预发布），供关于页升降级 ---------- */
+
+/** 版本列表中的一项：一个已发布版本及其元信息 */
+export interface ReleaseEntry {
+  version: string
+  tag: string
+  /** 发布页地址 */
+  url: string
+  notes: string
+  /** 发布时间（ISO 字符串，可能为空） */
+  publishedAt: string | null
+  prerelease: boolean
+  /** Release 上的资产（已过滤非受信域）；atom 兜底时为空，安装前再按 tag 查 */
+  assets: { name: string; url: string }[]
+}
+
+interface ApiRelease {
+  tag_name?: unknown
+  html_url?: unknown
+  body?: unknown
+  published_at?: unknown
+  prerelease?: unknown
+  draft?: unknown
+  assets?: { name?: unknown; browser_download_url?: unknown }[]
+}
+
+/** 资产条目只接受 GitHub 发布域：与下载链路共用同一份白名单 */
+function trustedAsset(name: unknown, url: unknown): { name: string; url: string } | null {
+  if (typeof name !== 'string' || !name || typeof url !== 'string' || !url) return null
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  if (!TRUSTED_ASSET_HOSTS.has(parsed.hostname)) return null
+  return { name, url: parsed.toString() }
+}
+
+/** 常见 HTML 实体（Release 正文里偶有内联标签） */
+const HTML_ENTITIES: Record<string, string> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+  '&nbsp;': ' ',
+}
+
+/**
+ * Release 正文是 Markdown，而更新弹窗 / 版本列表按纯文本排版（外部内容绝不
+ * 注入 DOM）。这里只做「去标记」：标题、引用、列表符号、粗体、行内代码、
+ * 链接与图片都还原成可读文本，不追求完整 Markdown 语义。
+ */
+function markdownToText(md: string): string {
+  let s = md.replace(/<[^>]+>/g, '')
+  for (const [k, v] of Object.entries(HTML_ENTITIES)) s = s.split(k).join(v)
+  s = s.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+  s = s.replace(/^#{1,6}\s+/gm, '')
+  s = s.replace(/^>\s?/gm, '')
+  s = s.replace(/^\s*[-*+]\s+/gm, '· ')
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '$1')
+  s = s.replace(/__([^_\n]+)__/g, '$1')
+  s = s.replace(/`([^`\n]+)`/g, '$1')
+  s = s.replace(/^\s*[-*_]{3,}\s*$/gm, '')
+  return s.replace(/\n{3,}/g, '\n\n').trim().slice(0, 3000)
+}
+
+/** 解析 REST 版本列表：跳过草稿，只保留可识别的 tag */
+function parseApiReleases(json: string): ReleaseEntry[] {
+  const raw: unknown = JSON.parse(json)
+  if (!Array.isArray(raw)) throw new Error('版本列表格式异常')
+  const out: ReleaseEntry[] = []
+  for (const item of raw as ApiRelease[]) {
+    if (!item || item.draft === true) continue
+    const tag = typeof item.tag_name === 'string' ? item.tag_name : ''
+    const version = tag.replace(/^v/, '').trim()
+    if (!version) continue
+    const assets = Array.isArray(item.assets)
+      ? item.assets
+          .map((a) => trustedAsset(a?.name, a?.browser_download_url))
+          .filter((a): a is { name: string; url: string } => !!a)
+      : []
+    out.push({
+      version,
+      tag,
+      url: typeof item.html_url === 'string' ? item.html_url : `${RELEASES_PAGE}/tag/${tag}`,
+      notes: typeof item.body === 'string' ? markdownToText(item.body) : '',
+      publishedAt: typeof item.published_at === 'string' ? item.published_at : null,
+      prerelease: item.prerelease === true || version.includes('-'),
+      assets,
+    })
+  }
+  return out
+}
+
+/** 版本列表缓存：同一次会话里反复开弹窗不重复打接口（匿名 API 有速率限制） */
+let releaseCache: { at: number; source: UpdateSource; list: ReleaseEntry[] } | null = null
+const RELEASE_CACHE_MS = 5 * 60_000
+
+/**
+ * 列出全部发布版本（含预发布），按版本号从新到旧排序。
+ * 优先走 REST（一次拿到说明、日期与资产，覆盖全部历史版本）；接口被限流 /
+ * 不可达时退回 releases.atom 摘要源——它只含最近若干条，属于降级可用状态。
+ */
+export async function listReleases(
+  source: UpdateSource = 'github',
+  force = false,
+): Promise<ReleaseEntry[]> {
+  const now = Date.now()
+  if (!force && releaseCache && releaseCache.source === source && now - releaseCache.at < RELEASE_CACHE_MS) {
+    return releaseCache.list
+  }
+  let list: ReleaseEntry[] | null = null
+  try {
+    list = parseApiReleases(await fetchText(viaSource(API_RELEASES, source)))
+  } catch {
+    list = null
+  }
+  if (!list || !list.length) {
+    try {
+      list = parseAtom(await fetchText(viaSource(ATOM_URL, source))).map((e) => {
+        const version = e.tag.replace(/^v/, '')
+        return {
+          version,
+          tag: e.tag,
+          url: e.url || RELEASES_PAGE,
+          notes: e.notes,
+          publishedAt: e.publishedAt || null,
+          prerelease: version.includes('-'),
+          assets: [],
+        }
+      })
+    } catch {
+      list = null
+    }
+  }
+  if (!list || !list.length) throw new Error('版本列表获取失败')
+  list.sort(
+    (a, b) =>
+      compareVersions(b.version, a.version) ||
+      (b.publishedAt ?? '').localeCompare(a.publishedAt ?? ''),
+  )
+  releaseCache = { at: now, source, list }
+  return list
+}
+
+/**
+ * 把版本列表项转成下载流程需要的 UpdateInfo：资产以 Release 实际清单为准，
+ * 列表接口没带资产（atom 兜底）时再按 tag 抓一次 expanded_assets。
+ */
+export async function releaseToUpdateInfo(
+  entry: ReleaseEntry,
+  source: UpdateSource = 'github',
+): Promise<UpdateInfo> {
+  const picked =
+    pickAsset(entry.assets, entry.version) ??
+    (entry.assets.length ? null : await resolveAsset(entry.tag, entry.version, source))
+  return {
+    version: entry.version,
+    url: entry.url || RELEASES_PAGE,
+    notes: entry.notes,
+    asset: picked?.name ?? templateAssetName(entry.version),
+    assetUrl: picked?.url ?? null,
+  }
 }
 
 export async function openReleasePage(url: string): Promise<void> {
@@ -525,8 +754,8 @@ async function clearStale(dir: string): Promise<void> {
 
 /**
  * 下载当前平台的更新包并暂存：
- * - Release 资产统一为 zip（Albumark_{版本}_{平台}.zip），下载完解出里面的
- *   安装包，只取包内第一个文件（安装包与版本号无关，名字由 CI 打包保证）
+ * - Release 资产多数为 zip（Albumark_{版本}_{平台}.zip），下载完解出里面的
+ *   安装包；beta2 及更早是裸 dmg / exe / apk，按 zip 魔数分流直接暂存
  * - 桌面端：写入暂存目录（Windows 为程序目录 updates/，macOS 为应用数据目录
  *   updates/），返回 stagedPath，安装动作由设置页读秒后触发
  * - 安卓：APK 写入公共 Documents/Albumark/updates/，直接交给系统安装器
@@ -555,15 +784,33 @@ export async function downloadUpdate(
   // 续传时全量数据在缓冲里（暂停前的部分 + 本轮），合并后再解包
   const full = resume ? mergeBuffer(resume) : bytes
 
-  // 解包 zip：安装包（exe / dmg / apk）与版本号无关，zip 内只有一个文件
-  const { unzipSync } = await import('fflate')
-  const files = unzipSync(full)
-  const entry = Object.entries(files).find(([, data]) => data.length > 0)
-  if (!entry) {
-    throw new Error('更新包内容为空，请重新下载或前往下载页手动获取')
+  // 安装包落盘名：产物名 / zip 内条目名只取最后一段，防止路径穿越
+  const payloadName = (name: string): string => name.split(/[\\/]/).pop() || 'Albumark.bin'
+  let payload: Uint8Array
+  let pkgName: string
+  // 产物格式有两代：新格式是 zip（内含安装包）；beta2 及更早是裸 dmg / exe / apk。
+  // 按 zip 魔数分流，旧版本也能走应用内降级，而不是在解压时报错
+  const isZip = full.length > 4 && full[0] === 0x50 && full[1] === 0x4b
+  if (isZip) {
+    let entry: [string, Uint8Array] | undefined
+    try {
+      const { unzipSync } = await import('fflate')
+      entry = Object.entries(unzipSync(full)).find(([, data]) => data.length > 0)
+    } catch {
+      throw new Error('更新包解析失败，请重新下载或前往下载页手动获取')
+    }
+    if (!entry) {
+      throw new Error('更新包内容为空，请重新下载或前往下载页手动获取')
+    }
+    payload = entry[1]
+    pkgName = payloadName(entry[0])
+  } else {
+    payload = full
+    pkgName = payloadName(asset)
+    if (!/\.(exe|dmg|apk)$/i.test(pkgName)) {
+      throw new Error('更新包格式无法识别，请前往下载页手动获取')
+    }
   }
-  const payload = entry[1]
-  const pkgName = entry[0].split(/[\\/]/).pop() ?? 'Albumark.bin'
 
   if (isCapacitor) {
     const { Directory, Filesystem } = await import('@capacitor/filesystem')

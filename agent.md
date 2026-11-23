@@ -7,7 +7,7 @@
 ## 项目概览
 
 **Albumark**——轻量、本地优先的图像批量水印与快速辑录工具。当前版本
-**2.0.0-beta9**（2026-11-23）。
+**2.0.0-beta10**（2026-11-23）。
 
 - 前端：Vue 3 + TypeScript + Vite（Composition API + Pinia）
 - 桌面端：Tauri 2（Rust，`src-tauri/`）
@@ -20,7 +20,7 @@
 | --- | --- |
 | `src/core/` | 平台无关纯逻辑：`fs`（文件系统抽象，桌面 plugin-fs / 安卓 Capacitor / 浏览器无能力三态）、`platform`（平台判定）、`archive`（ZIP 流式打包与解包，fflate）、`imageFormat`（按魔数识别 JPG/PNG）、`bg`（背景水印四处同源）、`updater`（更新检查/下载/暂停续传）、`storage` / `format` / `viewmotion` / `longpress` 等工具 |
 | `src/stores/` | Pinia 状态：`workspace`（目录/项目/两级页导航/多选批量）、`watermark`（图层与模板）、`images`、`settings`（主题/更新渠道）、`updater`（全局更新状态机：检查/下载/暂停/读秒安装/弹窗开合）、`history`（撤销重做）、`export`、`templates`、`ctxMenu`、`toast` 等 |
-| `src/components/` | 页面与业务组件：`WorkspacePage`（工作目录⇄工作项目两级页）、`PreviewCanvas`、`WatermarkPanel`、`SettingsPage`、`UpdateDialog`（软件更新弹窗）、`AppTitleBar`（自绘窗控）；`ui/` 通用件（AppButton / AppDialog / AppSlider / AppDropdown / EmojiPicker…） |
+| `src/components/` | 页面与业务组件：`WorkspacePage`（工作目录⇄工作项目两级页）、`PreviewCanvas`、`WatermarkPanel`、`SettingsPage`、`UpdateDialog`（软件更新 / 版本回退弹窗）、`VersionListDialog`（全部版本列表与升降级确认）、`AppTitleBar`（自绘窗控）；`ui/` 通用件（AppButton / AppDialog / AppSlider / AppDropdown / EmojiPicker…） |
 | `src/workers/` | `render.worker.ts`：底图解码 + 调节的 Worker 合成 |
 | `src-tauri/src/` | Rust 侧：`update.rs` / `relaunch.rs`（下载后退出替换安装包）、`move_to_trash` 回收站命令 |
 | `android/` | Capacitor 工程；版本号在 `android/app/build.gradle` |
@@ -40,22 +40,25 @@
    + 像素距离定位，平铺整图，按工作项目隔离，内置模板 7 个
 4. **快速辑录 + 预览画布**：Worker 分层渲染、切图保持缩放、方向键切图、
    自定义右键菜单（`core/longpress.ts` + `stores/ctxMenu.ts`）、性能档位；
-   失联照片渲染区占位（`PreviewCanvas.vue` 的 missing-view，relink 事件
-   由 App.vue 的 relinkOne 处理）
+   水印 / 边框 / 背景照片几何按「原图尺度」换算，缩放补渲不改变构图
+   （详见下方几何约定）；进出裁剪页保持缩放与位置；失联照片渲染区占位
+   （`PreviewCanvas.vue` 的 missing-view，relink 事件由 App.vue 的
+   relinkOne 处理）
 5. **操作面板与导出**：水印/调节/裁剪/导出四页签；导出范围自选（全部
    选择/取消全选/框选弹窗 `ExportPickDialog.vue`——拖框相交 + Shift 连续
    选段）、预计大小实算、JPG 保留 EXIF
 6. **设置与通用**：八款主题、自动更新（stable/beta 渠道，GitHub Releases
    检查 + 下载 + 暂停续传 + 速度显示 + 代理线路切换测速；检查到新版本
    自动弹出更新弹窗，集中展示更新日志与下载进度，下载中切走设置页在
-   后台继续）
+   后台继续）；**版本列表**（`VersionListDialog.vue`）列出全部 Release
+   （含预发布），可就地更新或降级，降级在行内二次确认并强警告不可回滚
 
 ## 工作约定（重要）
 
 - **版本号同步 6 处**：`package.json`、`src/core/version.ts`、
   `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、
   `src-tauri/Cargo.lock`（仅 albumark 包一行）、`android/app/build.gradle`
-  （versionName + versionCode；2.0.0-beta9 = versionCode 24，每版 +1）。
+  （versionName + versionCode；2.0.0-beta10 = versionCode 25，每版 +1）。
   版本声明升到 X 后，本对话内所有改动都归属该版本
 - **不本地构建**：vite build / cargo / gradle 都不做；静态验证用
   `npm run typecheck`（vue-tsc）；调试/验证可启动 dev 服务器
@@ -65,9 +68,25 @@
   1. 打包名 `Albumark_{版本}_{平台架构}.zip` 对应前端 `templateAssetName()`
      兜底；
   2. 预发布判定「tag 含 `-`」前端过滤与 CI 一致；
-  3. zip 内文件名固定 Albumark.exe/.dmg/.apk；
+  3. zip 内文件名固定 Albumark.exe/.dmg/.apk；beta2 及更早是裸 dmg / exe / apk，
+     `downloadUpdate` 按 zip 魔数分流，不要改回一律解压；
   4. 客户端认领以 Release 实际产物名为准（抓 expanded_assets 片段解析），
      不要退回硬拼模板
+- **预览几何基准（动渲染几何前必读）**：水印 offset、边框宽度、背景照片的
+  offsetX/Y 与 radius 都是**原图尺度像素**。预览会先降采样解码再交给 Worker，
+  所以换算系数必须是 `pxScale = scale（到解码位图）× sourceScale（解码 ÷ 原图）`；
+  `renderPreview` 已把 sourceScale 放进 `RenderJob`，预览端用
+  `resultPhoto.size.w / resultPhoto.nativeW` 求同一个系数（裁剪页用
+  `resultMap.w / 旋转包围盒原生宽`）。禁止退回 `resultPhoto.renderScale`
+  （只到解码位图）或直接用 `scale`——缩放补渲、或换成原图尺寸不同的照片时，
+  会表现为背景照片圆角 / 位移与水印偏移漂移，导出对不上
+- **版本号比较用 `compareVersions`**（`core/updater.ts`）：预发布标识符按
+  字母 / 数字自然切段，数字段按数值比较，`beta10 > beta9`；不要再写整段
+  字典序比较（会判反）。版本列表排序、`isNewer` 与降级判定共用这一份
+- **版本列表数据源**：`listReleases()` 优先 GitHub REST（一次取全，含资产），
+  失败退回 `releases.atom`（仅最近十条）；选中版本用 `releaseToUpdateInfo()`
+  解析资产，下载安装仍走 `downloadUpdate` / `installStagedUpdate`——降级
+  只是多一层确认与警告，不要另写安装链路
 - **UI 改动调用 kill-ai-slop 与 apple-design 两个 skill**：项目是克制的
   单强调色系统（品牌橙 #FFA72F），新 UI 沿用现有 token（`--dur-hover` /
   `--ease-soft` 等，见 `src/styles/tokens.css`，CSS 变量 43 个全在用）；
@@ -80,15 +99,21 @@
   （transform 溢出会计入滚动区域）
 - **更新链路实现要点**：更新状态机在 `stores/updater.ts` 全局常驻（设置页
   是 v-if 覆盖页，局部状态会让下载与读秒安装随切页丢失）；更新弹窗
-  `UpdateDialog.vue` 挂在 App.vue 全局层，检查到新版本自动弹出，动作
-  （下载/暂停/继续/取消/安装）收敛在弹窗内，设置页只留检查入口、状态
-  摘要与「查看更新…」重开入口
+  `UpdateDialog.vue` 与版本列表 `VersionListDialog.vue` 都挂在 App.vue 全局层；
+  检查到新版本自动弹出更新弹窗，动作（下载/暂停/继续/取消/安装）收敛在弹窗内，
+  设置页只留检查入口、状态摘要、「版本列表…」与「查看更新…」重开入口；
+  列表选中目标版本后由 `selectRelease` 关列表、开更新弹窗（先中止旧下载并
+  丢弃断点），降级只改变标题 / 文案与警告，不复用另一套执行路径
 - **性能红线**：全屏页（设置页等）卡片禁止大面积 `backdrop-filter`——
   卡片底下只有纯色背景，毛玻璃没有内容可透却要全量采样合成，叠加入场
   动画每帧重采样，WebView2 上就是切页瞬间的掉帧来源（设置页卡片已改
   `--surface-solid` 实色）；小面积悬浮胶囊（如水印工作室顶栏）不受限；
   持久化写盘一律走 `core/storage.ts` 的防抖保存器，禁止在 watch /
   watchEffect 里直接同步 localStorage
+- **平台判定**：`isCapacitor` 必须用 `Capacitor.isNativePlatform()`
+  （`core/platform.ts`），不能只看 `window.Capacitor` 是否存在——`@capacitor/core`
+  在浏览器里也会注册该全局（platform = web），误判会让更新链路认领 APK、
+  导出 / 设置出现安卓专属入口
 - **安全基线**：更新资产下载域白名单见 `core/updater.ts` 的
   TRUSTED_ASSET_HOSTS（github.com / objects.githubusercontent.com），
   新增检查源时同步维护；zip 解包必须过 sanitizeEntry（zip-slip 防御）；

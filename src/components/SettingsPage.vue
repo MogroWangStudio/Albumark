@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
-import { ArrowLeft, Check, ChevronDown, Download, Droplets, ExternalLink, Eye, HardDrive, Info, LoaderCircle, Palette, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
+import { ArrowLeft, Check, ChevronDown, Download, Droplets, ExternalLink, Eye, HardDrive, History, Info, LoaderCircle, Palette, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import SettingInfo from '@/components/ui/SettingInfo.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
@@ -508,7 +508,7 @@ async function relaunchOobe(): Promise<void> {
         <div class="brand-lockup" aria-hidden="true">
           <LogoText class="brand-logo" />
         </div>
-        <div class="row">
+        <div class="row wrap">
           <div class="text">
             <span class="label">版本</span>
             <p class="desc">v{{ APP_VERSION }}</p>
@@ -534,6 +534,10 @@ async function relaunchOobe(): Promise<void> {
             <AppButton size="sm" :disabled="updateState === 'checking'" @click="updater.checkUpdate">
               <LoaderCircle v-if="updateState === 'checking'" :size="13" class="spin" />
               <Download v-else :size="13" />检查更新
+            </AppButton>
+            <!-- 全部版本：可就地更新或降级（降级在弹窗内有二次确认） -->
+            <AppButton size="sm" variant="ghost" @click="updater.openVersionList">
+              <History :size="13" />版本列表…
             </AppButton>
             <!-- 检查到新版本后弹窗已自动弹出；此按钮是切走页面后的重开入口 -->
             <AppButton
@@ -756,6 +760,15 @@ async function relaunchOobe(): Promise<void> {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
+}
+/* 版本行操作多（检查 / 版本列表 / 查看更新 + 状态摘要）：窄窗允许整体换行，
+   按钮组贴右，不在手机上挤出横向溢出 */
+.row.wrap {
+  flex-wrap: wrap;
+}
+.row.wrap .btns {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .text {
   min-width: 0;

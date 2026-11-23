@@ -1,9 +1,20 @@
 /** 平台能力检测与适配：Tauri 桌面端走插件 API，其余环境走浏览器能力。 */
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-export const isCapacitor =
-  typeof window !== 'undefined' &&
-  !!(window as unknown as { Capacitor?: unknown }).Capacitor &&
-  !isTauri
+
+/**
+ * Capacitor 原生壳的判定：@capacitor/core 被 import 时会在**任何环境**注册
+ * window.Capacitor（浏览器里 platform = web），只看对象存在会把桌面浏览器
+ * 误判成安卓——表现为更新链路认领 APK、显示安卓专属入口、导出出现分享 /
+ * 文件夹选项。必须问原生平台标记。原生 WebView 在 JS 启动前就注入 bridge，
+ * 这里的常量求值能拿到 isNativePlatform() === true。
+ */
+type CapacitorGlobal = { isNativePlatform?: () => boolean }
+const capacitor =
+  typeof window !== 'undefined'
+    ? (window as unknown as { Capacitor?: CapacitorGlobal }).Capacitor
+    : undefined
+
+export const isCapacitor = !isTauri && capacitor?.isNativePlatform?.() === true
 
 /**
  * macOS 桌面端：窗口保留原生标题栏（decorations + Overlay，

@@ -22,6 +22,7 @@ import PreviewCanvas from '@/components/PreviewCanvas.vue'
 import SettingsPage from '@/components/SettingsPage.vue'
 import UpdateDialog from '@/components/UpdateDialog.vue'
 import UrlImportDialog from '@/components/UrlImportDialog.vue'
+import VersionListDialog from '@/components/VersionListDialog.vue'
 import WatermarkPanel from '@/components/WatermarkPanel.vue'
 import WatermarkStudio from '@/components/WatermarkStudio.vue'
 import WorkspacePage from '@/components/WorkspacePage.vue'
@@ -675,6 +676,8 @@ onBeforeUnmount(() => {
     <ToastHost />
     <!-- 更新弹窗：全局常驻，下载中切走设置页仍可查看日志与进度 -->
     <UpdateDialog />
+    <!-- 版本列表：全部版本可就地更新 / 降级，选中后交给更新弹窗走同一套安装流程 -->
+    <VersionListDialog />
 
     <input
       ref="fileInput"

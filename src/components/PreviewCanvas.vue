@@ -162,10 +162,14 @@ let srcId: string | null = null
 let resultBmp: ImageBitmap | null = null
 /** resultBmp/resultMap 所属的照片：与 active 不一致时交互手势必须停用 */
 let resultId: string | null = null
-/** 照片（不含边框环带）在 resultBmp 中的几何：背景水印的主线程组合用 */
+/** 照片（不含边框环带）在 resultBmp 中的几何：背景水印的主线程组合用。
+ *  nativeW/H 是这张位图对应的「原图尺度」照片尺寸（裁剪后、未缩放），
+ *  水印 / 背景偏移与圆角的换算以它为基准，不随预览渲染分辨率变化。 */
 const resultPhoto = reactive({
   offset: { x: 0, y: 0 },
   size: { w: 0, h: 0 },
+  nativeW: 0,
+  nativeH: 0,
   renderScale: 1,
 })
 /** 背景水印组合布局：照片矩形在画布（resultMap 坐标系）中的位置，拖动照片手势用 */
@@ -510,6 +514,8 @@ function clearResult(): void {
   resultId = null
   resultPhoto.offset = { x: 0, y: 0 }
   resultPhoto.size = { w: 0, h: 0 }
+  resultPhoto.nativeW = 0
+  resultPhoto.nativeH = 0
   resultPhoto.renderScale = 1
   bgLayout = null
   resultMap.w = 0
@@ -554,6 +560,15 @@ async function renderBase(draft: boolean): Promise<void> {
       ? { x: 0, y: 0, w: 1, h: 1, rot: d?.rot, flipH: d?.flipH, flipV: d?.flipV }
       : adjust.cropOf(a.id)
     const crop = sel ? { ...sel } : undefined
+    // 本次输出的「原图尺度」照片尺寸（裁剪后、未缩放）：预览实际解码分辨率
+    // 往往低于原图，交给 Worker 的取样系数只到解码位图；水印 / 边框 / 背景
+    // 偏移要按原图基准换算，必须把解码降采样系数一起带过去（与导出一致）
+    const nativeSrc = cropSourceSize(a.width || 0, a.height || 0, d ?? adjust.cropOf(a.id))
+    const nativeW = nativeSrc.w * (sel?.w ?? 1)
+    const nativeH = nativeSrc.h * (sel?.h ?? 1)
+    const decodedLong = Math.max(bmp.width, bmp.height)
+    const nativeLong = Math.max(a.width || 0, a.height || 0)
+    const sourceScale = nativeLong > 0 ? Math.min(1, decodedLong / nativeLong) : 1
     // 边框与背景层由 Worker 处理（拍平为纯数据）：边框有背景时画环带、
     // 无背景时扩展画布；背景位图本身预览阶段由主线程组合。裁剪编辑时
     // 两者都不加，保持裁剪框坐标系
@@ -569,6 +584,7 @@ async function renderBase(draft: boolean): Promise<void> {
       adjust.snapshotFor(a.id),
       maxLong,
       crop,
+      sourceScale,
     )
     if (seq !== baseSeq) {
       // 已被更新的请求取代：本次输出作废，归还的源位图与输出位图都要释放，
@@ -584,7 +600,11 @@ async function renderBase(draft: boolean): Promise<void> {
     resultId = a.id
     resultPhoto.offset = { ...res.photoOffset }
     resultPhoto.size = { ...res.photoSize }
+    resultPhoto.nativeW = nativeW
+    resultPhoto.nativeH = nativeH
     resultPhoto.renderScale = res.renderScale
+    // 新几何（换照片 / 进出裁剪）可能让当前平移越界：按新画面夹紧一次
+    hardClampPan()
     drawBase()
     drawOverlay()
   } catch (err) {
@@ -726,7 +746,10 @@ function drawBase(): void {
   if (canvas.height !== ch) canvas.height = ch
   const ctx = canvas.getContext('2d')
   if (!ctx) return
-  // 背景水印布局：画布尺寸与照片矩形由第一个可见背景层决定（与导出一致）
+  // 背景水印布局：画布尺寸与照片矩形由第一个可见背景层决定（与导出一致）。
+  // pxScale 用「原图尺度 → 本次输出」的稳定系数，而不是取值随缩放变化的
+  // 预览渲染缩放——否则每次补渲都会把照片偏移 / 圆角挪一点，导出也对不上
+  const pxScale = overlayPxScale()
   const bgList = adjust.cropMode ? [] : backgroundLayers()
   const layout =
     bgList.length > 0 && resultPhoto.size.w > 0 && resultPhoto.size.h > 0
@@ -735,7 +758,7 @@ function drawBase(): void {
           resultPhoto.size.w,
           resultPhoto.size.h,
           backgroundAspect(bgList[0], resultPhoto.size.w, resultPhoto.size.h),
-          resultPhoto.renderScale,
+          pxScale,
         )
       : null
   const W = layout ? layout.frameW : bmp.width
@@ -772,7 +795,7 @@ function drawBase(): void {
       layout,
       bgList[0],
       borders,
-      resultPhoto.renderScale,
+      pxScale,
     )
   } else {
     bgLayout = null
@@ -799,17 +822,21 @@ function drawBase(): void {
  * 叠加层坐标系相对原图的像素折算：水印 offset 是原图尺度固定像素
  * （与边框宽度、背景偏移同一语义），绘制 / 命中 / 吸附 / 拖动写入必须
  * 全部经它换算，否则预览偏移会随渲染分辨率（缩放查看、窗口大小）漂移，
- * 导出也与所见不一致。正常路径 = 照片的取样缩放系数；裁剪编辑的粗渲
- * 坐标系基于低清全图，比例随之单独计算。
+ * 导出也与所见不一致。
+ *
+ * 正常路径按「当前位图里的照片宽 ÷ 这张位图对应的原图照片宽」求，系数
+ * 与预览解码分辨率无关，缩放前后完全一致；裁剪编辑的画布是「变换后全图」，
+ * 用 resultMap 与旋转包围盒的原生尺寸求，同样不依赖低清草稿的尺寸。
  */
 function overlayPxScale(): number {
   const a = active.value
   if (adjust.cropMode) {
-    if (cropPreviewBmp && a?.width) {
-      const s = cropSourceSize(a.width, a.height, adjust.cropDraft ?? undefined)
-      return s.w > 0 ? cropPreviewBmp.width / s.w : 1
-    }
-    return 1
+    if (!a?.width || !a.height || !resultMap.w) return 1
+    const s = cropSourceSize(a.width, a.height, adjust.cropDraft ?? undefined)
+    return s.w > 0 ? resultMap.w / s.w : 1
+  }
+  if (resultPhoto.nativeW > 0 && resultPhoto.size.w > 0) {
+    return resultPhoto.size.w / resultPhoto.nativeW
   }
   return resultPhoto.renderScale || 1
 }
@@ -1071,12 +1098,15 @@ function sampleResult(x: number, y: number): { r: number; g: number; b: number }
 /** 放大平移时图片边缘与面板/顶栏/底栏保留的呼吸边距 */
 const PAN_MARGIN = 12
 
-/** 图像在当前 zoom 下的显示尺寸（CSS px） */
+/** 图像在当前 zoom 下的显示尺寸（CSS px）：以画布实际映射为准。
+ *  有背景水印时 resultMap 是「背景画布」而不是照片位图，用 resultBmp
+ *  会把平移边界算小，放大后照片可以顶到面板底下回不来。 */
 function displaySize(): { w: number; h: number } {
-  if (!resultBmp) return { w: avail.w, h: avail.h }
+  if (!resultMap.w || !resultMap.h) return { w: avail.w, h: avail.h }
   const dpr = view.dpr || 1
-  const fit = Math.min((avail.w * dpr) / resultBmp.width, (avail.h * dpr) / resultBmp.height) / dpr
-  return { w: resultBmp.width * fit, h: resultBmp.height * fit }
+  const fit =
+    Math.min((avail.w * dpr) / resultMap.w, (avail.h * dpr) / resultMap.h) / dpr
+  return { w: resultMap.w * fit, h: resultMap.h * fit }
 }
 
 function hardClampPan(): void {
@@ -1671,7 +1701,9 @@ function onPointerMove(e: PointerEvent): void {
     if (!resultMap.w || !bgLayout) return
     const dpr = view.dpr || 1
     const cssPerImg = resultMap.scale / dpr
-    const pxScale = resultPhoto.renderScale || 1
+    // 与原图尺度的偏移写入用同一个稳定系数：不能再用 resultPhoto.renderScale，
+    // 它只到解码位图，缩放后拖动会以不同步长落库（照片位置越拖越偏）
+    const pxScale = overlayPxScale()
     let nx = gesture.startX + (e.clientX - gesture.startClient.x) / cssPerImg / pxScale
     let ny = gesture.startY + (e.clientY - gesture.startClient.y) / cssPerImg / pxScale
     if (settings.wmSnap) {
@@ -1970,8 +2002,9 @@ watch(
 
 /* ---------- 裁剪模式 ---------- */
 
-// 进入时以当前裁剪为起点（无则整图），并回到适应视图看清全图；
-// 退出时重新适应，确保确认后的裁剪结果完整呈现
+// 进入裁剪页以当前裁剪为起点（无则整图）；进出都保持当前缩放与位置——
+// 裁剪是在同一张照片上微调取景，回弹到适应窗口会把正在对比的细节甩走。
+// 新几何（整图 / 裁剪结果）画出来后由 renderBase 夹紧平移边界。
 watch(
   () => adjust.cropMode,
   (on) => {
@@ -1980,12 +2013,13 @@ watch(
       adjust.cropRatio = 'free'
       adjust.cropDraft = { ...(a ? (adjust.cropOf(a.id) ?? FULL_CROP) : FULL_CROP) }
       void ensureCropPreview()
-      fitView()
     } else {
       adjust.cropDraft = null
       releaseCropPreview()
-      fitView()
     }
+    hardClampPan()
+    drawBase()
+    drawOverlay()
   },
 )
 

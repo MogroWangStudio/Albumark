@@ -2,11 +2,16 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   checkForUpdate,
+  compareVersions,
   downloadUpdate,
   installStagedUpdate,
+  listReleases,
+  releaseToUpdateInfo,
   type DownloadBuffer,
+  type ReleaseEntry,
   type UpdateInfo,
 } from '@/core/updater'
+import { APP_VERSION } from '@/core/version'
 import { toast } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 
@@ -59,6 +64,65 @@ export const useUpdaterStore = defineStore('updater', () => {
   }
   function closeDialog(): void {
     dialogOpen.value = false
+  }
+
+  /* ---------- 版本列表：查看全部版本、更新或降级 ---------- */
+
+  /** 版本列表弹窗开合（与更新弹窗同挂 App 全局层，切设置页不丢） */
+  const versionListOpen = ref(false)
+  /** 全部发布版本（含预发布），按版本号从新到旧 */
+  const releases = ref<ReleaseEntry[]>([])
+  const releasesState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
+
+  function openVersionList(): void {
+    versionListOpen.value = true
+    if (releasesState.value === 'idle') void loadReleases()
+  }
+
+  function closeVersionList(): void {
+    versionListOpen.value = false
+  }
+
+  /** 拉取版本列表：失败保留错误态，弹窗里给重试入口 */
+  async function loadReleases(force = false): Promise<void> {
+    if (releasesState.value === 'loading') return
+    releasesState.value = 'loading'
+    try {
+      releases.value = await listReleases(settings.updateSource, force)
+      releasesState.value = 'ready'
+    } catch {
+      releasesState.value = 'error'
+    }
+  }
+
+  /** 当前选中的目标版本是否为降级（低于正在运行的版本） */
+  const isDowngrade = computed(
+    () => !!updateInfo.value && compareVersions(updateInfo.value.version, APP_VERSION) < 0,
+  )
+
+  /**
+   * 选中某个版本作为下载目标：先结束进行中的下载 / 读秒并丢弃旧断点，
+   * 再解析该版本的资产，最后关掉版本列表、打开更新弹窗走同一套下载安装流程。
+   * 降级与升级共用这条链路，差别只在弹窗文案与警告。
+   */
+  async function selectRelease(entry: ReleaseEntry): Promise<void> {
+    stopCountdown()
+    pauseRequested = false
+    downloadCtl?.abort()
+    downloadCtl = null
+    downloadBuf = null
+    updateProgress.value = null
+    downloadSpeed.value = null
+    updateState.value = 'checking'
+    try {
+      updateInfo.value = await releaseToUpdateInfo(entry, settings.updateSource)
+      updateState.value = 'available'
+      versionListOpen.value = false
+      openDialog()
+    } catch {
+      updateState.value = 'error'
+      toast('无法获取该版本的安装包信息，请前往发布页手动下载', 'error')
+    }
   }
 
   async function checkUpdate(): Promise<void> {
@@ -119,6 +183,9 @@ export const useUpdaterStore = defineStore('updater', () => {
       startCountdown()
     } catch (err) {
       if (ctl.signal.aborted) {
+        // 已被新目标版本接管（版本列表里改选）：状态由 selectRelease 负责，
+        // 旧任务不能把手动选中的版本状态改回「待更新」
+        if (downloadCtl !== ctl) return
         // 暂停：缓冲保留（updateProgress 不清），等「继续下载」从断点接着走
         updateState.value = pauseRequested ? 'paused' : 'available'
         return
@@ -224,6 +291,14 @@ export const useUpdaterStore = defineStore('updater', () => {
     dialogOpen,
     openDialog,
     closeDialog,
+    versionListOpen,
+    releases,
+    releasesState,
+    openVersionList,
+    closeVersionList,
+    loadReleases,
+    isDowngrade,
+    selectRelease,
     checkUpdate,
     resetCheck,
     installUpdate,
