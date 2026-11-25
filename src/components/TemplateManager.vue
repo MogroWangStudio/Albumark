@@ -1,12 +1,23 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from 'vue'
-import { MoreHorizontal, Pencil, Trash2 } from 'lucide-vue-next'
+import { MoreHorizontal, Pencil, Trash2, Upload } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
 import type { DropdownItem } from '@/components/ui/AppDropdown.vue'
 import { renderTemplateThumb } from '@/core/sample'
+import { fmtSize } from '@/core/format'
+import { isTauri, pickBinaryFile, saveBinaryFile } from '@/core/platform'
+import {
+  AMWM_EXT,
+  AMWM_MIME,
+  amwmFileName,
+  packWatermarkTemplate,
+  unpackWatermarkTemplate,
+  watermarkTemplateBytes,
+} from '@/core/watermarkFile'
 import { useI18n } from '@/i18n'
+import { toast } from '@/stores/toast'
 import { useTemplatesStore } from '@/stores/templates'
 import type { WatermarkTemplate } from '@/types/watermark'
 
@@ -38,6 +49,15 @@ async function renderAll(): Promise<void> {
     await renderTemplateThumb(canvas, tpl.layers, tpl.assets)
     if (seq !== renderSeq) return
   }
+  computeSizes()
+}
+
+/** .amwm 真实打包体积：卡片上直接显示，用户导出前就知道文件多大 */
+const sizes = ref<Record<string, number>>({})
+function computeSizes(): void {
+  const next: Record<string, number> = {}
+  for (const tpl of templates.all) next[tpl.id] = watermarkTemplateBytes(tpl)
+  sizes.value = next
 }
 
 onMounted(renderAll)
@@ -45,6 +65,61 @@ watch(
   () => templates.all.map((tpl) => `${tpl.id}:${tpl.name}:${tpl.layers.length}:${tpl.updatedAt ?? tpl.createdAt}`).join('|'),
   renderAll,
 )
+
+/* ---------- .amwm 导入 / 导出：单文件模板，内含图片素材 ---------- */
+
+const fileInput = ref<HTMLInputElement | null>(null)
+
+function importClick(): void {
+  if (isTauri) {
+    void importFromTauri()
+    return
+  }
+  fileInput.value?.click()
+}
+
+async function importFromTauri(): Promise<void> {
+  const picked = await pickBinaryFile(t('导入水印模板'), ['amwm'], t('水印模板 (.amwm)'))
+  if (!picked) return
+  await importBytes(picked.bytes)
+}
+
+async function onImportFile(e: Event): Promise<void> {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  await importBytes(new Uint8Array(await file.arrayBuffer()))
+}
+
+async function importBytes(bytes: Uint8Array): Promise<void> {
+  try {
+    const tpl = unpackWatermarkTemplate(bytes)
+    const id = templates.importTemplate(tpl)
+    if (!id) {
+      toast(t('模板过大，仅保存到本次会话'), 'error')
+      return
+    }
+    toast(t('已导入模板「{0}」', tpl.name), 'success')
+  } catch (err) {
+    toast(err instanceof Error ? err.message : t('不是有效的 Albumark 水印模板文件'), 'error')
+  }
+}
+
+async function exportTemplate(tpl: WatermarkTemplate): Promise<void> {
+  try {
+    const bytes = packWatermarkTemplate(tpl)
+    const saved = await saveBinaryFile(amwmFileName(tpl.name), bytes, {
+      label: t('水印模板 (.amwm)'),
+      extensions: ['amwm'],
+      mime: AMWM_MIME,
+      sub: 'watermarks',
+    })
+    if (saved) toast(t('已导出模板「{0}」', tpl.name), 'success')
+  } catch (err) {
+    toast(err instanceof Error ? err.message : t('导出模板失败'), 'error')
+  }
+}
 
 /* ---------- 卡片操作：编辑 / 复制 / 重命名 / 删除（内置模板保护） ---------- */
 
@@ -55,6 +130,7 @@ const removeTarget = ref<WatermarkTemplate | null>(null)
 function cardItems(tpl: WatermarkTemplate): DropdownItem[] {
   return [
     { label: t('编辑'), action: () => emit('edit', tpl.id) },
+    { label: t('导出 .amwm'), action: () => void exportTemplate(tpl) },
     { label: t('复制为新模板'), action: () => void templates.duplicate(tpl.id) },
     ...(tpl.builtin
       ? []
@@ -92,6 +168,16 @@ function fmtDate(ts?: number): string {
 
 <template>
   <div class="tmanage">
+    <div class="tbar">
+      <AppButton size="sm" @click="importClick"><Upload :size="13" />{{ t('导入模板…') }}</AppButton>
+    </div>
+    <input
+      ref="fileInput"
+      type="file"
+      :accept="AMWM_EXT"
+      hidden
+      @change="onImportFile"
+    />
     <div class="grid">
       <div v-for="tpl in templates.all" :key="tpl.id" class="tcard" @click="emit('edit', tpl.id)">
         <div class="thumb-box">
@@ -99,7 +185,7 @@ function fmtDate(ts?: number): string {
         </div>
         <div class="tmeta">
           <span class="tname" :title="t(tpl.name)">{{ t(tpl.name) }}</span>
-          <span class="tinfo">{{ t('{0} 个图层', tpl.layers.length) }}<template v-if="tpl.updatedAt ?? tpl.createdAt"> · {{ fmtDate(tpl.updatedAt ?? tpl.createdAt) }}</template></span>
+          <span class="tinfo">{{ t('{0} 个图层', tpl.layers.length) }}<template v-if="sizes[tpl.id]"> · {{ fmtSize(sizes[tpl.id]) }}</template><template v-if="tpl.updatedAt ?? tpl.createdAt"> · {{ fmtDate(tpl.updatedAt ?? tpl.createdAt) }}</template></span>
         </div>
         <span v-if="tpl.builtin" class="badge">{{ t('内置') }}</span>
         <AppDropdown :items="cardItems(tpl)" align="right">
@@ -153,6 +239,13 @@ function fmtDate(ts?: number): string {
   overflow-y: auto;
   scrollbar-gutter: stable;
   padding: 20px calc(16px + var(--safe-right)) calc(16px + var(--safe-bottom)) calc(16px + var(--safe-left));
+}
+/* 模板库工具栏：导入 .amwm 放左上，与卡片网格同一条对齐线 */
+.tbar {
+  max-width: 1060px;
+  margin: 0 auto 12px;
+  display: flex;
+  justify-content: flex-start;
 }
 .grid {
   display: grid;

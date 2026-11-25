@@ -274,6 +274,45 @@ export const useTemplatesStore = defineStore('templates', () => {
     return tpl.id
   }
 
+  /** 名称去重：导入 / 复制时避免列表出现两条同名模板 */
+  function uniqueName(raw: string): string {
+    const base = raw.trim() || t('未命名模板')
+    if (!all.value.some((tpl) => tpl.name === base)) return base
+    let i = 2
+    while (all.value.some((tpl) => tpl.name === `${base} ${i}`)) i++
+    return `${base} ${i}`
+  }
+
+  /** 从 .amwm 导入的模板：写入自建模板库（重新生成 id，重名自动追加序号） */
+  function importTemplate(tpl: WatermarkTemplate): string | null {
+    // 素材 id 全局共用一张表：导入时重映射，避免两个 .amwm 携带同一 id
+    // 但内容不同时互相顶掉图片
+    const idMap = new Map<string, string>()
+    for (const a of tpl.assets) idMap.set(a.id, uid())
+    const layers = structuredClone(tpl.layers).map((l) => {
+      if (l.type === 'image') return { ...l, assetId: idMap.get(l.assetId) ?? l.assetId }
+      if (l.type === 'background' && l.source === 'custom' && l.assetId) {
+        return { ...l, assetId: idMap.get(l.assetId) ?? l.assetId }
+      }
+      return l
+    })
+    const assets = structuredClone(tpl.assets).map((a) => ({
+      ...a,
+      id: idMap.get(a.id) ?? a.id,
+    }))
+    const data: SavedTemplate = {
+      id: uid(),
+      name: uniqueName(tpl.name),
+      createdAt: Date.now(),
+      layers,
+      assets,
+    }
+    if (overLimit(data)) return null
+    saved.value.unshift(data)
+    persist()
+    return data.id
+  }
+
   function remove(id: string): void {
     saved.value = saved.value.filter((tpl) => tpl.id !== id)
     persist()
@@ -285,5 +324,5 @@ export const useTemplatesStore = defineStore('templates', () => {
     wm.applySerialized(tpl.layers, tpl.assets)
   }
 
-  return { saved, all, get, save, update, rename, duplicate, remove, apply }
+  return { saved, all, get, save, update, rename, duplicate, importTemplate, remove, apply }
 })

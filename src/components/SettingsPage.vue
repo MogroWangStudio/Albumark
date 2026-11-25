@@ -67,7 +67,7 @@ const navSections = computed<{ id: SettingsSection; label: string; icon: Compone
     { id: 'language', label: t('语言'), icon: Globe2 },
     { id: 'appearance', label: t('外观'), icon: Palette },
     { id: 'preview', label: t('预览'), icon: Eye },
-    { id: 'import', label: t('水印与导入'), icon: Droplets },
+    { id: 'import', label: t('水印'), icon: Droplets },
   ]
   if (isTauri) list.push({ id: 'data', label: t('数据'), icon: HardDrive })
   list.push({ id: 'about', label: t('关于'), icon: Info })
@@ -155,6 +155,12 @@ const minZoomModel = computed({
 const defaultZoomModel = computed({
   get: () => Math.round(settings.defaultZoom),
   set: (v: number) => (settings.defaultZoom = Math.round(v)),
+})
+
+/** 放大平移安全区：像素，0 = 可贴边平移 */
+const panMarginModel = computed({
+  get: () => Math.round(settings.panMargin),
+  set: (v: number) => (settings.panMargin = Math.round(v)),
 })
 
 const hasCustomFont = computed(() => !!settings.fontFamily)
@@ -506,6 +512,21 @@ async function relaunchOobe(): Promise<void> {
         </div>
         <div class="row col">
           <div class="text">
+            <span class="label">{{ t('放大平移安全区') }}<SettingInfo :tip="t('放大后照片边缘保留的边距；数值越大，可平移查看的最大边距越小，0 为可以贴边')" /></span>
+          </div>
+          <AppSlider
+            v-model="panMarginModel"
+            :min="0"
+            :max="200"
+            :step="4"
+            :label="t('安全区')"
+            :format="(v) => `${v} px`"
+            :default="12"
+            @reset="settings.panMargin = 12"
+          />
+        </div>
+        <div class="row col">
+          <div class="text">
             <span class="label">{{ t('渲染质量') }}</span>
           </div>
           <AppSegment
@@ -531,7 +552,7 @@ async function relaunchOobe(): Promise<void> {
       </section>
 
       <section v-show="activeSection === 'import'" class="group">
-        <h2>{{ t('水印与导入') }}</h2>
+        <h2>{{ t('水印') }}</h2>
         <div class="row">
           <div class="text">
             <span class="label">{{ t('水印吸附') }}</span>

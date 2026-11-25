@@ -33,8 +33,33 @@ export const isMacDesktop =
  * 官方 path.executableDir 底层在 Windows/macOS 返回空值（dirs crate 不支持），
  * 因此走自定义 Rust 命令取 current_exe 的父目录。
  */
-export async function executableDir(): Promise<string> {
-  if (!isTauri) return ''
+/**
+ * 把当前主题的背景色同步给原生窗口 / WebView。
+ * 窗口在配置里以 visible:false 创建，等首帧主题就绪后再显示——只在 CSS 里
+ * 刷背景挡不住窗口创建与 WebView 绘制前的白底，必须从原生层上色。
+ */
+export function syncWindowBackground(color: string): void {
+  if (!isTauri || !color) return
+  void import('@tauri-apps/api/window')
+    .then(({ getCurrentWindow }) => getCurrentWindow().setBackgroundColor(color))
+    .catch(() => undefined)
+}
+
+/** 桌面端首帧就绪后显示主窗口（配置以 hidden 启动，避免白屏一闪） */
+export async function revealMainWindow(): Promise<void> {
+  if (!isTauri) return
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    const win = getCurrentWindow()
+    const bg = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()
+    if (bg) await win.setBackgroundColor(bg)
+    await win.show()
+  } catch {
+    /* 窗口 API 不可用时保持系统默认行为 */
+  }
+}
+
+export async function executableDir(): Promise<string> {  if (!isTauri) return ''
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     return await invoke<string>('exe_dir')
@@ -129,14 +154,78 @@ export async function saveZip(
 }
 
 /** 桌面端「另存为」对话框：只取目标路径（流式导出先拿路径再分块写盘）。 */
-export async function pickSavePath(suggestedName: string): Promise<string | null> {
+export async function pickSavePath(
+  suggestedName: string,
+  filters: { name: string; extensions: string[] }[] = [
+    { name: t('ZIP 压缩包'), extensions: ['zip'] },
+  ],
+): Promise<string | null> {
   if (!isTauri) return null
   const { save } = await import('@tauri-apps/plugin-dialog')
-  const path = await save({
-    defaultPath: suggestedName,
-    filters: [{ name: t('ZIP 压缩包'), extensions: ['zip'] }],
-  })
+  const path = await save({ defaultPath: suggestedName, filters })
   return path ?? null
+}
+
+/** 桌面端选择单个文件并读取字节（水印模板 .amwm 导入等）。 */
+export async function pickBinaryFile(
+  title: string,
+  extensions: string[],
+  filterLabel: string,
+): Promise<{ name: string; bytes: Uint8Array } | null> {
+  if (!isTauri) return null
+  const { open } = await import('@tauri-apps/plugin-dialog')
+  const picked = await open({
+    multiple: false,
+    title,
+    filters: [{ name: filterLabel, extensions }],
+  })
+  if (typeof picked !== 'string') return null
+  const fs = await import('@tauri-apps/plugin-fs')
+  return {
+    name: picked.split(/[\\/]/).filter(Boolean).pop() ?? picked,
+    bytes: new Uint8Array(await fs.readFile(picked)),
+  }
+}
+
+/**
+ * 保存二进制文件到用户可拿到的位置：
+ * - 桌面：另存为对话框（返回落盘路径，取消返回 null）
+ * - 安卓：公共 Documents/Albumark/<sub>/（返回展示路径）
+ * - 浏览器：触发下载（返回文件名）
+ */
+export async function saveBinaryFile(
+  suggestedName: string,
+  bytes: Uint8Array,
+  opts: { label: string; extensions: string[]; mime: string; sub?: string },
+): Promise<string | null> {
+  if (isTauri) {
+    const path = await pickSavePath(suggestedName, [
+      { name: opts.label, extensions: opts.extensions },
+    ])
+    if (!path) return null
+    const fs = await import('@tauri-apps/plugin-fs')
+    await fs.writeFile(path, bytes)
+    return path
+  }
+  if (isCapacitor) {
+    const sub = opts.sub ?? 'watermarks'
+    // 安卓没有「另存为」：写入公共 Documents/Albumark/<sub>/，与导出流程同一位置
+    const m = await import('@capacitor/filesystem')
+    let bin = ''
+    const chunk = 0x8000
+    for (let i = 0; i < bytes.length; i += chunk) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + chunk))
+    }
+    await m.Filesystem.writeFile({
+      path: `Albumark/${sub}/${suggestedName}`,
+      directory: m.Directory.Documents,
+      data: btoa(bin),
+      recursive: true,
+    })
+    return `Documents/Albumark/${sub}/${suggestedName}`
+  }
+  downloadBlob(bytes as unknown as BlobPart, suggestedName, opts.mime)
+  return suggestedName
 }
 
 export async function fetchImageBlob(url: string): Promise<Blob> {
@@ -166,8 +255,8 @@ export async function shareFiles(files: string[], dialogTitle = '分享照片'):
   await Share.share({ files, dialogTitle })
 }
 
-function downloadBlob(bytes: BlobPart, name: string): void {
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }))
+function downloadBlob(bytes: BlobPart, name: string, mime = 'application/zip'): void {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }))
   const a = document.createElement('a')
   a.href = url
   a.download = name

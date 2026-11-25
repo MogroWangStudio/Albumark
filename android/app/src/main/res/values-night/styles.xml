@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- 系统深色模式下：启动画面与 WebView 背后的窗口底色都用纯黑，
+         避免默认白色 splash / windowBackground 在启动瞬间闪白。
+         应用内主题可能比系统更深（如暗房），首帧仍由 index.html 的主题脚本兜底。 -->
+    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:background">@null</item>
+        <item name="android:windowBackground">#000000</item>
+    </style>
+
+    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="android:background">#000000</item>
+    </style>
+
+</resources>

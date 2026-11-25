@@ -1,7 +1,7 @@
 import { ref, watchEffect } from 'vue'
 import { defineStore } from 'pinia'
 import { registerPlugin } from '@capacitor/core'
-import { isCapacitor, isTauri } from '@/core/platform'
+import { isCapacitor, isTauri, syncWindowBackground } from '@/core/platform'
 import { createDebouncedSaver, loadJson, saveJson } from '@/core/storage'
 import type { UpdateChannel, UpdateSource } from '@/core/updater'
 import { detectLocale, type Locale } from '@/i18n/types'
@@ -218,6 +218,11 @@ interface AppSettings {
    * 30–300。只在打开项目后的第一张 / 重新进入照片时生效，浏览切图保持当前缩放。
    */
   defaultZoom: number
+  /**
+   * 放大平移安全区（像素）：放大后照片边缘保留的呼吸边距。
+   * 0 = 可以一直平移到贴边；数值越大，可平移查看的最大边距越小。
+   */
+  panMargin: number
   /** 预览渲染质量：预设档位或 custom（配合 previewQualityValue 无极调整） */
   previewQuality: PreviewQuality
   /** 自定义预览精度：精修长边像素（仅 previewQuality = 'custom' 时生效） */
@@ -246,6 +251,7 @@ const DEFAULTS: AppSettings = {
   exifNotice: true,
   minZoom: 1,
   defaultZoom: 100,
+  panMargin: 12,
   previewQuality: 'high',
   previewQualityValue: 1200,
   wmSnap: true,
@@ -264,6 +270,8 @@ function load(): AppSettings {
   // 默认缩放夹回档位
   const dz = Number(data.defaultZoom)
   data.defaultZoom = Number.isFinite(dz) ? Math.min(300, Math.max(30, Math.round(dz / 5) * 5)) : 100
+  const pm = Number(data.panMargin)
+  data.panMargin = Number.isFinite(pm) ? Math.min(200, Math.max(0, Math.round(pm))) : 12
   // 旧版本 / 手改存档的容错：款式必须存在，时长夹回档位并取整到 100ms
   if (!BOOT_STYLE_CHOICES.some((s) => s.value === data.bootStyle)) data.bootStyle = DEFAULTS.bootStyle
   const dur = Number(data.bootDuration)
@@ -310,6 +318,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const exifNotice = ref(initial.exifNotice)
   const minZoom = ref(initial.minZoom)
   const defaultZoom = ref(initial.defaultZoom)
+  const panMargin = ref(initial.panMargin)
   const previewQuality = ref<PreviewQuality>(initial.previewQuality)
   const previewQualityValue = ref(initial.previewQualityValue)
   const wmSnap = ref(initial.wmSnap)
@@ -332,6 +341,7 @@ export const useSettingsStore = defineStore('settings', () => {
       exifNotice: exifNotice.value,
       minZoom: minZoom.value,
       defaultZoom: defaultZoom.value,
+      panMargin: panMargin.value,
       previewQuality: previewQuality.value,
       previewQualityValue: previewQualityValue.value,
       wmSnap: wmSnap.value,
@@ -352,6 +362,8 @@ export const useSettingsStore = defineStore('settings', () => {
     const eff = theme.value === 'auto' ? (systemDark.matches ? 'dark' : 'light') : theme.value
     document.documentElement.dataset.theme = eff
     document.documentElement.dataset.mode = resolveMode()
+    // 原生窗口/WebView 背景跟随主题：缩放窗口、切主题时边缘不再露出白底
+    syncWindowBackground(getComputedStyle(document.documentElement).getPropertyValue('--bg').trim())
   }
 
   /** 界面语言：同步 <html lang>（排版断行 / 字体回退 / 无障碍朗读都依赖它） */
@@ -415,6 +427,7 @@ export const useSettingsStore = defineStore('settings', () => {
     exifNotice,
     minZoom,
     defaultZoom,
+    panMargin,
     previewQuality,
     previewQualityValue,
     wmSnap,

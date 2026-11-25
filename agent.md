@@ -7,7 +7,7 @@
 ## 项目概览
 
 **Albumark**——轻量、本地优先的图像批量水印与快速辑录工具。当前版本
-**2.0.0-beta11**（2026-11-25）。
+**2.0.0-beta12**（2026-11-26）。
 
 - 前端：Vue 3 + TypeScript + Vite（Composition API + Pinia）
 - 桌面端：Tauri 2（Rust，`src-tauri/`）
@@ -18,7 +18,7 @@
 
 | 路径 | 职责 |
 | --- | --- |
-| `src/core/` | 平台无关纯逻辑：`fs`（文件系统抽象，桌面 plugin-fs / 安卓 Capacitor / 浏览器无能力三态）、`platform`（平台判定）、`archive`（ZIP 流式打包与解包，fflate）、`imageFormat`（按魔数识别 JPG/PNG）、`bg`（背景水印四处同源）、`layout`（水印锚点 / 包围盒 / 命中测试的唯一几何入口）、`storageReport`（数据目录占用扫描）、`updater`（更新检查/下载/暂停续传）、`storage` / `format` / `viewmotion` / `longpress` 等工具 |
+| `src/core/` | 平台无关纯逻辑：`fs`（文件系统抽象，桌面 plugin-fs / 安卓 Capacitor / 浏览器无能力三态）、`platform`（平台判定 / 窗口背景与 reveal）、`archive`（ZIP 流式打包与解包，fflate）、`imageFormat`（按魔数识别 JPG/PNG）、`bg`（背景水印四处同源）、`layout`（水印锚点 / 包围盒 / 命中测试的唯一几何入口）、`storageReport`（数据目录占用扫描）、`watermarkFile`（`.amwm` 单文件模板打包 / 解析）、`updater`（更新检查/下载/暂停续传）、`storage` / `format` / `viewmotion` / `longpress` 等工具 |
 | `src/i18n/` | 界面国际化：`types`（Locale / 语言注册表 / 系统语言探测）、`index`（`useI18n` / `t`，键=中文原文）、`messages/{en,ja,ko}/<域>.ts`（按域拆分的三语词条） |
 | `src/stores/` | Pinia 状态：`workspace`（目录/项目/两级页导航/多选批量）、`watermark`（图层与模板）、`images`、`settings`（主题/更新渠道）、`updater`（全局更新状态机：检查/下载/暂停/读秒安装/弹窗开合）、`history`（撤销重做）、`export`、`templates`、`ctxMenu`、`toast` 等 |
 | `src/components/` | 页面与业务组件：`WorkspacePage`（工作目录⇄工作项目两级页）、`PreviewCanvas`、`WatermarkPanel`、`SettingsPage`、`UpdateDialog`（软件更新 / 版本回退弹窗）、`VersionListDialog`（全部版本列表与升降级确认）、`AppTitleBar`（自绘窗控）；`ui/` 通用件（AppButton / AppDialog / AppSlider / AppDropdown / EmojiPicker…） |
@@ -39,8 +39,11 @@
    同名匹配批量确认——`RelinkDialog.vue`，识别码预校验三态展示）
 3. **水印工作室**：独立页面，图层式（文本/图像/EXIF 令牌），锚点三种参照
    （当前图片九宫格 / 其他水印联动 / 自由百分比坐标，可在预览点选），
-   像素距离定位，原地复制图层，平铺整图，按工作项目隔离，内置模板 7 个，
-   面板与工作室均可保存自制模板
+   **有背景水印时锚点坐标系是照片矩形，随外扩 / 画幅比例贴住照片**；
+   像素距离定位，原地复制图层，平铺整图，**测试画幅 16:9 / 9:16 / 1:1 / 4:5 /
+   3:2 / 自定义长宽**（cover 裁切样张），按工作项目隔离，内置模板 7 个，
+   面板与工作室均可保存自制模板；模板库支持 **`.amwm` 单文件导入 / 导出**
+   （manifest + assets，ZIP 结构）并在卡片显示真实文件体积
 4. **快速辑录 + 预览画布**：Worker 分层渲染、切图保持缩放、方向键切图、
    自定义右键菜单（`core/longpress.ts` + `stores/ctxMenu.ts`）、性能档位；
    水印 / 边框 / 背景照片几何按「原图尺度」换算，缩放补渲不改变构图
@@ -52,20 +55,22 @@
    选段）、预计大小实算、JPG 保留 EXIF
 6. **设置与通用**：**语言**（侧边栏第一位；简体中文 / English / 日本語 /
    한국어，首次按系统语言）· 九款主题（含跟随系统）· 启动动画 · 显示字体 ·
-   **默认缩放**（首次查看图片，100% = 适应窗口）· 预览质量 · **数据存储分析**
-   （桌面：总量 / 分类 / 逐目录逐项目占用，只扫含 albumark.json 的项目文件夹）·
-   自动更新（stable/beta 渠道，GitHub Releases 检查 + 下载 + 暂停续传 +
-   速度显示 + 代理线路切换测速；检查到新版本自动弹出更新弹窗，集中展示更新
-   日志与下载进度，下载中切走设置页在后台继续）；**版本列表**
-   （`VersionListDialog.vue`）列出全部 Release（含预发布），可就地更新或降级，
-   降级在行内二次确认并强警告不可回滚
+   **默认缩放**（首次查看图片，100% = 适应窗口）· **放大平移安全区**
+   （0–200 px，放大后边缘保留的呼吸边距）· 预览质量 ·
+   **数据存储分析**（桌面：总量 / 分类 / 逐目录逐项目占用，只扫含
+   albumark.json 的项目文件夹）· 自动更新（stable/beta 渠道，GitHub Releases
+   检查 + 下载 + 暂停续传 + 速度显示 + 代理线路切换测速；检查到新版本自动弹出
+   更新弹窗，集中展示更新日志与下载进度，下载中切走设置页在后台继续）；
+   **版本列表**（`VersionListDialog.vue`）列出全部 Release（含预发布），可就地
+   更新或降级，降级在行内二次确认并强警告不可回滚。侧边栏「水印」分组
+   （原「水印与导入」）管理水印吸附与 EXIF 缺失提醒
 
 ## 工作约定（重要）
 
 - **版本号同步 6 处**：`package.json`、`src/core/version.ts`、
   `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、
   `src-tauri/Cargo.lock`（仅 albumark 包一行）、`android/app/build.gradle`
-  （versionName + versionCode；2.0.0-beta11 = versionCode 26，每版 +1）。
+  （versionName + versionCode；2.0.0-beta12 = versionCode 27，每版 +1）。
   版本声明升到 X 后，本对话内所有改动都归属该版本
 - **不本地构建**：vite build / cargo / gradle 都不做；静态验证用
   `npm run typecheck`（vue-tsc）；调试/验证可启动 dev 服务器
@@ -102,9 +107,17 @@
   是锚点解析的唯一入口；`measureLayer` / `layerPivot` 多了一个 `layers` 参数，
   用于解析「绑定其他水印」的父级包围盒。父级按自身旋转后的包围盒九宫格点
   定位，子级随父级移动 / 旋转；父级缺失或链接成环时退回自身九宫格。
-  预览画布命中测试、选中框、吸附与导出必须传同一份图层列表（预览要用
-  `resolvedLayers()` 的令牌解析副本，否则父级文字尺寸与绘制不一致）；
-  自由坐标存 `anchorX` / `anchorY` 百分比，像素偏移仍是原图尺度
+  **有背景水印时水印坐标系是照片矩形**（`photoX/Y/W/H`），不是整幅画布：
+  `paintComposed` / 导出 Worker 都在 translate 到照片矩形后 `drawLayers`；
+  预览叠加层、工作室（`wmSpace`）与命中 / 拖动 / 吸附都换算到照片坐标，
+  背景外扩不应改变水印锚点。预览必须传 `resolvedLayers()` 的令牌解析副本，
+  否则父级文字尺寸与绘制不一致；自由坐标存 `anchorX/Y` 百分比，像素偏移
+  仍是原图尺度
+- **`.amwm` 模板文件**：`core/watermarkFile.ts`——ZIP（manifest.json +
+  assets/ 原始图片/SVG），`packWatermarkTemplate` / `unpackWatermarkTemplate`
+  必须经 `sanitize` 类校验（路径不以 assets/ 开头、含 ..、解压总量上限）；
+  导入走 `templates.importTemplate`，会重映射素材 id（全局素材表按 id 共用，
+  同名不同内容会互相顶掉），卡片体积直接用打包字节数
 - **界面国际化**：文案以中文原文为键，缺翻译自动回落，绝不出现裸键名。
   组件里 `import { useI18n } from '@/i18n'; const { t } = useI18n()`，模板
   `{{ t('中文') }}`；store/core 用 `import { t } from '@/i18n'`。带变量写成
@@ -146,7 +159,7 @@
   CSP 当前为 null——发版前建议收紧（需真机回归验证）
 - **设置页是分栏结构**：左侧 nav 页面列表 + 右侧各组 v-show 内容
   （SettingsPage.vue 的 navSections / activeSection）；分组顺序为
-  **语言 → 外观 → 预览 → 水印与导入 → 数据（仅桌面）→ 关于**。新增设置分组时
+  **语言 → 外观 → 预览 → 水印 → 数据（仅桌面）→ 关于**。新增设置分组时
   同步更新 navSections 与模板 v-show；选中语言用 --accent-soft + accent
   文字（与 AppTabs 一致），窄屏 ≤640px 折叠为顶部横滑页签
 - **设置项说明用 ui/SettingInfo**：ⓘ 图标放主标题右侧，**默认不透明度 100**
@@ -157,9 +170,17 @@
   下拉首次打开就有常用字体；系统字体扫描仍由聚焦时 `ensureFonts()` 触发。
   已选字体不在清单时，下拉补一个「当前字体：…」选项，避免值匹配不到显示空白
 - **启动背景的早期主题**：`index.html` 顶部内联脚本按 `albumark.settings.v1`
-  的 theme（auto 按系统）把 `--bg` 写到 `<html>` 上，防首帧白闪；`main.ts`
-  在样式加载后移除内联背景，交还 `--bg`，主题切换才能即时生效。改主题底色
-  时同步 index.html 里的 BG 映射表与 `tokens.css` 的 `--bg`
+  的 theme（auto 按系统）把 `--bg` 写到 `<html>` 上，防首帧白闪；但窗口创建
+  与 WebView 绘制前的白底只能由原生层挡：桌面 `tauri.conf` / `tauri.macos.conf`
+  的窗口以 `visible:false` + `backgroundColor` 创建，`main.ts` 在 mount 后调
+  `revealMainWindow()`（先 `setBackgroundColor(--bg)` 再 `show()`）；主题切换
+  `applyTheme` 同步 `syncWindowBackground`。安卓 `values-night` 启动主题使用
+  纯黑 splash / windowBackground。改主题底色时同步 index.html 的 BG 映射表、
+  tokens.css 与桌面窗口默认底色
+- **放大平移安全区**：`settings.panMargin`（0–200 px）直接传给
+  `clampPanAxis` 的 margin；数值越大可平移的最大边距越小，0 为贴边
+- **工作室测试画幅**：`WatermarkStudio` 的 `testW/H` 决定样张与 `wmSpace`
+  （照片区域）；源样张按横 / 竖选择后用 cover 裁切，缓存按尺寸保留最近 5 份
 - **默认缩放**：`settings.defaultZoom` 为百分比，100 = 适应窗口（与缩放
   档位同一语义）；只在首次查看图片（`PreviewCanvas` 的 `resetView`，由
   `lastActiveId` 守卫）应用，浏览切图保持当前缩放。默认值低于适应窗口时，

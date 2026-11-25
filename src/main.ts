@@ -1,7 +1,7 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
-import { isMacDesktop } from './core/platform'
+import { isMacDesktop, revealMainWindow } from './core/platform'
 import './styles/tokens.css'
 import './styles/base.css'
 
@@ -14,3 +14,6 @@ if (isMacDesktop) document.documentElement.style.setProperty('--traffic-light-in
 document.documentElement.style.removeProperty('background-color')
 
 createApp(App).use(createPinia()).mount('#app')
+
+// 窗口以 hidden 创建：主题与首帧 DOM 就绪后再显示，消除窗口级白屏
+void revealMainWindow()

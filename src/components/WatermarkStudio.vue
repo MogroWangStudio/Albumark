@@ -96,31 +96,76 @@ let sampleBmp: ImageBitmap | null = null
 const assetBmps: AssetMap = new Map()
 let rafPending = false
 
-/* ---------- 样张方向：横屏 16:9 ⇄ 竖屏 9:16 ----------
-   两张品牌底图分别作为横 / 竖样张（1920×1080 / 1080×1920）。
-   竖构图是水印最容易翻车的场景（贴边文字、九宫格锚点在窄画幅上的观感完全不同），
-   切换时重置视图，便于随时对照检查。 */
-const portrait = ref(false)
-const orientation = computed<SampleOrientation>(() => (portrait.value ? 'portrait' : 'landscape'))
-const sampleW = computed(() => SAMPLE_VARIANTS[orientation.value].w)
-const sampleH = computed(() => SAMPLE_VARIANTS[orientation.value].h)
-/** 两个方向的样张位图各缓存一份：来回切换不重复解码 */
-const sampleBmps = new Map<SampleOrientation, ImageBitmap>()
+/* ---------- 测试画幅：常见比例 + 自定义长宽 ----------
+   两张品牌底图分别作为横 / 竖样张；选定比例后用「cover」裁切铺满目标画布，
+   水印坐标系随之切换。竖构图是水印最容易翻车的场景，1:1 / 4:5 / 自定义
+   长宽让贴边文字与锚点在真实交付画幅上先过一遍。 */
+export type TestRatio = '16:9' | '9:16' | '1:1' | '4:5' | '3:2' | 'custom'
+
+const RATIO_DIMS: Record<Exclude<TestRatio, 'custom'>, { w: number; h: number }> = {
+  '16:9': { w: 1920, h: 1080 },
+  '9:16': { w: 1080, h: 1920 },
+  '1:1': { w: 1440, h: 1440 },
+  '4:5': { w: 1440, h: 1800 },
+  '3:2': { w: 1800, h: 1200 },
+}
+
+const ratio = ref<TestRatio>('16:9')
+const customW = ref(1920)
+const customH = ref(1080)
+const testW = ref(1920)
+const testH = ref(1080)
+const sampleW = computed(() => testW.value)
+const sampleH = computed(() => testH.value)
+/** 源样张缓存（按横 / 竖选择）与最终裁剪结果缓存（按尺寸） */
+const sourceBmps = new Map<SampleOrientation, ImageBitmap>()
+const sampleBmps = new Map<string, ImageBitmap>()
+
+function sourceOrientation(): SampleOrientation {
+  return testH.value > testW.value ? 'portrait' : 'landscape'
+}
 
 async function ensureSampleBitmap(): Promise<ImageBitmap> {
-  const key = orientation.value
+  const key = `${sourceOrientation()}:${testW.value}x${testH.value}`
   const cached = sampleBmps.get(key)
   if (cached) return cached
-  const bmp = await loadSampleBitmap(SAMPLE_VARIANTS[key])
+  const o = sourceOrientation()
+  let src = sourceBmps.get(o)
+  if (!src) {
+    src = await loadSampleBitmap(SAMPLE_VARIANTS[o])
+    sourceBmps.set(o, src)
+  }
+  // cover 裁切：保持样张原比例，裁掉多余部分铺满目标画布
+  const canvas = document.createElement('canvas')
+  canvas.width = testW.value
+  canvas.height = testH.value
+  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D
+  const scale = Math.max(canvas.width / src.width, canvas.height / src.height)
+  const dw = src.width * scale
+  const dh = src.height * scale
+  ctx.drawImage(src, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh)
+  const bmp = await createImageBitmap(canvas)
+  // 自定义长宽反复试时会不断生成新位图：只留最近 5 份，超出的立即释放
+  if (sampleBmps.size >= 5) {
+    const oldest = sampleBmps.keys().next().value
+    if (oldest) {
+      sampleBmps.get(oldest)?.close()
+      sampleBmps.delete(oldest)
+    }
+  }
   sampleBmps.set(key, bmp)
   return bmp
 }
 
-/** 切换横 / 竖屏：重取样张位图、复位缩放与平移（画幅比例变了，旧视图没有意义） */
+/** 切换测试画幅：重取样张位图、复位缩放与平移（画幅变了，旧视图没有意义） */
 let orientSeq = 0
-async function setOrientation(vertical: boolean): Promise<void> {
-  if (portrait.value === vertical) return
-  portrait.value = vertical
+async function applyTestSize(w: number, h: number): Promise<void> {
+  const safeW = Number.isFinite(w) ? w : testW.value
+  const safeH = Number.isFinite(h) ? h : testH.value
+  const cw = Math.min(4096, Math.max(160, Math.round(safeW)))
+  const ch = Math.min(4096, Math.max(160, Math.round(safeH)))
+  testW.value = cw
+  testH.value = ch
   stopViewAnim()
   viewZoom.value = 1
   viewPan.x = 0
@@ -134,10 +179,28 @@ async function setOrientation(vertical: boolean): Promise<void> {
   redraw()
 }
 
+function selectRatio(next: TestRatio): void {
+  ratio.value = next
+  if (next === 'custom') {
+    customW.value = testW.value
+    customH.value = testH.value
+    void applyTestSize(customW.value, customH.value)
+    return
+  }
+  const dims = RATIO_DIMS[next]
+  customW.value = dims.w
+  customH.value = dims.h
+  void applyTestSize(dims.w, dims.h)
+}
+
+function applyCustomSize(): void {
+  void applyTestSize(customW.value, customH.value)
+}
+
 /** 最近一次绘制到画布的映射（设备像素），命中测试与拖拽换算用 */
 const vmap = { scale: 1, ox: 0, oy: 0, dpr: 1 }
-/** 水印坐标系尺寸：背景水印时为整幅画布（与导出一致），其余为照片区域 */
-const wmSpace = { w: 1920, h: 1080 }
+/** 水印坐标系尺寸（照片区域；背景模式不含背景外扩，供面板字号换算与命中） */
+const wmSpace = reactive({ w: 1920, h: 1080 })
 
 function hasVisibleBackground(): boolean {
   return wm.editTarget().some((l) => l.type === 'background' && l.visible)
@@ -221,10 +284,11 @@ function redraw(): void {
   )
   const { photoX, photoY } = composed
   const bgMode = hasVisibleBackground()
-  wmSpace.w = bgMode ? composed.frameW : sampleW.value
-  wmSpace.h = bgMode ? composed.frameH : sampleH.value
+  // 水印坐标系始终是照片区域：背景水印只是外部装饰，不参与锚点计算
+  wmSpace.w = bgMode ? composed.photoW : sampleW.value
+  wmSpace.h = bgMode ? composed.photoH : sampleH.value
 
-  // 选中图层：描边框 + 锚点十字，画在水印坐标系（背景模式 = 画布，其余 = 照片区域）
+  // 选中图层：描边框 + 锚点十字，画在水印坐标系（照片区域）
   // 强调色随主题取自令牌。与绘制共用令牌解析后的副本，父级锚点才与成品一致
   const resolved = resolvedLayers()
   const sel = wm.selected
@@ -236,7 +300,7 @@ function redraw(): void {
   if (sel) {
     const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#ffa72f'
     ctx.save()
-    if (!bgMode) ctx.translate(photoX, photoY)
+    ctx.translate(photoX, photoY)
     const box = measureLayer(sel, wmSpace.w, wmSpace.h, measureContext(), 1, resolved)
     ctx.strokeStyle = accent
     ctx.globalAlpha = 0.95
@@ -258,9 +322,9 @@ function redraw(): void {
     ctx.restore()
   }
   vmap.scale = fit
-  // 指针换算基于水印坐标系原点（背景模式 = 画布原点，其余 = 照片区域原点）
-  vmap.ox = ox + (bgMode ? 0 : photoX * fit)
-  vmap.oy = oy + (bgMode ? 0 : photoY * fit)
+  // 指针换算基于水印坐标系原点（始终是照片区域原点）
+  vmap.ox = ox + photoX * fit
+  vmap.oy = oy + photoY * fit
   vmap.dpr = dpr
 }
 
@@ -694,11 +758,11 @@ function onLeave(): void {
 function onCursorMove(e: PointerEvent): void {
   if (!sampleBmp || !vmap.scale) return
   const p = toImagePx(e.clientX, e.clientY)
-  const list = wm.editTarget()
+  const list = resolvedLayers()
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     if (l.type === 'border' || !l.visible) continue
-    if (hitTest(measureLayer(l, sampleW.value, sampleH.value, measureContext(), 1, resolvedLayers()), p.x, p.y)) {
+    if (hitTest(measureLayer(l, wmSpace.w, wmSpace.h, measureContext(), 1, list), p.x, p.y)) {
       grabbing.value = true
       return
     }
@@ -724,6 +788,8 @@ onBeforeUnmount(() => {
   sampleBmp = null
   for (const b of sampleBmps.values()) b.close()
   sampleBmps.clear()
+  for (const b of sourceBmps.values()) b.close()
+  sourceBmps.clear()
   for (const b of assetBmps.values()) b.close()
   assetBmps.clear()
 })
@@ -779,26 +845,42 @@ watch(mode, async (m) => {
     <!-- 模板编辑器：v-show 常驻，画布状态与视图变换在切换间保留 -->
     <div v-show="mode === 'edit'" class="body">
       <div ref="boxEl" class="preview">
-        <!-- 样张方向：竖构图是水印最容易翻车的场景，随时切换对照 -->
-        <div class="orient material" role="group" :aria-label="t('样张方向')">
-          <button
-            class="orient-btn"
-            :class="{ on: !portrait }"
-            :aria-pressed="!portrait"
-            :title="t('横屏样张 16:9')"
-            @click="setOrientation(false)"
+        <!-- 测试画幅：常见比例 + 自定义长宽；竖构图是水印最容易翻车的场景 -->
+        <div class="orient material ratio-panel" role="group" :aria-label="t('测试画幅')">
+          <span class="ratio-label">{{ t('测试画幅') }}</span>
+          <select
+            class="ratio-select"
+            :value="ratio"
+            @change="selectRatio(($event.target as HTMLSelectElement).value as TestRatio)"
           >
-            {{ t('横屏') }}
-          </button>
-          <button
-            class="orient-btn"
-            :class="{ on: portrait }"
-            :aria-pressed="portrait"
-            :title="t('竖屏样张 9:16')"
-            @click="setOrientation(true)"
-          >
-            {{ t('竖屏') }}
-          </button>
+            <option value="16:9">16:9</option>
+            <option value="9:16">9:16</option>
+            <option value="1:1">1:1</option>
+            <option value="4:5">4:5</option>
+            <option value="3:2">3:2</option>
+            <option value="custom">{{ t('自定义') }}</option>
+          </select>
+          <template v-if="ratio === 'custom'">
+            <input
+              v-model.number="customW"
+              class="ratio-input"
+              type="number"
+              min="160"
+              max="4096"
+              :aria-label="t('宽度')"
+            />
+            <span class="ratio-x">×</span>
+            <input
+              v-model.number="customH"
+              class="ratio-input"
+              type="number"
+              min="160"
+              max="4096"
+              :aria-label="t('高度')"
+            />
+            <button class="ratio-apply" @click="applyCustomSize">{{ t('应用') }}</button>
+          </template>
+          <span v-else class="ratio-size">{{ sampleW }}×{{ sampleH }}</span>
         </div>
         <canvas
           ref="canvasEl"
@@ -813,7 +895,7 @@ watch(mode, async (m) => {
         />
       </div>
       <aside class="editor material">
-        <LayerEditor :img-w="frameSize.w" :img-h="frameSize.h" :exif="SAMPLE_EXIF" base-name="样张" :show-templates="false" />
+        <LayerEditor :img-w="wmSpace.w" :img-h="wmSpace.h" :exif="SAMPLE_EXIF" base-name="样张" :show-templates="false" />
       </aside>
     </div>
   </div>
@@ -910,35 +992,69 @@ h1 {
   /* 中性工作台底色：比页面底色略沉一档，样张轮廓清晰，也不再靠白色圆角卡片衬托 */
   background: color-mix(in srgb, var(--canvas) 88%, var(--text) 12%);
 }
-/* 方向切换：浮在样张上方，材质底保证任何照片上都可读 */
+/* 测试画幅：浮在样张上方，材质底保证任何照片上都可读 */
 .orient {
   position: absolute;
   top: 10px;
   right: 12px;
   z-index: 2;
   display: inline-flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 999px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border-radius: var(--r-m);
   border: 1px solid var(--line);
   background: var(--surface);
   backdrop-filter: var(--blur-material);
   -webkit-backdrop-filter: var(--blur-material);
 }
-.orient-btn {
+.ratio-label {
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.ratio-select {
   height: calc(24px * var(--ui-zoom, 1));
-  padding: 0 10px;
-  border-radius: 999px;
-  font-size: calc(11.5px * var(--ui-zoom, 1));
+  padding: 0 4px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
   color: var(--text-2);
-  transition: background var(--dur-hover) var(--ease-soft), color var(--dur-hover) var(--ease-soft);
+  font-size: calc(11.5px * var(--ui-zoom, 1));
 }
-.orient-btn:hover:not(.on) {
-  color: var(--text);
+.ratio-select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
 }
-.orient-btn.on {
-  background: var(--raised);
+.ratio-input {
+  width: 58px;
+  height: calc(24px * var(--ui-zoom, 1));
+  padding: 0 5px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
   color: var(--text);
+  font-size: calc(11.5px * var(--ui-zoom, 1));
+  font-variant-numeric: tabular-nums;
+}
+.ratio-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+.ratio-x,
+.ratio-size {
+  font-size: calc(11px * var(--ui-zoom, 1));
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ratio-apply {
+  height: calc(24px * var(--ui-zoom, 1));
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: calc(11.5px * var(--ui-zoom, 1));
 }
 /* 画布铺满容器（四周留边），缩放与平移都发生在画布内部的绘制变换里。
    不加圆角与投影：样张本身就是照片，多余的白底圆角卡片会干扰对水印的判断 */

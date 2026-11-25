@@ -106,6 +106,10 @@ const messages: Record<string, string> = {
   "用滚轮或双指可以缩到的最小比例；双击复位回到适应窗口":
     "Smallest scale reachable by wheel or pinch; double-click resets to fit",
   "最小缩放": "Minimum zoom",
+  "放大平移安全区": "Zoomed pan safety zone",
+  "放大后照片边缘保留的边距；数值越大，可平移查看的最大边距越小，0 为可以贴边":
+    "Breathing room kept at the photo edge after zooming in. A larger value reduces the maximum pan travel; 0 allows panning flush to the edge",
+  "安全区": "Safety zone",
   "双击复位": "Double-click to reset",
   "渲染质量": "Render quality",
   "自适应": "Adaptive",

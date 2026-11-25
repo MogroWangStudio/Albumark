@@ -873,6 +873,10 @@ function drawOverlay(): void {
 
   const layers = resolvedLayers()
   const pxScale = overlayPxScale()
+  // 水印坐标系：背景水印存在时是照片区域，否则是整幅画面（含边框环带）
+  const wmRect = bgLayout
+    ? { x: bgLayout.photoX, y: bgLayout.photoY, w: bgLayout.photoW, h: bgLayout.photoH }
+    : { x: 0, y: 0, w: resultMap.w, h: resultMap.h }
   const draft = adjust.cropMode ? adjust.cropDraft : null
   if (draft) {
     // 水印画进裁剪框坐标系：预览位置与应用裁剪后完全一致
@@ -888,7 +892,10 @@ function drawOverlay(): void {
     drawLayers(ctx, sw, sh, layers, assetBmps, pxScale)
     ctx.restore()
   } else {
-    drawLayers(ctx, resultMap.w, resultMap.h, layers, assetBmps, pxScale)
+    ctx.save()
+    ctx.translate(wmRect.x, wmRect.y)
+    drawLayers(ctx, wmRect.w, wmRect.h, layers, assetBmps, pxScale)
+    ctx.restore()
   }
 
   if (draft) {
@@ -897,10 +904,11 @@ function drawOverlay(): void {
     return
   }
 
-  // 吸附参考线
+  // 吸附参考线（画在水印坐标系里，随照片区域偏移）
   const snap = snapLines.value
   if (snap) {
     ctx.save()
+    ctx.translate(wmRect.x, wmRect.y)
     ctx.strokeStyle = accentCss()
     ctx.globalAlpha = 0.9
     ctx.lineWidth = 1 / scale
@@ -908,13 +916,13 @@ function drawOverlay(): void {
     if (snap.x !== undefined) {
       ctx.beginPath()
       ctx.moveTo(snap.x, 0)
-      ctx.lineTo(snap.x, resultMap.h)
+      ctx.lineTo(snap.x, wmRect.h)
       ctx.stroke()
     }
     if (snap.y !== undefined) {
       ctx.beginPath()
       ctx.moveTo(0, snap.y)
-      ctx.lineTo(resultMap.w, snap.y)
+      ctx.lineTo(wmRect.w, snap.y)
       ctx.stroke()
     }
     ctx.restore()
@@ -929,8 +937,9 @@ function drawOverlay(): void {
         (l): l is TextLayer | ImageLayer =>
           l.id === sel.id && l.type !== 'border' && l.type !== 'background',
       ) ?? (sel as TextLayer | ImageLayer)
-    const a = layerAnchor(resolvedSel, resultMap.w, resultMap.h, overlayPxScale(), resolvedLayers(), measureContext())
+    const a = layerAnchor(resolvedSel, wmRect.w, wmRect.h, overlayPxScale(), resolvedLayers(), measureContext())
     ctx.save()
+    ctx.translate(wmRect.x, wmRect.y)
     ctx.strokeStyle = accentCss()
     ctx.globalAlpha = 0.75
     ctx.lineWidth = 1 / scale
@@ -1052,12 +1061,23 @@ function updateSelRect(): void {
     selRect.value = null
     return
   }
-  const box = measureLayer(resolvedLayers().find((l) => l.id === sel.id) ?? sel, resultMap.w, resultMap.h, measureContext(), overlayPxScale(), resolvedLayers())
+  // 背景水印下选框/锚点都属于照片区域，与叠加层绘制同一坐标系
+  const rect = bgLayout
+    ? { x: bgLayout.photoX, y: bgLayout.photoY, w: bgLayout.photoW, h: bgLayout.photoH }
+    : { x: 0, y: 0, w: resultMap.w, h: resultMap.h }
+  const box = measureLayer(
+    resolvedLayers().find((l) => l.id === sel.id) ?? sel,
+    rect.w,
+    rect.h,
+    measureContext(),
+    overlayPxScale(),
+    resolvedLayers(),
+  )
   const dpr = view.dpr || 1
   const s = resultMap.scale
   selRect.value = {
-    left: (resultMap.ox + (box.cx - box.w / 2) * s) / dpr,
-    top: (resultMap.oy + (box.cy - box.h / 2) * s) / dpr,
+    left: (resultMap.ox + (rect.x + box.cx - box.w / 2) * s) / dpr,
+    top: (resultMap.oy + (rect.y + box.cy - box.h / 2) * s) / dpr,
     width: (box.w * s) / dpr,
     height: (box.h * s) / dpr,
     rotate: box.rotation,
@@ -1071,6 +1091,20 @@ function toImagePx(clientX: number, clientY: number): { x: number; y: number } {
   const dx = (clientX - rect.left) * dpr
   const dy = (clientY - rect.top) * dpr
   return { x: (dx - resultMap.ox) / resultMap.scale, y: (dy - resultMap.oy) / resultMap.scale }
+}
+
+/** 水印坐标系矩形：有背景时是照片区域，否则是整幅画面 */
+function wmRect(): { x: number; y: number; w: number; h: number } {
+  return bgLayout
+    ? { x: bgLayout.photoX, y: bgLayout.photoY, w: bgLayout.photoW, h: bgLayout.photoH }
+    : { x: 0, y: 0, w: resultMap.w, h: resultMap.h }
+}
+
+/** 指针 → 水印坐标系（背景模式下扣掉照片偏移，拖拽 / 吸附都在照片内） */
+function toLayerPx(clientX: number, clientY: number): { x: number; y: number } {
+  const p = toImagePx(clientX, clientY)
+  const r = wmRect()
+  return { x: p.x - r.x, y: p.y - r.y }
 }
 
 /* ---------- 白平衡取样 ---------- */
@@ -1110,7 +1144,6 @@ function sampleResult(x: number, y: number): { r: number; g: number; b: number }
 /* ---------- 视图变换：缩放 / 平移 / 橡皮筋 ---------- */
 
 /** 放大平移时图片边缘与面板/顶栏/底栏保留的呼吸边距 */
-const PAN_MARGIN = 12
 
 /** 图像在当前 zoom 下的显示尺寸（CSS px）：以画布实际映射为准。
  *  有背景水印时 resultMap 是「背景画布」而不是照片位图，用 resultBmp
@@ -1125,8 +1158,8 @@ function displaySize(): { w: number; h: number } {
 
 function hardClampPan(): void {
   const d = displaySize()
-  pan.x = clampPanAxis(pan.x, d.w, avail.w, zoom.value, false, PAN_MARGIN)
-  pan.y = clampPanAxis(pan.y, d.h, avail.h, zoom.value, false, PAN_MARGIN)
+  pan.x = clampPanAxis(pan.x, d.w, avail.w, zoom.value, false, settings.panMargin)
+  pan.y = clampPanAxis(pan.y, d.h, avail.h, zoom.value, false, settings.panMargin)
 }
 
 function stopViewAnim(): void {
@@ -1257,8 +1290,9 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
   const cssPerImg = resultMap.scale / dpr
   const threshold = 8 / cssPerImg // 进入吸附的容差（图片 px）
   const leaveThreshold = (8 + SNAP_HYSTERESIS) / cssPerImg
-  const imgW = resultMap.w
-  const imgH = resultMap.h
+  const region = wmRect()
+  const imgW = region.w
+  const imgH = region.h
   const pxScale = overlayPxScale()
   const xs: number[] = [imgW / 2, imgW * 0.04, imgW * 0.96]
   const ys: number[] = [imgH / 2, imgH * 0.04, imgH * 0.96]
@@ -1523,8 +1557,9 @@ function onPointerDown(e: PointerEvent): void {
       wm.pickingAnchor = false
       return
     }
-    const p = toImagePx(e.clientX, e.clientY)
-    wm.placeCustomAnchor((p.x / resultMap.w) * 100, (p.y / resultMap.h) * 100)
+    const p = toLayerPx(e.clientX, e.clientY)
+    const r = wmRect()
+    wm.placeCustomAnchor((p.x / r.w) * 100, (p.y / r.h) * 100)
     return
   }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, downT: performance.now(), moved: false })
@@ -1575,7 +1610,9 @@ function onPointerDown(e: PointerEvent): void {
     return
   }
 
-  const p = toImagePx(e.clientX, e.clientY)
+  const pFrame = toImagePx(e.clientX, e.clientY)
+  const p = toLayerPx(e.clientX, e.clientY)
+  const region = wmRect()
   const list = stale ? [] : resolvedLayers()
   // 中键只负责平移预览，不选中 / 不拖动图层
   if (e.button === 1) {
@@ -1588,10 +1625,10 @@ function onPointerDown(e: PointerEvent): void {
     const l = list[i]
     // 边框层覆盖全画布、无独立位置，只能从图层列表选中
     if (l.type === 'border' || l.type === 'background' || !l.visible) continue
-    const box = measureLayer(resolvedLayer(l), resultMap.w, resultMap.h, measureContext(), overlayPxScale(), list)
+    const box = measureLayer(resolvedLayer(l), region.w, region.h, measureContext(), overlayPxScale(), list)
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
-      const c = layerPivot(l, resultMap.w, resultMap.h, overlayPxScale(), list, measureContext())
+      const c = layerPivot(l, region.w, region.h, overlayPxScale(), list, measureContext())
       dragSnap = { x: null, y: null }
       gesture = {
         type: 'layer',
@@ -1606,7 +1643,12 @@ function onPointerDown(e: PointerEvent): void {
   // 背景水印存在时，点按照片区域 = 拖动照片在背景上的位置（背景空白仍平移视图）
   if (bgLayout) {
     const r = bgLayout
-    if (p.x >= r.photoX && p.x <= r.photoX + r.photoW && p.y >= r.photoY && p.y <= r.photoY + r.photoH) {
+    if (
+      pFrame.x >= r.photoX &&
+      pFrame.x <= r.photoX + r.photoW &&
+      pFrame.y >= r.photoY &&
+      pFrame.y <= r.photoY + r.photoH
+    ) {
       const bg = backgroundLayers()[0]
       if (bg) {
         wm.selectedId = bg.id
@@ -1696,8 +1738,9 @@ function onPointerMove(e: PointerEvent): void {
     const gid = gesture.id
     const dpr = view.dpr || 1
     const cssPerImg = resultMap.scale / dpr
-    const imgW = resultMap.w
-    const imgH = resultMap.h
+    const region = wmRect()
+    const imgW = region.w
+    const imgH = region.h
     const proposedX = gesture.startCx + (e.clientX - gesture.startClient.x) / cssPerImg
     const proposedY = gesture.startCy + (e.clientY - gesture.startClient.y) / cssPerImg
     const snapped = applySnap(proposedX, proposedY, gid)
@@ -1794,7 +1837,7 @@ function onPointerMove(e: PointerEvent): void {
       avail.w,
       zoom.value,
       true,
-      PAN_MARGIN,
+      settings.panMargin,
     )
     pan.y = clampPanAxis(
       gesture.startPan.y + (e.clientY - gesture.startClient.y),
@@ -1802,7 +1845,7 @@ function onPointerMove(e: PointerEvent): void {
       avail.h,
       zoom.value,
       true,
-      PAN_MARGIN,
+      settings.panMargin,
     )
     drawBase()
     drawOverlay()
@@ -1833,8 +1876,8 @@ function onPointerUp(e: PointerEvent): void {
       const tz = Math.min(MAX_ZOOM, Math.max(minZoom.value, zoom.value))
       const d = displaySize()
       zoom.value = tz
-      const tx = clampPanAxis(pan.x, d.w, avail.w, zoom.value, false, PAN_MARGIN)
-      const ty = clampPanAxis(pan.y, d.h, avail.h, zoom.value, false, PAN_MARGIN)
+      const tx = clampPanAxis(pan.x, d.w, avail.w, zoom.value, false, settings.panMargin)
+      const ty = clampPanAxis(pan.y, d.h, avail.h, zoom.value, false, settings.panMargin)
       if (Math.abs(tx - pan.x) > 0.5 || Math.abs(ty - pan.y) > 0.5) {
         animateViewTo(tz, tx, ty)
       } else {
@@ -1894,8 +1937,8 @@ function onPointerUp(e: PointerEvent): void {
   // 面板展开时全视口基准会把图片放行到面板底下，造成部分内容无法拖回）
   if (g.type === 'pan') {
     const d = displaySize()
-    const tx = clampPanAxis(pan.x, d.w, avail.w, zoom.value, false, PAN_MARGIN)
-    const ty = clampPanAxis(pan.y, d.h, avail.h, zoom.value, false, PAN_MARGIN)
+    const tx = clampPanAxis(pan.x, d.w, avail.w, zoom.value, false, settings.panMargin)
+    const ty = clampPanAxis(pan.y, d.h, avail.h, zoom.value, false, settings.panMargin)
     if (Math.abs(tx - pan.x) > 0.5 || Math.abs(ty - pan.y) > 0.5) {
       animateViewTo(zoom.value, tx, ty)
     }

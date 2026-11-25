@@ -185,8 +185,11 @@ async function handle(job: RenderJob): Promise<void> {
       }
       paintPhotoOnBackground(fctx, band, w, h, layout, bg, borders, pxScale)
       measureCtx()
-      // pxScale：水印 offset 是原图尺度像素，与边框 / 背景偏移同样折算
-      drawLayers(fctx, layout.frameW, layout.frameH, pictureLayers, assetCache, pxScale)
+      // 水印坐标系是照片区域：背景外扩只改变照片占比，锚点跟随照片
+      fctx.save()
+      fctx.translate(layout.photoX, layout.photoY)
+      drawLayers(fctx, layout.photoW, layout.photoH, pictureLayers, assetCache, pxScale)
+      fctx.restore()
       framed = frame
       fw = layout.frameW
       fh = layout.frameH
@@ -244,8 +247,11 @@ async function handle(job: RenderJob): Promise<void> {
 
   measureCtx()
   const outCtx = framed.getContext('2d') as OffscreenCanvasRenderingContext2D
-  // pxScale：水印偏移是原图尺度像素，预览（缩小 / 降采样渲染）与导出必须同一折算
-  drawLayers(outCtx, fw, fh, pictureLayers, assetCache, pxScale)
+  // 背景导出已在照片坐标系里画过水印，这里只处理无背景路径，避免二次绘制
+  if (!composeBg) {
+    // pxScale：水印偏移是原图尺度像素，预览（缩小 / 降采样渲染）与导出必须同一折算
+    drawLayers(outCtx, fw, fh, pictureLayers, assetCache, pxScale)
+  }
 
   if (job.want === 'bitmap') {
     const out = await createImageBitmap(framed)

@@ -88,10 +88,13 @@ export function drawSample(
 }
 
 export interface PaintComposedResult {
-  /** 照片区域在最终画布上的偏移（边框扩展量） */
+  /** 照片区域在最终画布上的偏移（边框扩展量 / 背景布局） */
   photoX: number
   photoY: number
-  /** 最终画布尺寸（照片 + 边框扩展） */
+  /** 照片区域尺寸（背景模式下可能被 photoScale 缩放） */
+  photoW: number
+  photoH: number
+  /** 最终画布尺寸（照片 + 边框扩展 / 背景外扩） */
   frameW: number
   frameH: number
 }
@@ -100,8 +103,9 @@ export interface PaintComposedResult {
  * 把照片与一组水印图层合成绘制到 ctx 上：先按图层列表从外到内画出边框层
  * （列表越靠前越贴近照片），再画照片与文字 / 图片水印。
  * 与渲染 Worker 的画布扩展顺序完全一致。返回照片偏移与最终画布尺寸。
- * 有背景水印时走另一条路径：背景铺满最终画布、照片带缩放 / 圆角 / 阴影
- * 浮于其上、边框改为照片外围环带，水印画在最外画布坐标系（与导出一致）。
+ * 有背景水印时：背景铺满最终画布，照片浮于其上；文字 / 图片水印始终
+ * 以「照片区域」为坐标系（背景属于水印装饰，不参与锚点计算），
+ * 因此背景外扩只改变照片在画布中的占比，不会把水印往画布边缘拽。
  */
 export function paintComposed(
   ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
@@ -138,8 +142,19 @@ export function paintComposed(
       paintOverlay(ctx, b, layout.frameW, layout.frameH)
     }
     paintPhotoOnBackground(ctx, band, baseW, baseH, layout, bg, borders, 1)
-    drawLayers(ctx, layout.frameW, layout.frameH, others, assets)
-    return { photoX: layout.photoX, photoY: layout.photoY, frameW: layout.frameW, frameH: layout.frameH }
+    // 水印坐标系是照片区域（不是整幅画布）：背景外扩只改变照片占比
+    ctx.save()
+    ctx.translate(layout.photoX, layout.photoY)
+    drawLayers(ctx, layout.photoW, layout.photoH, others, assets)
+    ctx.restore()
+    return {
+      photoX: layout.photoX,
+      photoY: layout.photoY,
+      photoW: layout.photoW,
+      photoH: layout.photoH,
+      frameW: layout.frameW,
+      frameH: layout.frameH,
+    }
   }
 
   let extL = 0
@@ -179,7 +194,7 @@ export function paintComposed(
   ctx.translate(rx, ry)
   drawLayers(ctx, baseW, baseH, others, assets)
   ctx.restore()
-  return { photoX: rx, photoY: ry, frameW, frameH }
+  return { photoX: rx, photoY: ry, photoW: baseW, photoH: baseH, frameW, frameH }
 }
 
 /**
