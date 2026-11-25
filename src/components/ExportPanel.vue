@@ -11,7 +11,9 @@ import { fmtSize } from '@/core/format'
 import { isCapacitor, isTauri } from '@/core/platform'
 import { useExportStore } from '@/stores/export'
 import { useImagesStore } from '@/stores/images'
+import { useI18n } from '@/i18n'
 
+const { t } = useI18n()
 const ex = useExportStore()
 const images = useImagesStore()
 
@@ -54,9 +56,9 @@ const modeModel = computed({
 
 /** 安卓多一项「分享」；桌面与浏览器没有系统分享面板，不占位置 */
 const modeOptions = computed(() => [
-  { value: 'zip', label: 'ZIP 压缩包' },
-  { value: 'folder', label: '文件夹（逐张写入）', disabled: !canFolder },
-  ...(canShare ? [{ value: 'share', label: '分享' }] : []),
+  { value: 'zip', label: t('ZIP 压缩包') },
+  { value: 'folder', label: t('文件夹（逐张写入）'), disabled: !canFolder },
+  ...(canShare ? [{ value: 'share', label: t('分享') }] : []),
 ])
 
 const formatModel = computed({
@@ -90,13 +92,15 @@ function applyPicked(ids: Set<string>): void {
 }
 
 const scopeCountText = computed(() =>
-  ex.scope === 'picked' ? `已选 ${ex.pickedCount} / ${images.items.length} 张` : `共 ${images.items.length} 张`,
+  ex.scope === 'picked'
+    ? t('已选 {0} / {1} 张', ex.pickedCount, images.items.length)
+    : t('共 {0} 张', images.items.length),
 )
 
 /* ---------- 大小预估：设置 / 范围 / 照片清单变化后防抖重算 ---------- */
 
 const estimateText = computed(() =>
-  ex.estimating ? '估算中…' : ex.estimate != null ? `约 ${fmtSize(ex.estimate)}` : '',
+  ex.estimating ? t('估算中…') : ex.estimate != null ? t('约 {0}', fmtSize(ex.estimate)) : '',
 )
 
 let estimateTimer = 0
@@ -147,29 +151,29 @@ async function start(): Promise<void> {
 <template>
   <div class="export panel-scroll">
     <div class="head">
-      <h1>导出</h1>
+      <h1>{{ t('导出') }}</h1>
     </div>
     <template v-if="!running && !finished">
       <div class="field">
         <div class="scope-head">
-          <span class="fl">导出范围</span>
+          <span class="fl">{{ t('导出范围') }}</span>
           <span class="scope-count">{{ scopeCountText }}</span>
         </div>
         <AppSegment
           v-model="scopeModel"
           small
           :options="[
-            { value: 'all', label: '全部照片' },
-            { value: 'picked', label: '自选' },
+            { value: 'all', label: t('全部照片') },
+            { value: 'picked', label: t('自选') },
           ]"
         />
         <!-- 自选快捷操作：批量勾选不必逐张点击 -->
         <div v-if="ex.scope === 'picked'" class="pick-actions">
-          <AppButton size="sm" variant="ghost" @click="ex.pickAll">全部选择</AppButton>
+          <AppButton size="sm" variant="ghost" @click="ex.pickAll">{{ t('全部选择') }}</AppButton>
           <AppButton size="sm" variant="ghost" :disabled="!ex.pickedCount" @click="ex.clearPick">
-            取消全选
+            {{ t('取消全选') }}
           </AppButton>
-          <AppButton size="sm" variant="ghost" @click="pickDialogOpen = true">多个框选…</AppButton>
+          <AppButton size="sm" variant="ghost" @click="pickDialogOpen = true">{{ t('多个框选…') }}</AppButton>
         </div>
         <!-- 自选网格：点击缩略图勾选 / 取消，超出面板高度内部滚动 -->
         <div v-if="ex.scope === 'picked'" class="pick-grid">
@@ -187,17 +191,17 @@ async function start(): Promise<void> {
           </button>
         </div>
         <p v-if="ex.scope === 'picked' && ex.pickedCount === 0" class="mode-hint">
-          尚未选择照片，点击上方缩略图勾选要导出的图片。
+          {{ t('尚未选择照片，点击上方缩略图勾选要导出的图片。') }}
         </p>
       </div>
       <div class="field">
-        <span class="fl">图像格式</span>
+        <span class="fl">{{ t('图像格式') }}</span>
         <AppSegment
           v-model="formatModel"
           small
           :options="[
-            { value: 'jpg', label: 'JPG（体积小）' },
-            { value: 'png', label: 'PNG（无损）' },
+            { value: 'jpg', label: t('JPG（体积小）') },
+            { value: 'png', label: t('PNG（无损）') },
           ]"
         />
       </div>
@@ -206,24 +210,24 @@ async function start(): Promise<void> {
         v-model="ex.quality"
         :min="50"
         :max="100"
-        label="图像质量"
+        :label="t('图像质量')"
         :format="(v) => `${v}%`"
         @reset="ex.quality = 90"
       />
       <div v-if="ex.format === 'jpg'" class="switch-row">
         <div class="text">
-          <span class="fl">保留 EXIF 元数据</span>
+          <span class="fl">{{ t('保留 EXIF 元数据') }}</span>
         </div>
         <AppSwitch v-model="ex.keepExif" />
       </div>
       <div class="field">
-        <span class="fl">图像长边像素</span>
+        <span class="fl">{{ t('图像长边像素') }}</span>
         <div class="long-edge">
           <AppSegment
             v-model="longEdgeModel"
             small
             :options="[
-              { value: '0', label: '原图' },
+              { value: '0', label: t('原图') },
               { value: '2560', label: '2560' },
               { value: '1920', label: '1920' },
               { value: '1280', label: '1280' },
@@ -235,36 +239,40 @@ async function start(): Promise<void> {
             min="0"
             max="20000"
             step="1"
-            placeholder="自定义"
+            :placeholder="t('自定义')"
             :value="customLongEdge"
             @input="onCustomLongEdge"
           />
         </div>
       </div>
       <div class="field">
-        <span class="fl">文件名模板</span>
+        <span class="fl">{{ t('文件名模板') }}</span>
         <input ref="patternEl" v-model="ex.pattern" class="text-input" spellcheck="false" />
         <div class="tokens">
-          <button v-for="t in TOKENS" :key="t.key" class="chip" @click="insertPatternToken(t.key)">
-            {{ t.label }}
+          <button v-for="tok in TOKENS" :key="tok.key" class="chip" @click="insertPatternToken(tok.key)">
+            {{ t(tok.label) }}
           </button>
         </div>
       </div>
       <div class="field">
-        <span class="fl">导出方式</span>
+        <span class="fl">{{ t('导出方式') }}</span>
         <AppSegment v-model="modeModel" small :options="modeOptions" />
         <p v-if="modeModel === 'folder'" class="mode-hint">
-          {{ isTauri ? '选择一个文件夹，照片逐张写入其中。' : '照片逐张写入公共 Documents/Albumark/ 下的按时间命名的文件夹。' }}
+          {{
+            isTauri
+              ? t('选择一个文件夹，照片逐张写入其中。')
+              : t('照片逐张写入公共 Documents/Albumark/ 下的按时间命名的文件夹。')
+          }}
         </p>
         <p v-else-if="modeModel === 'share'" class="mode-hint">
-          导出完成后打开系统分享面板，选择应用直接发送，不在公共目录留副本。
+          {{ t('导出完成后打开系统分享面板，选择应用直接发送，不在公共目录留副本。') }}
         </p>
       </div>
       <p v-if="estimateText" class="estimate" :class="{ computing: ex.estimating }" aria-live="polite">
-        预计大小<strong>{{ estimateText }}</strong>
+        {{ t('预计大小') }}<strong>{{ estimateText }}</strong>
       </p>
       <AppButton variant="primary" class="start" :disabled="!exportable" @click="start">
-        <Package :size="15" />开始导出
+        <Package :size="15" />{{ t('开始导出') }}
       </AppButton>
     </template>
 
@@ -283,23 +291,22 @@ async function start(): Promise<void> {
 
     <template v-else>
       <div class="done-area">
-        <p>
-          已导出 {{ ex.total - ex.errors.length }} 张照片<template v-if="ex.errors.length"
-            >，{{ ex.errors.length }} 张失败</template
-          >。
+        <p v-if="ex.errors.length">
+          {{ t('已导出 {0} 张照片，{1} 张失败。', ex.total - ex.errors.length, ex.errors.length) }}
         </p>
+        <p v-else>{{ t('已导出 {0} 张照片。', ex.total - ex.errors.length) }}</p>
         <p v-if="ex.resultPath" class="dest mono">{{ ex.resultPath }}</p>
         <ul v-if="ex.errors.length" class="errors">
           <li v-for="e in ex.errors" :key="e">{{ e }}</li>
         </ul>
         <div class="actions">
           <AppButton v-if="ex.resultPath && isTauri" @click="ex.openResult()">
-            <FolderOpen :size="15" />打开所在文件夹
+            <FolderOpen :size="15" />{{ t('打开所在文件夹') }}
           </AppButton>
           <AppButton v-if="canShare && ex.shareUris.length" @click="ex.reshare()">
-            <Share2 :size="15" />分享
+            <Share2 :size="15" />{{ t('分享') }}
           </AppButton>
-          <AppButton variant="primary" @click="ex.reset()">完成</AppButton>
+          <AppButton variant="primary" @click="ex.reset()">{{ t('完成') }}</AppButton>
         </div>
       </div>
     </template>

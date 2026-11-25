@@ -1,6 +1,7 @@
 import { registerPlugin } from '@capacitor/core'
 import { isCapacitor, isTauri } from './platform'
 import { APP_VERSION } from './version'
+import { t } from '@/i18n'
 
 /**
  * GitHub Release 检查与自动更新：
@@ -645,7 +646,7 @@ async function fetchBytes(
       )
     : await fetch(url, { headers, signal })
   if (res.status === 404) {
-    throw new Error('该版本暂无适配当前平台的安装包，请前往发布页手动下载')
+    throw new Error(t('该版本暂无适配当前平台的安装包，请前往发布页手动下载'))
   }
   // Range 超出文件末尾（total 与服务端不一致等）：缓冲视为已完整
   if (res.status === 416 && buf && buf.loaded > 0) {
@@ -771,7 +772,7 @@ export async function downloadUpdate(
 ): Promise<DownloadResult> {
   const asset = info.asset
   if (!asset) {
-    throw new Error('没有适配当前平台的更新包，请前往下载页手动获取')
+    throw new Error(t('没有适配当前平台的更新包，请前往下载页手动获取'))
   }
   // 优先用清单里查到的真实链接（命名规则换代的版本也能对上），缺失才按模板拼
   const rawUrl = info.assetUrl ?? `${DOWNLOAD_BASE}/v${info.version}/${asset}`
@@ -797,10 +798,10 @@ export async function downloadUpdate(
       const { unzipSync } = await import('fflate')
       entry = Object.entries(unzipSync(full)).find(([, data]) => data.length > 0)
     } catch {
-      throw new Error('更新包解析失败，请重新下载或前往下载页手动获取')
+      throw new Error(t('更新包解析失败，请重新下载或前往下载页手动获取'))
     }
     if (!entry) {
-      throw new Error('更新包内容为空，请重新下载或前往下载页手动获取')
+      throw new Error(t('更新包内容为空，请重新下载或前往下载页手动获取'))
     }
     payload = entry[1]
     pkgName = payloadName(entry[0])
@@ -808,7 +809,7 @@ export async function downloadUpdate(
     payload = full
     pkgName = payloadName(asset)
     if (!/\.(exe|dmg|apk)$/i.test(pkgName)) {
-      throw new Error('更新包格式无法识别，请前往下载页手动获取')
+      throw new Error(t('更新包格式无法识别，请前往下载页手动获取'))
     }
   }
 
@@ -823,7 +824,7 @@ export async function downloadUpdate(
     })
     const updater = registerPlugin<{ openApk(o: { path: string }): Promise<void> }>('Updater')
     await updater.openApk({ path: rel })
-    return { kind: 'auto', stagedPath: rel, message: '已交给系统安装，按提示完成更新' }
+    return { kind: 'auto', stagedPath: rel, message: t('已交给系统安装，按提示完成更新') }
   }
 
   const { join } = await import('@tauri-apps/api/path')
@@ -834,14 +835,14 @@ export async function downloadUpdate(
   const onWindows = /Windows/i.test(navigator.userAgent)
   const base = onWindows ? await executableDir() : await appDataDir()
   if (!base) {
-    throw new Error(onWindows ? '无法定位程序目录' : '无法定位数据目录')
+    throw new Error(onWindows ? t('无法定位程序目录') : t('无法定位数据目录'))
   }
   const dir = await join(base, 'updates')
   await mkdir(dir, { recursive: true }).catch(() => undefined)
   await clearStale(dir)
   const stagedPath = await join(dir, pkgName)
   await writeFile(stagedPath, payload)
-  return { kind: 'staged', stagedPath, message: '更新包已就绪' }
+  return { kind: 'staged', stagedPath, message: t('更新包已就绪') }
 }
 
 /**

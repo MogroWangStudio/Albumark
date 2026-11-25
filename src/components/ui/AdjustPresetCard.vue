@@ -4,6 +4,7 @@ import { MoreHorizontal } from 'lucide-vue-next'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
 import type { DropdownItem } from '@/components/ui/AppDropdown.vue'
 import { cancelPresetThumb, requestPresetThumb } from '@/core/presetThumb'
+import { useI18n } from '@/i18n'
 import type { AdjustPreset } from '@/stores/adjustPresets'
 
 const props = defineProps<{
@@ -23,6 +24,7 @@ const emit = defineEmits<{
 }>()
 
 const canvas = ref<HTMLCanvasElement | null>(null)
+const { t } = useI18n()
 
 function paint(): void {
   if (!canvas.value || !props.base) return
@@ -39,8 +41,8 @@ onBeforeUnmount(() => {
 })
 
 const menu = computed<DropdownItem[]>(() => [
-  { label: '应用到全部照片', action: () => emit('applyAll') },
-  { label: '删除预设', danger: true, action: () => emit('remove') },
+  { label: t('应用到全部照片'), action: () => emit('applyAll') },
+  { label: t('删除预设'), danger: true, action: () => emit('remove') },
 ])
 </script>
 
@@ -51,7 +53,7 @@ const menu = computed<DropdownItem[]>(() => [
     role="button"
     tabindex="0"
     :aria-pressed="active"
-    :aria-label="`套用预设「${preset.name}」`"
+    :aria-label="t('套用预设「{0}」', preset.name)"
     @click="emit('apply')"
     @keydown.enter.prevent="emit('apply')"
     @keydown.space.prevent="emit('apply')"
@@ -59,11 +61,11 @@ const menu = computed<DropdownItem[]>(() => [
     <div class="pthumb">
       <canvas ref="canvas" />
     </div>
-    <span v-if="active" class="pbadge">已应用</span>
+    <span v-if="active" class="pbadge">{{ t('已应用') }}</span>
     <div class="pactions">
       <AppDropdown :items="menu" align="right">
         <template #trigger>
-          <button class="pmore" title="更多操作" aria-label="更多操作">
+          <button class="pmore" :title="t('更多操作')" :aria-label="t('更多操作')">
             <MoreHorizontal :size="14" />
           </button>
         </template>

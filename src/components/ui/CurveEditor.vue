@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RotateCcw } from 'lucide-vue-next'
 import { curvePoints } from '@/core/adjust'
+import { useI18n } from '@/i18n'
 import { CURVE_CHANNELS, isCurveNeutral, type CurveChannel, type Curves } from '@/types/adjust'
 import AppSegment from '@/components/ui/AppSegment.vue'
 
@@ -12,6 +13,7 @@ import AppSegment from '@/components/ui/AppSegment.vue'
  */
 const props = defineProps<{ modelValue?: Curves }>()
 const emit = defineEmits<{ 'update:modelValue': [value: Curves | undefined] }>()
+const { t } = useI18n()
 
 const cv = ref<HTMLCanvasElement | null>(null)
 /** 曲线区四周的内边距（CSS px），绘制与指针映射共用同一坐标系 */
@@ -293,12 +295,12 @@ onBeforeUnmount(() => ro?.disconnect())
 <template>
   <div class="curve">
     <div class="head">
-      <span class="label">曲线</span>
+      <span class="label">{{ t('曲线') }}</span>
       <span class="flex" />
       <button
         class="reset"
         :class="{ off: !channelDirty }"
-        :title="`复位${channelName}曲线`"
+        :title="t('复位{0}曲线', t(channelName))"
         @click="resetChannel"
       >
         <RotateCcw :size="12" />
@@ -320,7 +322,7 @@ onBeforeUnmount(() => ro?.disconnect())
       @pointercancel="onUp"
       @dblclick="onDbl"
     />
-    <p class="hint">拖动控制点 · 空白处按下加点 · 双击删点</p>
+    <p class="hint">{{ t('拖动控制点 · 空白处按下加点 · 双击删点') }}</p>
   </div>
 </template>
 

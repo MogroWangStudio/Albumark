@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { buildZip, estimateExportBytes, runExport } from '@/core/exporter'
 import { writeFilesToPublicFolder, writeFilesToShareCache } from '@/core/fs'
 import { isCapacitor, isTauri, pickDirectory, revealInFolder, saveZip, shareFiles, writeFilesToDir } from '@/core/platform'
+import { t } from '@/i18n'
 import type { Crop } from '@/types/adjust'
 import { useAdjustStore } from './adjust'
 import { useImagesStore } from './images'
@@ -126,13 +127,13 @@ export const useExportStore = defineStore('export', () => {
     // 自选范围：只导出勾选的照片（空选在面板上已禁用，这里防御兜底）
     const list = scopedItems()
     if (!list.length) {
-      toast('没有选择要导出的照片', 'error')
+      toast(t('没有选择要导出的照片'), 'error')
       return
     }
 
     // 分享与文件夹逐张写入都是原生能力，浏览器不支持
     if (mode.value !== 'zip' && !isTauri && !isCapacitor) {
-      toast('浏览器版本仅支持导出 ZIP，已自动切换', 'error')
+      toast(t('浏览器版本仅支持导出 ZIP，已自动切换'), 'error')
       mode.value = 'zip'
     }
 
@@ -160,19 +161,19 @@ export const useExportStore = defineStore('export', () => {
         list,
         await buildPayload(),
         Math.max(1, (navigator.hardwareConcurrency || 4) - 1),
-        (d, t, name) => {
+        (d, tot, name) => {
           done.value = d
-          total.value = t
+          total.value = tot
           current.value = name
         },
         (name, err) => {
-          errors.value.push(`${name}：${err instanceof Error ? err.message : String(err)}`)
+          errors.value.push(t('{0}：{1}', name, err instanceof Error ? err.message : String(err)))
         },
       )
 
       if (outputs.size === 0) {
         phase.value = 'idle'
-        toast('没有照片导出成功', 'error')
+        toast(t('没有照片导出成功'), 'error')
         return
       }
 
@@ -202,11 +203,11 @@ export const useExportStore = defineStore('export', () => {
         resultPath.value = await saveZip(zipName, zipBytes)
       }
       phase.value = 'done'
-      toast(`已导出 ${outputs.size} 张照片`, 'success')
+      toast(t('已导出 {0} 张照片', outputs.size), 'success')
     } catch (e) {
       phase.value = 'idle'
       const message = e instanceof Error ? e.message : String(e)
-      toast(`导出失败：${message}`, 'error')
+      toast(t('导出失败：{0}', message), 'error')
     }
   }
 
@@ -221,7 +222,7 @@ export const useExportStore = defineStore('export', () => {
     try {
       await shareFiles(shareUris.value)
     } catch {
-      toast('分享失败，请重试', 'error')
+      toast(t('分享失败，请重试'), 'error')
     }
   }
 

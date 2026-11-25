@@ -12,6 +12,7 @@ import {
   type UpdateInfo,
 } from '@/core/updater'
 import { APP_VERSION } from '@/core/version'
+import { t } from '@/i18n'
 import { toast } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 
@@ -121,7 +122,7 @@ export const useUpdaterStore = defineStore('updater', () => {
       openDialog()
     } catch {
       updateState.value = 'error'
-      toast('无法获取该版本的安装包信息，请前往发布页手动下载', 'error')
+      toast(t('无法获取该版本的安装包信息，请前往发布页手动下载'), 'error')
     }
   }
 
@@ -191,7 +192,13 @@ export const useUpdaterStore = defineStore('updater', () => {
         return
       }
       // 传输层错误（断网 / 服务端异常）：缓冲保留，可从断点继续或放弃
-      toast(`更新失败：${err instanceof Error ? err.message : '请稍后重试，或前往下载页手动获取'}`, 'error')
+      toast(
+        t(
+          '更新失败：{0}',
+          err instanceof Error ? err.message : t('请稍后重试，或前往下载页手动获取'),
+        ),
+        'error',
+      )
       updateState.value = 'available'
     } finally {
       if (downloadCtl === ctl) downloadCtl = null
@@ -251,7 +258,10 @@ export const useUpdaterStore = defineStore('updater', () => {
       await installStagedUpdate(stagedPath.value)
       // 正常路径：替换脚本已在等本进程退出，界面随之消失
     } catch (err) {
-      toast(`安装失败：${err instanceof Error ? err.message : '请重试，或前往下载页手动获取'}`, 'error')
+      toast(
+        t('安装失败：{0}', err instanceof Error ? err.message : t('请重试，或前往下载页手动获取')),
+        'error',
+      )
       updateState.value = 'available'
     }
   }
@@ -263,7 +273,7 @@ export const useUpdaterStore = defineStore('updater', () => {
   }
 
   const progressText = computed(() => {
-    if (updateProgress.value === null) return '下载中…'
+    if (updateProgress.value === null) return t('下载中…')
     const speed = downloadSpeed.value
     const kbps =
       speed !== null && speed >= 1024
@@ -271,14 +281,18 @@ export const useUpdaterStore = defineStore('updater', () => {
         : speed !== null
           ? `${speed} KB/s`
           : null
-    return kbps ? `下载 ${updateProgress.value}% · ${kbps}` : `下载 ${updateProgress.value}%`
+    return kbps
+      ? t('下载 {0}% · {1}', updateProgress.value, kbps)
+      : t('下载 {0}%', updateProgress.value)
   })
 
   const pausedText = computed(() =>
-    updateProgress.value === null ? '下载已暂停' : `已暂停 · 已下载 ${updateProgress.value}%`,
+    updateProgress.value === null
+      ? t('下载已暂停')
+      : t('已暂停 · 已下载 {0}%', updateProgress.value),
   )
 
-  const readyText = computed(() => `${countdown.value} 秒后自动重启安装`)
+  const readyText = computed(() => t('{0} 秒后自动重启安装', countdown.value))
 
   const isDownloading = computed(() => updateState.value === 'downloading')
 

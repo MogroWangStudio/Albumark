@@ -4,6 +4,7 @@ import { Check, FileQuestion, Link2Off, TriangleAlert } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import type { RelinkCandidate } from '@/stores/workspace'
+import { useI18n } from '@/i18n'
 
 const props = defineProps<{
   open: boolean
@@ -16,6 +17,8 @@ const emit = defineEmits<{
   close: []
   confirm: [list: { id: string; path: string; force: boolean }[]]
 }>()
+
+const { t } = useI18n()
 
 /** 勾选状态：识别码相符的默认选中；不符的默认不选，手动勾选即强制链接 */
 const checkedIds = ref(new Set<string>())
@@ -49,10 +52,9 @@ const picked = computed(() =>
 </script>
 
 <template>
-  <AppDialog :open="open" title="重新定位源文件" :width="560" @close="emit('close')">
+  <AppDialog :open="open" :title="t('重新定位源文件')" :width="560" @close="emit('close')">
     <p class="lead">
-      按文件名在所选文件夹中匹配到 {{ found.length }} / {{ candidates.length }} 张失联照片，
-      识别码一致的已默认勾选
+      {{ t('按文件名在所选文件夹中匹配到 {0} / {1} 张失联照片，识别码一致的已默认勾选', found.length, candidates.length) }}
     </p>
     <ul class="match-list">
       <li
@@ -77,30 +79,30 @@ const picked = computed(() =>
             <span class="path" :title="c.path">{{ c.path }}</span>
           </div>
           <span class="badge" :class="c.codeOk ? 'ok' : 'warn'">
-            <template v-if="c.codeOk">识别码一致</template>
-            <template v-else><TriangleAlert :size="11" />内容不符</template>
+            <template v-if="c.codeOk">{{ t('识别码一致') }}</template>
+            <template v-else><TriangleAlert :size="11" />{{ t('内容不符') }}</template>
           </span>
         </template>
         <template v-else>
           <span class="dot off"><FileQuestion :size="12" /></span>
           <div class="match-main">
             <span class="name">{{ c.name }}</span>
-            <span class="path">文件夹里没有同名文件</span>
+            <span class="path">{{ t('文件夹里没有同名文件') }}</span>
           </div>
-          <span class="badge miss">未找到</span>
+          <span class="badge miss">{{ t('未找到') }}</span>
         </template>
       </li>
     </ul>
     <div class="actions">
-      <span class="count">已选 {{ selectedCount }} / {{ found.length }}</span>
-      <AppButton size="sm" variant="ghost" :disabled="busy" @click="emit('close')">取消</AppButton>
+      <span class="count">{{ t('已选 {0} / {1}', selectedCount, found.length) }}</span>
+      <AppButton size="sm" variant="ghost" :disabled="busy" @click="emit('close')">{{ t('取消') }}</AppButton>
       <AppButton
         size="sm"
         variant="primary"
         :disabled="!selectedCount || busy"
         @click="emit('confirm', picked)"
       >
-        <Link2Off :size="13" />重新定位
+        <Link2Off :size="13" />{{ t('重新定位') }}
       </AppButton>
     </div>
   </AppDialog>

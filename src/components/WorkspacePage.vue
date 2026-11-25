@@ -13,6 +13,7 @@ import {
   HardDrive,
   Images,
   Layers,
+  LoaderCircle,
   MoreHorizontal,
   Pencil,
   SquareDashed,
@@ -26,6 +27,7 @@ import EmojiPicker from '@/components/ui/EmojiPicker.vue'
 import ExportProjectDialog from '@/components/ExportProjectDialog.vue'
 import ImportProjectDialog from '@/components/ImportProjectDialog.vue'
 import type { ContextMenuItem } from '@/components/AppContextMenu.vue'
+import { useI18n } from '@/i18n'
 import { useLongPress } from '@/core/longpress'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
 import { isTauri } from '@/core/platform'
@@ -42,6 +44,7 @@ import { useWorkspaceStore, type ProjectMeta, type WorkDirMeta } from '@/stores/
 const ws = useWorkspaceStore()
 const wm = useWatermarkStore()
 const settings = useSettingsStore()
+const { t } = useI18n()
 
 type Step = 'oobe' | 'projects'
 
@@ -56,7 +59,7 @@ const oobeDir = computed(() => oobePicked.value || ws.defaultDataDir || '…')
 
 async function pickDataDir(): Promise<void> {
   const { pickDirectory } = await import('@/core/platform')
-  const d = await pickDirectory('选择软件数据位置')
+  const d = await pickDirectory(t('选择软件数据位置'))
   if (d) oobePicked.value = d
 }
 
@@ -253,17 +256,17 @@ function batchCopy(): void {
   void (async () => {
     if (selectScope.value === 'projects') {
       const n = await ws.copyProjects(selectedProjects.value)
-      toast(n ? `已复制 ${n} 个项目` : '复制失败', n ? 'success' : 'error')
+      toast(n ? t('已复制 {0} 个项目', n) : t('复制失败'), n ? 'success' : 'error')
     } else {
       if (isTauri) {
         const { pickDirectory } = await import('@/core/platform')
-        const parent = await pickDirectory('选择复制到的位置')
+        const parent = await pickDirectory(t('选择复制到的位置'))
         if (!parent) return
         const n = await ws.copyDirs(selectedDirs.value, parent)
-        toast(n ? `已复制 ${n} 个目录` : '复制失败', n ? 'success' : 'error')
+        toast(n ? t('已复制 {0} 个目录', n) : t('复制失败'), n ? 'success' : 'error')
       } else {
         const n = await ws.copyDirs(selectedDirs.value, `Albumark/目录备份_${Date.now()}`, true)
-        toast(n ? `已复制 ${n} 个目录到 Documents/Albumark` : '复制失败', n ? 'success' : 'error')
+        toast(n ? t('已复制 {0} 个目录到 Documents/Albumark', n) : t('复制失败'), n ? 'success' : 'error')
       }
     }
     exitSelect()
@@ -273,7 +276,7 @@ function batchCopy(): void {
 function batchMove(): void {
   if (selectScope.value === 'projects') {
     if (ws.dirs.length < 2) {
-      toast('只有一个工作目录,无处可移动', 'error')
+      toast(t('只有一个工作目录,无处可移动'), 'error')
       return
     }
     moveTargetOpen.value = true
@@ -281,17 +284,17 @@ function batchMove(): void {
     void (async () => {
       if (isTauri) {
         const { pickDirectory } = await import('@/core/platform')
-        const parent = await pickDirectory('选择移动到的位置')
+        const parent = await pickDirectory(t('选择移动到的位置'))
         if (!parent) return
       } else {
         // 安卓目录搬移在应用数据目录内进行
       }
       const parent = isTauri
-        ? await import('@/core/platform').then((m) => m.pickDirectory('选择移动到的位置')).then((d) => d)
+        ? await import('@/core/platform').then((m) => m.pickDirectory(t('选择移动到的位置')).then((d) => d))
         : 'AlbumarkMoved'
       if (!parent) return
       const n = await ws.moveDirs(selectedDirs.value, parent)
-      toast(n ? `已移动 ${n} 个目录` : '移动失败', n ? 'success' : 'error')
+      toast(n ? t('已移动 {0} 个目录', n) : t('移动失败'), n ? 'success' : 'error')
       exitSelect()
     })()
   }
@@ -302,7 +305,7 @@ async function confirmMoveProjects(): Promise<void> {
   moveTargetOpen.value = false
   if (!target) return
   const n = await ws.moveProjects(selectedProjects.value, target)
-  toast(n ? `已移动 ${n} 个项目` : '移动失败', n ? 'success' : 'error')
+  toast(n ? t('已移动 {0} 个项目', n) : t('移动失败'), n ? 'success' : 'error')
   exitSelect()
 }
 
@@ -316,10 +319,10 @@ async function confirmBatchDeleteRun(): Promise<void> {
   confirmBatchDelete.value = false
   if (selectScope.value === 'projects') {
     const n = await ws.removeProjects(selectedProjects.value)
-    toast(n ? `已删除 ${n} 个项目` : '删除失败', n ? 'success' : 'error')
+    toast(n ? t('已删除 {0} 个项目', n) : t('删除失败'), n ? 'success' : 'error')
   } else {
     ws.removeDirs(selectedDirs.value)
-    toast(`已移除 ${selectedDirs.value.length} 条目录记录`, 'success')
+    toast(t('已移除 {0} 条目录记录', selectedDirs.value.length), 'success')
   }
   exitSelect()
 }
@@ -345,7 +348,7 @@ async function batchExport(): Promise<void> {
         } finally {
           await w.close()
         }
-        toast(`已导出 ${roots.length} 个项目`, 'success')
+        toast(t('已导出 {0} 个项目', roots.length), 'success')
       } else {
         const w = await openWriter(`Albumark/exports/projects_${Date.now()}.zip`, true)
         try {
@@ -353,7 +356,7 @@ async function batchExport(): Promise<void> {
         } finally {
           await w.close()
         }
-        toast(`已导出 ${roots.length} 个项目到 Documents/Albumark/exports`, 'success')
+        toast(t('已导出 {0} 个项目到 Documents/Albumark/exports', roots.length), 'success')
       }
     } else {
       const roots = selectedDirs.value.map((d) => ({ name: d.name, path: d.path }))
@@ -366,7 +369,7 @@ async function batchExport(): Promise<void> {
         } finally {
           await w.close()
         }
-        toast(`已导出 ${roots.length} 个目录`, 'success')
+        toast(t('已导出 {0} 个目录', roots.length), 'success')
       } else {
         const w = await openWriter(`Albumark/exports/dirs_${Date.now()}.zip`, true)
         try {
@@ -374,11 +377,11 @@ async function batchExport(): Promise<void> {
         } finally {
           await w.close()
         }
-        toast(`已导出 ${roots.length} 个目录到 Documents/Albumark/exports`, 'success')
+        toast(t('已导出 {0} 个目录到 Documents/Albumark/exports', roots.length), 'success')
       }
     }
   } catch (e) {
-    toast(`导出失败:${e instanceof Error ? e.message : String(e)}`, 'error')
+    toast(t('导出失败:{0}', e instanceof Error ? e.message : String(e)), 'error')
   } finally {
     exporting.value = false
   }
@@ -461,8 +464,26 @@ function onDirRowClick(d: WorkDirMeta, e: MouseEvent): void {
   enterDir(d)
 }
 
+/** 正在打开的工作目录：扫描完成前不切页——项目数量不同时，先切页会拿
+ *  旧目录的项目列表撑高度，扫描结果随后突变，正好砸在高度过渡的收尾上 */
+const switchingDir = ref<string | null>(null)
+
 function enterDir(d: WorkDirMeta): void {
-  if (ws.dir?.path !== d.path) void ws.useDir(d)
+  void openDir(d)
+}
+
+async function openDir(d: WorkDirMeta): Promise<void> {
+  if (switchingDir.value) return
+  if (ws.dir?.path !== d.path) {
+    switchingDir.value = d.path
+    try {
+      // 先让目标目录的项目列表就绪，再开始推入过渡：新页首帧就是最终高度，
+      // 后续不再有数组突变把容器撑高 / 塌缩
+      await ws.useDir(d)
+    } finally {
+      switchingDir.value = null
+    }
+  }
   ws.gotoSubPage('projects')
 }
 
@@ -525,23 +546,23 @@ function onCoarseChange(e: MediaQueryListEvent): void {
 
 function openProjectMenu(p: ProjectMeta, x: number, y: number): void {
   const items: ContextMenuItem[] = [
-    { label: '打开', action: () => void ws.openProject(p) },
-    { label: '编辑信息…', action: () => openEditInfo(p) },
-    { label: '导出…', action: () => (exportTarget.value = { kind: 'project', name: p.name, path: p.path }) },
-    { label: '删除', danger: true, action: () => (removeTarget.value = { id: p.id, name: p.name }) },
+    { label: t('打开'), action: () => void ws.openProject(p) },
+    { label: t('编辑信息…'), action: () => openEditInfo(p) },
+    { label: t('导出…'), action: () => (exportTarget.value = { kind: 'project', name: p.name, path: p.path }) },
+    { label: t('删除'), danger: true, action: () => (removeTarget.value = { id: p.id, name: p.name }) },
   ]
   openCtxMenu(x, y, items)
 }
 
 function openDirMenu(d: WorkDirMeta, x: number, y: number): void {
   const items: ContextMenuItem[] = []
-  if (ws.dir?.path !== d.path) items.push({ label: '打开', action: () => enterDir(d) })
-  else items.push({ label: '进入项目', action: () => ws.gotoSubPage('projects') })
+  if (ws.dir?.path !== d.path) items.push({ label: t('打开'), action: () => enterDir(d) })
+  else items.push({ label: t('进入项目'), action: () => ws.gotoSubPage('projects') })
   items.push(
-    { label: '重命名', action: () => startRename('dir', d) },
-    { label: '设置图标…', action: () => (emojiTarget.value = { kind: 'dir', meta: d }) },
-    { label: '导出…', action: () => (exportTarget.value = { kind: 'dir', name: d.name, path: d.path }) },
-    { label: '移除记录', danger: true, action: () => (removeDirTarget.value = d) },
+    { label: t('重命名'), action: () => startRename('dir', d) },
+    { label: t('设置图标…'), action: () => (emojiTarget.value = { kind: 'dir', meta: d }) },
+    { label: t('导出…'), action: () => (exportTarget.value = { kind: 'dir', name: d.name, path: d.path }) },
+    { label: t('移除记录'), danger: true, action: () => (removeDirTarget.value = d) },
   )
   openCtxMenu(x, y, items)
 }
@@ -581,19 +602,19 @@ onMounted(() => {
       <!-- ① OOBE：软件数据位置（仅桌面） -->
       <div v-if="step === 'oobe'" key="oobe" class="card">
         <LogoMark class="mark" animated />
-        <h1>欢迎使用 Albumark</h1>
+        <h1>{{ t('欢迎使用 Albumark') }}</h1>
 
         <div class="oobe-dir">
           <HardDrive :size="16" />
           <div class="dir-text">
-            <span class="dir-label">数据位置</span>
+            <span class="dir-label">{{ t('数据位置') }}</span>
             <span class="dir-path">{{ oobeDir }}</span>
           </div>
-          <AppButton size="sm" @click="pickDataDir">浏览…</AppButton>
+          <AppButton size="sm" @click="pickDataDir">{{ t('浏览…') }}</AppButton>
         </div>
 
         <AppButton variant="primary" class="cta" @click="finishOobe">
-          开始使用<ArrowRight :size="15" />
+          {{ t('开始使用') }}<ArrowRight :size="15" />
         </AppButton>
       </div>
 
@@ -610,45 +631,45 @@ onMounted(() => {
             <header class="sec-head">
               <div class="sec-title">
                 <FolderOpen :size="15" />
-                <h1>工作目录</h1>
+                <h1>{{ t('工作目录') }}</h1>
                 <span class="sec-count">{{ ws.dirs.length }}</span>
               </div>
               <div class="sec-actions">
                 <template v-if="selectScope === 'dirs'">
-                  <span class="sel-count">已选 {{ selectedCount }}</span>
+                  <span class="sel-count">{{ t('已选 {0}', selectedCount) }}</span>
                   <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchCopy">
-                    <Copy :size="13" />复制
+                    <Copy :size="13" />{{ t('复制') }}
                   </AppButton>
                   <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchMove">
-                    <FolderInput :size="13" />移动
+                    <FolderInput :size="13" />{{ t('移动') }}
                   </AppButton>
                   <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchExport">
-                    <Archive :size="13" />导出
+                    <Archive :size="13" />{{ t('导出') }}
                   </AppButton>
                   <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchDelete">
-                    <Trash2 :size="13" />移除
+                    <Trash2 :size="13" />{{ t('移除') }}
                   </AppButton>
-                  <AppButton size="sm" variant="ghost" @click="selectAllVisible">全选</AppButton>
-                  <AppButton size="sm" variant="primary" @click="exitSelect">完成</AppButton>
+                  <AppButton size="sm" variant="ghost" @click="selectAllVisible">{{ t('全选') }}</AppButton>
+                  <AppButton size="sm" variant="primary" @click="exitSelect">{{ t('完成') }}</AppButton>
                 </template>
                 <template v-else>
                   <!-- 多选固定在添加按钮左侧：两个按钮同属一组，位置不随标题宽度漂移 -->
                   <AppButton size="sm" variant="ghost" @click="enterSelect('dirs')">
-                    <SquareDashed :size="13" />多选
+                    <SquareDashed :size="13" />{{ t('多选') }}
                   </AppButton>
                   <div v-if="sandboxedFs" class="create-inline">
                     <input
                       v-model="newDirName"
                       class="text-input"
-                      placeholder="新目录名称"
+                      :placeholder="t('新目录名称')"
                       @keyup.enter="addDir"
                     />
                     <AppButton size="sm" variant="primary" :disabled="!newDirName.trim()" @click="addDir">
-                      <FolderPlus :size="14" />新建
+                      <FolderPlus :size="14" />{{ t('新建') }}
                     </AppButton>
                   </div>
                   <AppButton v-else size="sm" variant="ghost" @click="addDir">
-                    <FolderPlus :size="13" />添加工作目录…
+                    <FolderPlus :size="13" />{{ t('添加工作目录…') }}
                   </AppButton>
                 </template>
               </div>
@@ -656,7 +677,7 @@ onMounted(() => {
 
             <!-- 选择条下的提示:进入多选后行点击变选中,不再进入目录 -->
             <p v-if="selectScope === 'dirs'" class="select-hint">
-              点选或拖框选择目录，操作按钮在上方
+              {{ t('点选或拖框选择目录，操作按钮在上方') }}
             </p>
             <ul v-if="ws.dirs.length" class="dir-list" @pointerdown="onRubberDown('dirs', $event)">
               <li
@@ -664,6 +685,7 @@ onMounted(() => {
                 :key="d.path"
                 class="dir-row"
                 :class="{ active: !isSelecting && ws.dir?.path === d.path, selecting: selectScope === 'dirs' && selected.has(d.path) }"
+                :aria-busy="switchingDir === d.path"
                 :data-dir-path="d.path"
                 @click="onDirRowClick(d, $event)"
                 v-on="dirPress"
@@ -685,28 +707,29 @@ onMounted(() => {
                   <span class="dir-name">{{ d.name }}</span>
                   <span class="dir-path" :title="d.path">{{ d.path }}</span>
                 </div>
-                <span class="dir-count">{{ d.projects ?? '—' }} 个项目</span>
+                <LoaderCircle v-if="switchingDir === d.path" :size="13" class="dir-spin" />
+                <span v-else class="dir-count">{{ t('{0} 个项目', d.projects ?? '—') }}</span>
                 <AppDropdown
                   v-if="!isCoarse && selectScope !== 'dirs'"
                   align="right"
                   :items="[
-                    { label: '重命名', action: () => startRename('dir', d) },
-                    { label: '设置图标…', action: () => (emojiTarget = { kind: 'dir', meta: d }) },
-                    { label: '导出…', action: () => (exportTarget = { kind: 'dir', name: d.name, path: d.path }) },
-                    { label: '移除记录', danger: true, action: () => (removeDirTarget = d) },
+                    { label: t('重命名'), action: () => startRename('dir', d) },
+                    { label: t('设置图标…'), action: () => (emojiTarget = { kind: 'dir', meta: d }) },
+                    { label: t('导出…'), action: () => (exportTarget = { kind: 'dir', name: d.name, path: d.path }) },
+                    { label: t('移除记录'), danger: true, action: () => (removeDirTarget = d) },
                   ]"
                 >
                   <!-- span 触发器：AppDropdown 外层已有 button，slot 内不可再嵌 button，
                        也不能裸 @click.stop——冒泡被截断菜单永远打不开（与项目卡触发器同构） -->
                   <template #trigger>
-                    <span class="dir-tool" role="button" title="目录操作">
+                    <span class="dir-tool" role="button" :title="t('目录操作')">
                       <MoreHorizontal :size="13" />
                     </span>
                   </template>
                 </AppDropdown>
               </li>
             </ul>
-            <p v-else class="empty">还没有工作目录</p>
+            <p v-else class="empty">{{ t('还没有工作目录') }}</p>
             <div
               v-if="rubberStyle && selectScope === 'dirs'"
               class="rubber"
@@ -720,55 +743,55 @@ onMounted(() => {
             <template v-if="fsAvailable && ws.dir">
               <header class="sec-head">
                 <div class="sec-title">
-                  <button class="back-btn" title="返回工作目录" @click="gotoDirs">
+                  <button class="back-btn" :title="t('返回工作目录')" @click="gotoDirs">
                     <ArrowLeft :size="15" />
                   </button>
-                  <h1>工作项目</h1>
+                  <h1>{{ t('工作项目') }}</h1>
                   <span class="sec-count">{{ ws.projects.length }}</span>
                 </div>
                 <div class="sec-actions">
                   <template v-if="selectScope === 'projects'">
-                    <span class="sel-count">已选 {{ selectedCount }}</span>
+                    <span class="sel-count">{{ t('已选 {0}', selectedCount) }}</span>
                     <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchCopy">
-                      <Copy :size="13" />复制
+                      <Copy :size="13" />{{ t('复制') }}
                     </AppButton>
                     <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchMove">
-                      <FolderInput :size="13" />移动
+                      <FolderInput :size="13" />{{ t('移动') }}
                     </AppButton>
                     <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchExport">
-                      <Archive :size="13" />导出
+                      <Archive :size="13" />{{ t('导出') }}
                     </AppButton>
                     <AppButton size="sm" variant="ghost" :disabled="!selectedCount" @click="batchDelete">
-                      <Trash2 :size="13" />删除
+                      <Trash2 :size="13" />{{ t('删除') }}
                     </AppButton>
-                    <AppButton size="sm" variant="ghost" @click="selectAllVisible">全选</AppButton>
-                    <AppButton size="sm" variant="primary" @click="exitSelect">完成</AppButton>
+                    <AppButton size="sm" variant="ghost" @click="selectAllVisible">{{ t('全选') }}</AppButton>
+                    <AppButton size="sm" variant="primary" @click="exitSelect">{{ t('完成') }}</AppButton>
                   </template>
                   <template v-else>
                     <!-- 多选固定在导入项目左侧：两者同属一组，位置不随标题宽度漂移 -->
                     <AppButton size="sm" variant="ghost" @click="enterSelect('projects')">
-                      <SquareDashed :size="13" />多选
+                      <SquareDashed :size="13" />{{ t('多选') }}
                     </AppButton>
                     <AppButton size="sm" variant="ghost" @click="importOpen = true">
-                      <ArchiveRestore :size="13" />导入项目
+                      <ArchiveRestore :size="13" />{{ t('导入项目') }}
                     </AppButton>
                   </template>
                 </div>
               </header>
               <p class="cur-dir">{{ ws.dir.emoji ? `${ws.dir.emoji} ` : '' }}{{ ws.dir.name }}</p>
               <p v-if="selectScope === 'projects'" class="select-hint">
-                点选或拖框选择项目，操作按钮在上方
+                {{ t('点选或拖框选择项目，操作按钮在上方') }}
               </p>
 
             <div class="create">
               <input
                 v-model="newName"
                 class="text-input"
-                placeholder="新项目名称，如「2026 春季扫街」"
+                :placeholder="t('新项目名称，如「2026 春季扫街」')"
                 @keyup.enter="create"
               />
               <AppButton variant="primary" :disabled="!canCreate" @click="create">
-                <FolderPlus :size="15" />新建项目
+                <FolderPlus :size="15" />{{ t('新建项目') }}
               </AppButton>
             </div>
 
@@ -801,28 +824,28 @@ onMounted(() => {
                 </span>
                 <span class="prj-name">{{ p.name }}</span>
                 <span v-if="p.description" class="prj-desc">{{ p.description }}</span>
-                <span class="prj-count">{{ p.count }} 张照片</span>
+                <span class="prj-count">{{ t('{0} 张照片', p.count) }}</span>
                 <span v-if="p.createdAt" class="prj-date">{{ fmtDate(p.createdAt) }}</span>
                 <AppDropdown
                   v-if="!isCoarse && selectScope !== 'projects'"
                   class="prj-menu"
                   align="right"
                   :items="[
-                    { label: '重命名', action: () => startRename('project', p) },
-                    { label: '设置图标…', action: () => (emojiTarget = { kind: 'project', meta: p }) },
-                    { label: '导出…', action: () => (exportTarget = { kind: 'project', name: p.name, path: p.path }) },
-                    { label: '删除', danger: true, action: () => (removeTarget = { id: p.id, name: p.name }) },
+                    { label: t('重命名'), action: () => startRename('project', p) },
+                    { label: t('设置图标…'), action: () => (emojiTarget = { kind: 'project', meta: p }) },
+                    { label: t('导出…'), action: () => (exportTarget = { kind: 'project', name: p.name, path: p.path }) },
+                    { label: t('删除'), danger: true, action: () => (removeTarget = { id: p.id, name: p.name }) },
                   ]"
                 >
                   <template #trigger>
-                    <span class="prj-rm" role="button" aria-label="项目操作" title="重命名 / 导出 / 删除">
+                    <span class="prj-rm" role="button" :aria-label="t('项目操作')" :title="t('重命名 / 导出 / 删除')">
                       <MoreHorizontal :size="13" />
                     </span>
                   </template>
                 </AppDropdown>
               </div>
             </div>
-            <p v-else class="empty">这个目录里还没有工作项目</p>
+            <p v-else class="empty">{{ t('这个目录里还没有工作项目') }}</p>
             <div
               v-if="rubberStyle && selectScope === 'projects'"
               class="rubber"
@@ -835,12 +858,12 @@ onMounted(() => {
             <div class="glyph">
               <FolderOpen :size="30" :stroke-width="1.6" />
             </div>
-            <h1>选择工作目录</h1>
+            <h1>{{ t('选择工作目录') }}</h1>
             <AppButton variant="primary" class="cta" :disabled="ws.loading" @click="addDir">
-              <FolderPlus :size="15" />选择文件夹…
+              <FolderPlus :size="15" />{{ t('选择文件夹…') }}
             </AppButton>
             <AppButton variant="ghost" class="cta" @click="gotoDirs">
-              <ArrowLeft :size="15" />返回工作目录
+              <ArrowLeft :size="15" />{{ t('返回工作目录') }}
             </AppButton>
           </template>
 
@@ -848,16 +871,16 @@ onMounted(() => {
             <div class="glyph">
               <FolderOpen :size="30" :stroke-width="1.6" />
             </div>
-            <h1>选择工作目录</h1>
+            <h1>{{ t('选择工作目录') }}</h1>
             <AppButton variant="ghost" class="cta" @click="gotoDirs">
-              <ArrowLeft :size="15" />返回工作目录
+              <ArrowLeft :size="15" />{{ t('返回工作目录') }}
             </AppButton>
           </template>
 
           <template v-else>
-            <h1>开始辑录</h1>
+            <h1>{{ t('开始辑录') }}</h1>
             <AppButton variant="primary" class="cta" @click="ws.openEphemeralProject()">
-              <Layers :size="15" />进入临时项目
+              <Layers :size="15" />{{ t('进入临时项目') }}
             </AppButton>
           </template>
         </section>
@@ -869,35 +892,35 @@ onMounted(() => {
     <Transition name="fade">
       <div v-if="ws.loading" class="page-loading" aria-hidden="true">
         <span class="page-spin" />
-        <p>正在打开…</p>
+        <p>{{ t('正在打开…') }}</p>
       </div>
     </Transition>
 
     <!-- 移除工作目录记录 -->
-    <AppDialog :open="!!removeDirTarget" title="移除工作目录" :width="380" @close="removeDirTarget = null">
+    <AppDialog :open="!!removeDirTarget" :title="t('移除工作目录')" :width="380" @close="removeDirTarget = null">
       <p class="confirm-text">
-        将从列表中移除「{{ removeDirTarget?.name }}」的记录。磁盘上的文件夹与项目不会被删除。
+        {{ t('将从列表中移除「{0}」的记录。磁盘上的文件夹与项目不会被删除。', removeDirTarget?.name) }}
       </p>
       <div class="confirm-btns">
-        <AppButton variant="ghost" @click="removeDirTarget = null">取消</AppButton>
-        <AppButton variant="danger" @click="confirmRemoveDir"><Trash2 :size="13" />移除记录</AppButton>
+        <AppButton variant="ghost" @click="removeDirTarget = null">{{ t('取消') }}</AppButton>
+        <AppButton variant="danger" @click="confirmRemoveDir"><Trash2 :size="13" />{{ t('移除记录') }}</AppButton>
       </div>
     </AppDialog>
 
     <!-- 删除工作项目：桌面移入系统回收站；移动端没有回收站，直接删除并明确警示 -->
-    <AppDialog :open="!!removeTarget" title="删除工作项目" :width="380" @close="removeTarget = null">
+    <AppDialog :open="!!removeTarget" :title="t('删除工作项目')" :width="380" @close="removeTarget = null">
       <p class="confirm-text">
         <template v-if="isTauri">
-          将把文件夹「{{ removeTarget?.name }}」及其中的全部照片移入回收站。确定删除吗？
+          {{ t('将把文件夹「{0}」及其中的全部照片移入回收站。确定删除吗？', removeTarget?.name) }}
         </template>
         <template v-else>
-          移动端没有回收站，项目「{{ removeTarget?.name }}」及其中的全部照片将被<strong>直接删除</strong>，此操作<strong>不可撤销</strong>。
+          {{ t('移动端没有回收站，项目「{0}」及其中的全部照片将被', removeTarget?.name) }}<strong>{{ t('直接删除') }}</strong>{{ t('，此操作') }}<strong>{{ t('不可撤销') }}</strong>{{ t('。') }}
         </template>
       </p>
       <div class="confirm-btns">
-        <AppButton variant="ghost" @click="removeTarget = null">取消</AppButton>
+        <AppButton variant="ghost" @click="removeTarget = null">{{ t('取消') }}</AppButton>
         <AppButton variant="danger" @click="confirmRemove">
-          <Trash2 :size="13" />{{ isTauri ? '移入回收站' : '直接删除' }}
+          <Trash2 :size="13" />{{ isTauri ? t('移入回收站') : t('直接删除') }}
         </AppButton>
       </div>
     </AppDialog>
@@ -905,45 +928,45 @@ onMounted(() => {
     <!-- 重命名：目录与项目共用，确认后磁盘改名并同步记录 -->
     <AppDialog
       :open="!!renameTarget"
-      :title="renameTarget?.kind === 'dir' ? '重命名工作目录' : '重命名工作项目'"
+      :title="renameTarget?.kind === 'dir' ? t('重命名工作目录') : t('重命名工作项目')"
       :width="380"
       @close="renameTarget = null"
     >
       <input
         v-model="renameName"
         class="text-input"
-        placeholder="新名称"
+        :placeholder="t('新名称')"
         @keyup.enter="confirmRename"
       />
       <div class="confirm-btns">
-        <AppButton variant="ghost" @click="renameTarget = null">取消</AppButton>
-        <AppButton variant="primary" @click="confirmRename"><Pencil :size="13" />重命名</AppButton>
+        <AppButton variant="ghost" @click="renameTarget = null">{{ t('取消') }}</AppButton>
+        <AppButton variant="primary" @click="confirmRename"><Pencil :size="13" />{{ t('重命名') }}</AppButton>
       </div>
     </AppDialog>
 
     <!-- 编辑信息：项目名 / 简介 / emoji 图标一次编辑 -->
     <AppDialog
       :open="!!editInfoTarget"
-      title="编辑项目信息"
+      :title="t('编辑项目信息')"
       :width="440"
       @close="editInfoTarget = null"
     >
       <div class="edit-info">
         <label class="field">
-          <span class="field-label">名称</span>
-          <input v-model="editName" class="text-input" placeholder="项目名称" />
+          <span class="field-label">{{ t('名称') }}</span>
+          <input v-model="editName" class="text-input" :placeholder="t('项目名称')" />
         </label>
         <label class="field">
-          <span class="field-label">简介（可选）</span>
+          <span class="field-label">{{ t('简介（可选）') }}</span>
           <textarea
             v-model="editDesc"
             class="text-input area"
             rows="2"
-            placeholder="一句话介绍这个项目"
+            :placeholder="t('一句话介绍这个项目')"
           ></textarea>
         </label>
         <div class="field">
-          <span class="field-label">图标（可选）</span>
+          <span class="field-label">{{ t('图标（可选）') }}</span>
           <EmojiPicker
             :model-value="editEmoji"
             @pick="editEmoji = $event"
@@ -952,9 +975,9 @@ onMounted(() => {
         </div>
       </div>
       <div class="confirm-btns">
-        <AppButton variant="ghost" @click="editInfoTarget = null">取消</AppButton>
+        <AppButton variant="ghost" @click="editInfoTarget = null">{{ t('取消') }}</AppButton>
         <AppButton variant="primary" :disabled="!editName.trim()" @click="confirmEditInfo">
-          <Check :size="13" />保存
+          <Check :size="13" />{{ t('保存') }}
         </AppButton>
       </div>
     </AppDialog>
@@ -962,31 +985,31 @@ onMounted(() => {
     <!-- 多选:批量删除二次确认(项目按平台区分回收站 / 直接删除文案) -->
     <AppDialog
       :open="confirmBatchDelete"
-      :title="selectScope === 'dirs' ? '移除目录记录' : '删除工作项目'"
+      :title="selectScope === 'dirs' ? t('移除目录记录') : t('删除工作项目')"
       :width="400"
       @close="confirmBatchDelete = false"
     >
       <p class="confirm-text">
         <template v-if="selectScope === 'dirs'">
-          将移除 {{ selectedCount }} 条工作目录记录。磁盘上的文件夹与项目不会被删除。
+          {{ t('将移除 {0} 条工作目录记录。磁盘上的文件夹与项目不会被删除。', selectedCount) }}
         </template>
         <template v-else-if="isTauri">
-          将把 {{ selectedCount }} 个项目文件夹移入系统回收站。确定删除吗？
+          {{ t('将把 {0} 个项目文件夹移入系统回收站。确定删除吗？', selectedCount) }}
         </template>
         <template v-else>
-          移动端没有回收站，{{ selectedCount }} 个项目将被<strong>直接删除</strong>，此操作<strong>不可撤销</strong>。确定删除吗？
+          {{ t('移动端没有回收站，{0} 个项目将被', selectedCount) }}<strong>{{ t('直接删除') }}</strong>{{ t('，此操作') }}<strong>{{ t('不可撤销') }}</strong>{{ t('。确定删除吗？') }}
         </template>
       </p>
       <div class="confirm-btns">
-        <AppButton variant="ghost" @click="confirmBatchDelete = false">取消</AppButton>
+        <AppButton variant="ghost" @click="confirmBatchDelete = false">{{ t('取消') }}</AppButton>
         <AppButton variant="danger" @click="confirmBatchDeleteRun">
-          <Trash2 :size="13" />{{ selectScope === 'dirs' ? '移除记录' : isTauri ? '移入回收站' : '直接删除' }}
+          <Trash2 :size="13" />{{ selectScope === 'dirs' ? t('移除记录') : isTauri ? t('移入回收站') : t('直接删除') }}
         </AppButton>
       </div>
     </AppDialog>
 
     <!-- 多选:项目移动目标目录选择 -->
-    <AppDialog :open="moveTargetOpen" title="移动到工作目录" :width="380" @close="moveTargetOpen = false">
+    <AppDialog :open="moveTargetOpen" :title="t('移动到工作目录')" :width="380" @close="moveTargetOpen = false">
       <ul class="move-list">
         <li v-for="d in ws.dirs" :key="d.path">
           <button
@@ -997,8 +1020,8 @@ onMounted(() => {
           >
             <span v-if="d.emoji" class="move-emoji">{{ d.emoji }}</span>
             <FolderOpen v-else :size="14" />
-            <span class="move-name">{{ d.name }}{{ d.path === ws.dir?.path ? '（当前）' : '' }}</span>
-            <span class="move-count">{{ d.projects ?? '—' }} 个项目</span>
+            <span class="move-name">{{ d.path === ws.dir?.path ? t('{0}（当前）', d.name) : d.name }}</span>
+            <span class="move-count">{{ t('{0} 个项目', d.projects ?? '—') }}</span>
           </button>
         </li>
       </ul>
@@ -1007,7 +1030,7 @@ onMounted(() => {
     <!-- 设置 emoji 图标：目录与项目共用一个选择器，选择即保存 -->
     <AppDialog
       :open="!!emojiTarget"
-      :title="emojiTarget?.kind === 'dir' ? '目录图标' : '项目图标'"
+      :title="emojiTarget?.kind === 'dir' ? t('目录图标') : t('项目图标')"
       :width="420"
       @close="emojiTarget = null"
     >
@@ -1306,6 +1329,17 @@ onMounted(() => {
   font-size: calc(11.5px * var(--ui-zoom, 1));
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
+}
+/* 目录扫描中的就地指示：只在被点的那一行转，不铺全屏遮罩 */
+.dir-spin {
+  flex: none;
+  color: var(--text-3);
+  animation: dir-spin 0.9s linear infinite;
+}
+@keyframes dir-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .dir-rm {
   flex: none;

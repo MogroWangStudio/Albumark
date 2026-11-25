@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { loadJson, saveJson } from '@/core/storage'
+import { t } from '@/i18n'
 import { makeBackgroundLayer, makeBorderLayer, makeTextLayer, useWatermarkStore } from './watermark'
 import { toast } from './toast'
 import { migrateOffsetsToPx, type WatermarkTemplate } from '@/types/watermark'
@@ -26,7 +27,7 @@ interface SavedTemplate {
 /** 内置模板：每次应用生成全新 id，避免跨图状态串扰。 */
 function builtinTemplates(): WatermarkTemplate[] {
   const signature = makeTextLayer({
-    name: '签名',
+    name: t('签名'),
     content: 'Albumark',
     anchor: 'bottom-right',
     offsetX: -40,
@@ -35,7 +36,7 @@ function builtinTemplates(): WatermarkTemplate[] {
     shadow: { enabled: true, blur: 18, opacity: 55, x: 0, y: 8 },
   })
   const tile = makeTextLayer({
-    name: '平铺文字',
+    name: t('平铺文字'),
     content: 'Albumark',
     anchor: 'middle-center',
     offsetX: 0,
@@ -48,7 +49,7 @@ function builtinTemplates(): WatermarkTemplate[] {
     tile: { enabled: true, gapX: 140, gapY: 110 },
   })
   const exifBar = makeTextLayer({
-    name: 'EXIF 参数条',
+    name: t('EXIF 参数条'),
     // 令牌键为英文（见 core/tokens.ts TOKENS），中文写法无法解析
     content: '{Model}　{Lens}\n{FocalLength}　{Aperture}　{Shutter}　{ISO}',
     anchor: 'bottom-left',
@@ -62,7 +63,7 @@ function builtinTemplates(): WatermarkTemplate[] {
     background: { enabled: true, color: '#000000', opacity: 45, padding: 7, radius: 16 },
   })
   const thinFrame = makeBorderLayer({
-    name: '细白边框',
+    name: t('细白边框'),
     top: 28,
     right: 28,
     bottom: 28,
@@ -70,7 +71,7 @@ function builtinTemplates(): WatermarkTemplate[] {
   })
   const galleryFrame = [
     makeBorderLayer({
-      name: '画框 · 内衬',
+      name: t('画框 · 内衬'),
       top: 44,
       right: 44,
       bottom: 44,
@@ -81,7 +82,7 @@ function builtinTemplates(): WatermarkTemplate[] {
       colorLeft: '#F5F1E8',
     }),
     makeBorderLayer({
-      name: '画框 · 外沿',
+      name: t('画框 · 外沿'),
       top: 14,
       right: 14,
       bottom: 14,
@@ -95,21 +96,21 @@ function builtinTemplates(): WatermarkTemplate[] {
   // 背景水印模板：BG 层默认 source 'self'（照片自身模糊填充），应用后
   // 到工作室可继续调外扩 / 画幅 / 模糊；背景层随模板 layers 一起迁移
   const blurCard = makeBackgroundLayer({
-    name: '虚化卡纸',
+    name: t('虚化卡纸'),
     expand: 40,
     blur: 45,
     shadow: 30,
     radius: 10,
   })
   const ratioCard = makeBackgroundLayer({
-    name: '画幅卡纸',
+    name: t('画幅卡纸'),
     ratio: '4:5',
     photoScale: 95,
     blur: 60,
     shadow: 20,
   })
   const cardSign = makeTextLayer({
-    name: '签名',
+    name: t('签名'),
     content: 'Albumark',
     anchor: 'bottom-center',
     offsetX: 0,
@@ -118,27 +119,27 @@ function builtinTemplates(): WatermarkTemplate[] {
   })
 
   return [
-    { id: 'builtin-signature', name: '右下签名', builtin: true, layers: [signature], assets: [] },
-    { id: 'builtin-tile', name: '全图平铺', builtin: true, layers: [tile], assets: [] },
-    { id: 'builtin-exif', name: 'EXIF 参数条', builtin: true, layers: [exifBar], assets: [] },
-    { id: 'builtin-frame-thin', name: '细白边框', builtin: true, layers: [thinFrame], assets: [] },
+    { id: 'builtin-signature', name: t('右下签名'), builtin: true, layers: [signature], assets: [] },
+    { id: 'builtin-tile', name: t('全图平铺'), builtin: true, layers: [tile], assets: [] },
+    { id: 'builtin-exif', name: t('EXIF 参数条'), builtin: true, layers: [exifBar], assets: [] },
+    { id: 'builtin-frame-thin', name: t('细白边框'), builtin: true, layers: [thinFrame], assets: [] },
     {
       id: 'builtin-frame-gallery',
-      name: '画廊双框',
+      name: t('画廊双框'),
       builtin: true,
       layers: galleryFrame,
       assets: [],
     },
     {
       id: 'builtin-bg-blur-card',
-      name: '虚化卡纸',
+      name: t('虚化卡纸'),
       builtin: true,
       layers: [blurCard, cardSign],
       assets: [],
     },
     {
       id: 'builtin-bg-ratio-card',
-      name: '4:5 画幅卡纸',
+      name: t('4:5 画幅卡纸'),
       builtin: true,
       layers: [ratioCard, cardSign],
       assets: [],
@@ -159,8 +160,8 @@ function migrateLegacyPresets(): SavedTemplate[] {
   }
 }
 
-function migrateTemplateLayers(t: SavedTemplate): SavedTemplate {
-  return { ...t, layers: t.layers.map(migrateOffsetsToPx) }
+function migrateTemplateLayers(tpl: SavedTemplate): SavedTemplate {
+  return { ...tpl, layers: tpl.layers.map(migrateOffsetsToPx) }
 }
 
 function loadSaved(): SavedTemplate[] {
@@ -202,7 +203,7 @@ export const useTemplatesStore = defineStore('templates', () => {
 
   function persist(): void {
     if (!saveJson(PERSIST_KEY, saved.value)) {
-      toast('模板过大，仅保存到本次会话', 'error')
+      toast(t('模板过大，仅保存到本次会话'), 'error')
     }
   }
 
@@ -216,43 +217,43 @@ export const useTemplatesStore = defineStore('templates', () => {
   }
 
   function get(id: string): WatermarkTemplate | undefined {
-    return all.value.find((t) => t.id === id)
+    return all.value.find((tpl) => tpl.id === id)
   }
 
   /** 当前编辑内容存为新模板，返回新模板 id（失败返回 null） */
   function save(name: string): string | null {
     const data = wm.serialize()
-    const t: SavedTemplate = {
+    const tpl: SavedTemplate = {
       id: uid(),
-      name: name.trim() || '未命名模板',
+      name: name.trim() || t('未命名模板'),
       createdAt: Date.now(),
       layers: data.layers,
       assets: data.assets,
     }
-    if (overLimit(t)) return null
-    saved.value.unshift(t)
+    if (overLimit(tpl)) return null
+    saved.value.unshift(tpl)
     persist()
-    return t.id
+    return tpl.id
   }
 
   /** 把编辑器当前内容写回自建模板；内置模板不可覆盖 */
   function update(id: string): boolean {
-    const t = saved.value.find((x) => x.id === id)
-    if (!t) return false
+    const tpl = saved.value.find((x) => x.id === id)
+    if (!tpl) return false
     const data = wm.serialize()
     if (overLimit(data)) return false
-    t.layers = data.layers
-    t.assets = data.assets
-    t.updatedAt = Date.now()
+    tpl.layers = data.layers
+    tpl.assets = data.assets
+    tpl.updatedAt = Date.now()
     persist()
     return true
   }
 
   function rename(id: string, name: string): void {
-    const t = saved.value.find((x) => x.id === id)
-    if (!t) return
-    t.name = name.trim() || t.name
-    t.updatedAt = Date.now()
+    const tpl = saved.value.find((x) => x.id === id)
+    if (!tpl) return
+    tpl.name = name.trim() || tpl.name
+    tpl.updatedAt = Date.now()
     persist()
   }
 
@@ -260,28 +261,28 @@ export const useTemplatesStore = defineStore('templates', () => {
   function duplicate(id: string): string | null {
     const src = all.value.find((x) => x.id === id)
     if (!src) return null
-    const t: SavedTemplate = {
+    const tpl: SavedTemplate = {
       id: uid(),
-      name: `${src.name} 副本`,
+      name: t('{0} 副本', src.name),
       createdAt: Date.now(),
       layers: structuredClone(src.layers),
       assets: structuredClone(src.assets),
     }
-    if (overLimit(t)) return null
-    saved.value.unshift(t)
+    if (overLimit(tpl)) return null
+    saved.value.unshift(tpl)
     persist()
-    return t.id
+    return tpl.id
   }
 
   function remove(id: string): void {
-    saved.value = saved.value.filter((t) => t.id !== id)
+    saved.value = saved.value.filter((tpl) => tpl.id !== id)
     persist()
   }
 
   async function apply(id: string): Promise<void> {
-    const t = all.value.find((x) => x.id === id)
-    if (!t) return
-    wm.applySerialized(t.layers, t.assets)
+    const tpl = all.value.find((x) => x.id === id)
+    if (!tpl) return
+    wm.applySerialized(tpl.layers, tpl.assets)
   }
 
   return { saved, all, get, save, update, rename, duplicate, remove, apply }

@@ -6,6 +6,7 @@ import { formatOfName } from '@/core/imageFormat'
 import { jpegSize } from '@/core/jpeg'
 import { pngSize } from '@/core/png'
 import { fetchImageBlob } from '@/core/platform'
+import { t } from '@/i18n'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
 import { useSettingsStore } from './settings'
@@ -174,8 +175,8 @@ export const useImagesStore = defineStore('images', () => {
     if (missingExif > 0 && useSettingsStore().exifNotice) {
       toast(
         missingExif === added.length
-          ? '这批照片都没有 EXIF 拍摄信息，相关令牌会留空'
-          : `有 ${missingExif} 张照片缺少 EXIF 拍摄信息，相关令牌会留空`,
+          ? t('这批照片都没有 EXIF 拍摄信息，相关令牌会留空')
+          : t('有 {0} 张照片缺少 EXIF 拍摄信息，相关令牌会留空', missingExif),
       )
     }
   }
@@ -184,7 +185,7 @@ export const useImagesStore = defineStore('images', () => {
     const blob = await fetchImageBlob(url)
     const supported =
       blob.type === 'image/jpeg' || blob.type === 'image/png' || formatOfName(url) !== null
-    if (!supported) throw new Error('仅支持 JPG/PNG 图片链接')
+    if (!supported) throw new Error(t('仅支持 JPG/PNG 图片链接'))
     let name: string
     try {
       name = decodeURIComponent(new URL(url, window.location.href).pathname.split('/').pop() ?? '')

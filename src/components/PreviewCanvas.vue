@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch } from 'vue'
 import { ChevronUp, Link2Off, MapPin, Pipette } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
-import type { BackgroundLayer, WatermarkLayer } from '@/types/watermark'
+import { useI18n } from '@/i18n'
+import type { BackgroundLayer, ImageLayer, TextLayer, WatermarkLayer } from '@/types/watermark'
 import {
   clamp01,
   CROP_MIN,
@@ -19,7 +20,7 @@ import {
   type CropQuad,
   type CropRect,
 } from '@/types/adjust'
-import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
+import { hitTest, layerAnchor, layerPivot, measureLayer } from '@/core/layout'
 import { drawLayers, type AssetMap } from '@/core/draw'
 import {
   backgroundAspect,
@@ -59,6 +60,7 @@ const wm = useWatermarkStore()
 const adjust = useAdjustStore()
 const settings = useSettingsStore()
 const ws = useWorkspaceStore()
+const { t } = useI18n()
 
 const MAX_ZOOM = 12
 const DBL_TAP_ZOOM = 2.5
@@ -189,7 +191,12 @@ const active = computed(() => images.active)
 /** 当前照片源文件失联：底图渲染不出内容，占位视图说明原因并给重定位入口 */
 const activeMissing = computed(() => active.value?.missing === true)
 const hasSelection = computed(() => !!wm.selectedId)
-const minZoom = computed(() => Math.min(1, Math.max(0.3, settings.minZoom)))
+// 安全区下限会随「默认缩放」下探：默认 30% 时首次视图必须停得住，
+// 否则会被 100% 的最小缩放顶回适应窗口，设置等于失效；默认 ≥100% 时
+// 仍按安全区本身限制缩小边界
+const minZoom = computed(() =>
+  Math.min(1, Math.max(0.3, settings.minZoom, Math.min(1, settings.defaultZoom / 100))),
+)
 const perf = computed(() => perfFor(settings.previewQuality, settings.previewQualityValue))
 
 /* ---------- 可用区域：悬浮面板让位，中心偏移到剩余空白 ---------- */
@@ -247,13 +254,14 @@ const availCy = (): number => avail.y + avail.h / 2
 watch(
   [() => props.panelInset, () => props.panelSide, () => props.panelBottomInset, () => view.w, () => view.h],
   () => {
-    const t = targetAvail()
+    // 局部变量避开 useI18n 的 t()，避免同名遮蔽
+    const target = targetAvail()
     // 首次（或从无到有）直接就位，之后的变化平滑过渡
     if (!view.w || avail.w <= 0) {
-      Object.assign(avail, t)
+      Object.assign(avail, target)
       return
     }
-    startAvailAnim(t)
+    startAvailAnim(target)
   },
   { immediate: true },
 )
@@ -915,7 +923,13 @@ function drawOverlay(): void {
   // 选中图层的锚点十字（边框 / 背景层覆盖全画布、无定位锚点）
   const sel = wm.selected
   if (sel && sel.type !== 'border' && sel.type !== 'background') {
-    const a = anchorPoint(sel.anchor, resultMap.w, resultMap.h)
+    // 与绘制一致：父级锚点依赖解析令牌后的文字尺寸，选中框与锚点十字也用解析副本
+    const resolvedSel =
+      resolvedLayers().find(
+        (l): l is TextLayer | ImageLayer =>
+          l.id === sel.id && l.type !== 'border' && l.type !== 'background',
+      ) ?? (sel as TextLayer | ImageLayer)
+    const a = layerAnchor(resolvedSel, resultMap.w, resultMap.h, overlayPxScale(), resolvedLayers(), measureContext())
     ctx.save()
     ctx.strokeStyle = accentCss()
     ctx.globalAlpha = 0.75
@@ -1038,7 +1052,7 @@ function updateSelRect(): void {
     selRect.value = null
     return
   }
-  const box = measureLayer(sel, resultMap.w, resultMap.h, measureContext(), overlayPxScale())
+  const box = measureLayer(resolvedLayers().find((l) => l.id === sel.id) ?? sel, resultMap.w, resultMap.h, measureContext(), overlayPxScale(), resolvedLayers())
   const dpr = view.dpr || 1
   const s = resultMap.scale
   selRect.value = {
@@ -1250,7 +1264,7 @@ function applySnap(cx: number, cy: number, excludeId: string): { cx: number; cy:
   const ys: number[] = [imgH / 2, imgH * 0.04, imgH * 0.96]
   for (const l of resolvedLayers()) {
     if (l.id === excludeId || !l.visible || l.type === 'border' || l.type === 'background') continue
-    const c = layerPivot(l, imgW, imgH, pxScale)
+    const c = layerPivot(l, imgW, imgH, pxScale, resolvedLayers(), measureContext())
     xs.push(c.x)
     ys.push(c.y)
   }
@@ -1498,9 +1512,19 @@ function onPointerDown(e: PointerEvent): void {
     if (s) {
       adjust.applyWhiteBalanceSample(s.r, s.g, s.b)
       const cur = adjust.snapshotFor(active.value?.id ?? null)
-      toast(`白平衡已取样：色温 ${cur.temperature}，色调 ${cur.tint}`, 'success')
+      toast(t('白平衡已取样：色温 {0}，色调 {1}', cur.temperature, cur.tint), 'success')
     }
     adjust.setPickingWb(false)
+    return
+  }
+  // 自定义锚点拾取：这一次点击只落锚点，不进入平移 / 选层 / 裁剪手势
+  if (wm.pickingAnchor) {
+    if (e.button === 1) {
+      wm.pickingAnchor = false
+      return
+    }
+    const p = toImagePx(e.clientX, e.clientY)
+    wm.placeCustomAnchor((p.x / resultMap.w) * 100, (p.y / resultMap.h) * 100)
     return
   }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, downT: performance.now(), moved: false })
@@ -1564,10 +1588,10 @@ function onPointerDown(e: PointerEvent): void {
     const l = list[i]
     // 边框层覆盖全画布、无独立位置，只能从图层列表选中
     if (l.type === 'border' || l.type === 'background' || !l.visible) continue
-    const box = measureLayer(resolvedLayer(l), resultMap.w, resultMap.h, measureContext(), overlayPxScale())
+    const box = measureLayer(resolvedLayer(l), resultMap.w, resultMap.h, measureContext(), overlayPxScale(), list)
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
-      const c = layerPivot(l, resultMap.w, resultMap.h, overlayPxScale())
+      const c = layerPivot(l, resultMap.w, resultMap.h, overlayPxScale(), list, measureContext())
       dragSnap = { x: null, y: null }
       gesture = {
         type: 'layer',
@@ -1681,7 +1705,7 @@ function onPointerMove(e: PointerEvent): void {
     const cy = Math.min(imgH, Math.max(0, snapped.cy))
     const layer = wm.editTarget().find((l) => l.id === gid)
     if (!layer || layer.type === 'border' || layer.type === 'background') return
-    const a = anchorPoint(layer.anchor, imgW, imgH)
+    const a = layerAnchor(layer, imgW, imgH, overlayPxScale(), resolvedLayers(), measureContext())
     snapLines.value = snapped.lines.x !== undefined || snapped.lines.y !== undefined ? snapped.lines : null
     // 定位点与位移都在叠加层坐标系：写入前折算回原图尺度的 offset。
     // 拖动中保留浮点不取整——offset 折算系数 <1 时 round 的量化步长在屏幕上
@@ -1911,7 +1935,10 @@ function scheduleHiRes(): void {
 
 function resetView(): void {
   stopViewAnim()
-  zoom.value = minZoom.value
+  // 默认缩放（100 = 适应窗口）只在「首次查看」时应用：打开项目后的第一张、
+  // 或重新进入照片；浏览中切图由 lastActiveId 守卫保持当前缩放
+  const target = settings.defaultZoom / 100
+  zoom.value = Math.min(MAX_ZOOM, Math.max(minZoom.value, target))
   pan.x = 0
   pan.y = 0
 }
@@ -2132,7 +2159,7 @@ onBeforeUnmount(() => {
       <canvas
         ref="cvBase"
         class="canvas"
-        :class="{ picking: adjust.pickingWb }"
+        :class="{ picking: adjust.pickingWb, 'anchor-pick': wm.pickingAnchor }"
         @pointerdown="onPointerDown"
         @pointermove="onPointerMove"
         @pointerup="onPointerUp"
@@ -2150,13 +2177,13 @@ onBeforeUnmount(() => {
         @contextmenu="emit('ctx', $event)"
       >
         <Link2Off :size="30" :stroke-width="1.6" class="missing-glyph" />
-        <h2>源文件失联</h2>
+        <h2>{{ t('源文件失联') }}</h2>
         <p v-if="active?.sourcePath" class="missing-path" :title="active.sourcePath">
           {{ active.sourcePath }}
         </p>
-        <p class="missing-hint">照片以链接方式入库，源文件被移动 / 删除或暂不可读</p>
+        <p class="missing-hint">{{ t('照片以链接方式入库，源文件被移动 / 删除或暂不可读') }}</p>
         <AppButton size="sm" variant="primary" @click="emit('relink', active!.id)">
-          <MapPin :size="13" />重新定位源文件…
+          <MapPin :size="13" />{{ t('重新定位源文件…') }}
         </AppButton>
       </div>
       <div
@@ -2173,18 +2200,18 @@ onBeforeUnmount(() => {
     </div>
     <Transition name="fade">
       <div v-if="rendering && !adjust.pickingWb" class="render-hint" aria-hidden="true">
-        <span class="render-spin" />渲染中
+        <span class="render-spin" />{{ t('渲染中') }}
       </div>
     </Transition>
     <Transition name="fade">
       <div v-if="adjust.pickingWb" class="pick-hint" aria-hidden="true">
-        <Pipette :size="12" />点按画面中的中性灰或白色
+        <Pipette :size="12" />{{ t('点按画面中的中性灰或白色') }}
       </div>
     </Transition>
     <button
       class="zoom-badge"
       :class="{ open: zoomMenuOpen }"
-      title="缩放预设"
+      :title="t('缩放预设')"
       @click.stop="zoomMenuOpen = !zoomMenuOpen"
     >
       {{ Math.round(zoom * 100) }}%
@@ -2198,7 +2225,7 @@ onBeforeUnmount(() => {
             :class="{ on: p.value !== 'fit' && Math.abs(p.value - zoom) < 0.001 }"
             @click.stop="zoomMenuOpen = false; applyPreset(p.value)"
           >
-            {{ p.label }}
+            {{ t(p.label) }}
           </button>
         </div>
       </Transition>
@@ -2232,10 +2259,14 @@ onBeforeUnmount(() => {
 .canvas.picking {
   cursor: crosshair;
 }
+.canvas.anchor-pick {
+  cursor: crosshair;
+}
 .canvas:active {
   cursor: grabbing;
 }
-.canvas.picking:active {
+.canvas.picking:active,
+.canvas.anchor-pick:active {
   cursor: crosshair;
 }
 /* 吸管提示：与渲染提示同位置同风格，同一时刻只会出现一个 */

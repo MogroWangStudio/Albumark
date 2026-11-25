@@ -29,6 +29,7 @@ import AppSlider from '@/components/ui/AppSlider.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import CurveEditor from '@/components/ui/CurveEditor.vue'
 import { buildPresetBase } from '@/core/presetThumb'
+import { useI18n } from '@/i18n'
 import { useAdjustStore } from '@/stores/adjust'
 import { useAdjustPresetsStore, type AdjustPreset } from '@/stores/adjustPresets'
 import { useImagesStore } from '@/stores/images'
@@ -52,6 +53,7 @@ import {
 const adjust = useAdjustStore()
 const presets = useAdjustPresetsStore()
 const images = useImagesStore()
+const { t } = useI18n()
 
 const icons: Record<string, Component> = {
   exposure: Aperture,
@@ -119,7 +121,7 @@ function togglePick(): void {
   if (!activeId.value) return
   const next = !adjust.pickingWb
   adjust.setPickingWb(next)
-  if (next) toast('在画面上点按中性灰或白色的位置')
+  if (next) toast(t('在画面上点按中性灰或白色的位置'))
 }
 
 /* ---------- 调节预设 ---------- */
@@ -137,8 +139,8 @@ const presetTargetIds = computed<string[]>(() => {
 
 const presetHint = computed(() =>
   presetTargetIds.value.length > 1
-    ? `已选 ${presetTargetIds.value.length} 张，点击预设套用到这些照片`
-    : '点击预设套用到当前照片',
+    ? t('已选 {0} 张，点击预设套用到这些照片', presetTargetIds.value.length)
+    : t('点击预设套用到当前照片'),
 )
 
 /**
@@ -173,11 +175,12 @@ function presetInfo(p: AdjustPreset): string {
   if (!isCurvesNeutral(v.curves) || !isCurveNeutral(v.curve)) n++
   if (!isHslNeutral(v.hsl)) n++
   const d = new Date(p.createdAt)
-  return `${n ? `${n} 项调节` : '中性参数'} · ${d.getMonth() + 1}月${d.getDate()}日`
+  const summary = n ? t('{0} 项调节', n) : t('中性参数')
+  return `${summary} · ${t('{0}月{1}日', d.getMonth() + 1, d.getDate())}`
 }
 
 function openPresetSave(): void {
-  presetName.value = `调节预设 ${presets.list.length + 1}`
+  presetName.value = t('调节预设 {0}', presets.list.length + 1)
   presetSaving.value = true
 }
 
@@ -185,21 +188,21 @@ function confirmPresetSave(): void {
   const p = presets.save(presetName.value, adjust.snapshotFor(activeId.value))
   presetSaving.value = false
   presetOpen.value = true
-  toast(`已保存预设「${p.name}」`, 'success')
+  toast(t('已保存预设「{0}」', p.name), 'success')
 }
 
 function applyPreset(p: AdjustPreset): void {
   const n = presets.apply(p)
   if (!n) {
-    toast('先选择一张照片', 'error')
+    toast(t('先选择一张照片'), 'error')
     return
   }
-  toast(n > 1 ? `已将「${p.name}」套用到 ${n} 张照片` : `已套用「${p.name}」`, 'success')
+  toast(n > 1 ? t('已将「{0}」套用到 {1} 张照片', p.name, n) : t('已套用「{0}」', p.name), 'success')
 }
 
 function applyPresetAll(p: AdjustPreset): void {
   presets.applyToAll(p)
-  toast(`已将「${p.name}」应用为全局调节`, 'success')
+  toast(t('已将「{0}」应用为全局调节', p.name), 'success')
 }
 
 /* ---------- HSL 分色 ---------- */
@@ -294,6 +297,11 @@ const denoiseMethodModel = computed({
   set: (v: unknown) => (target.value.denoiseMethod = v as Adjustments['denoiseMethod']),
 })
 
+/** 降噪算法选项：标签按当前语言即时翻译（选中值仍是原枚举） */
+const denoiseOptions = computed(() =>
+  DENOISE_METHODS.map((o) => ({ value: o.value, label: t(o.label) })),
+)
+
 function resetDenoise(): void {
   delete target.value.denoise
   delete target.value.denoiseMethod
@@ -303,8 +311,8 @@ function resetDenoise(): void {
 <template>
   <div class="panel-scroll">
     <div class="head">
-      <h1>调节</h1>
-      <span class="fl">单独调节这张照片</span>
+      <h1>{{ t('调节') }}</h1>
+      <span class="fl">{{ t('单独调节这张照片') }}</span>
       <AppSwitch
         :model-value="individual"
         :disabled="!activeId"
@@ -314,12 +322,12 @@ function resetDenoise(): void {
     <section class="group presets-group">
       <header class="group-head" @click="presetOpen = !presetOpen">
         <Bookmark :size="13" />
-        <span>调节预设</span>
+        <span>{{ t('调节预设') }}</span>
         <span class="flex" />
         <span v-if="presets.list.length" class="count">{{ presets.list.length }}</span>
         <button
           class="mini"
-          title="把当前调节存为预设"
+          :title="t('把当前调节存为预设')"
           :disabled="!activeId"
           @click.stop="openPresetSave"
         >
@@ -344,7 +352,7 @@ function resetDenoise(): void {
           </div>
         </div>
         <p v-if="!presets.list.length" class="preset-empty">
-          还没有预设。调好当前照片后点右上角「+」保存，之后可一键套用到其他照片。
+          {{ t('还没有预设。调好当前照片后点右上角「+」保存，之后可一键套用到其他照片。') }}
         </p>
         <p v-else class="preset-hint">{{ presetHint }}</p>
       </template>
@@ -354,7 +362,7 @@ function resetDenoise(): void {
         v-model="target[def.key]"
         :min="-100"
         :max="100"
-        :label="def.label"
+        :label="t(def.label)"
         :icon="icons[def.key]"
         :default="0"
         @reset="resetOne(def.key)"
@@ -368,10 +376,10 @@ function resetDenoise(): void {
           :aria-pressed="adjust.pickingWb"
           @click="togglePick"
         >
-          <Pipette :size="13" />{{ adjust.pickingWb ? '取消取样' : '吸管取白平衡' }}
+          <Pipette :size="13" />{{ adjust.pickingWb ? t('取消取样') : t('吸管取白平衡') }}
         </button>
         <span class="wb-hint">{{
-          adjust.pickingWb ? '在画面点按中性灰或白色处' : '点按画面中性色，自动校正偏色'
+          adjust.pickingWb ? t('在画面点按中性灰或白色处') : t('点按画面中性色，自动校正偏色')
         }}</span>
       </div>
     </template>
@@ -379,9 +387,9 @@ function resetDenoise(): void {
     <section class="group">
       <header class="group-head" @click="hslOpen = !hslOpen">
         <Palette :size="13" />
-        <span>HSL 分色调整</span>
+        <span>{{ t('HSL 分色调整') }}</span>
         <span class="flex" />
-        <button v-if="!hslNeutral" class="mini" title="全部归零" @click.stop="resetHsl">
+        <button v-if="!hslNeutral" class="mini" :title="t('全部归零')" @click.stop="resetHsl">
           <RotateCcw :size="11" />
         </button>
         <ChevronDown :size="13" class="chev" :class="{ open: hslOpen }" />
@@ -396,19 +404,19 @@ function resetDenoise(): void {
             :style="{ '--sw': b.swatch }"
             @click="selectedBand = i"
           >
-            {{ b.label }}
+            {{ t(b.label) }}
           </button>
         </div>
         <div v-if="selectedBand >= 0" class="band-edit">
           <div class="band-title">
             <span class="dot" :style="{ background: HSL_BANDS[selectedBand].swatch }" />
-            {{ HSL_BANDS[selectedBand].label }}色
+            {{ t('{0}色', t(HSL_BANDS[selectedBand].label)) }}
           </div>
           <AppSlider
             :model-value="hslVal(selectedBand, 'h')"
             :min="-100"
             :max="100"
-            label="色相"
+            :label="t('色相')"
             :default="0"
             @update:model-value="hslSet(selectedBand, 'h', $event)"
             @reset="hslSet(selectedBand, 'h', 0)"
@@ -417,7 +425,7 @@ function resetDenoise(): void {
             :model-value="hslVal(selectedBand, 's')"
             :min="-100"
             :max="100"
-            label="饱和度"
+            :label="t('饱和度')"
             :default="0"
             @update:model-value="hslSet(selectedBand, 's', $event)"
             @reset="hslSet(selectedBand, 's', 0)"
@@ -426,7 +434,7 @@ function resetDenoise(): void {
             :model-value="hslVal(selectedBand, 'l')"
             :min="-100"
             :max="100"
-            label="亮度"
+            :label="t('亮度')"
             :default="0"
             @update:model-value="hslSet(selectedBand, 'l', $event)"
             @reset="hslSet(selectedBand, 'l', 0)"
@@ -437,9 +445,9 @@ function resetDenoise(): void {
     <section class="group">
       <header class="group-head" @click="vigOpen = !vigOpen">
         <Circle :size="13" />
-        <span>晕影</span>
+        <span>{{ t('晕影') }}</span>
         <span class="flex" />
-        <button v-if="vigDirty" class="mini" title="全部归零" @click.stop="resetVignette">
+        <button v-if="vigDirty" class="mini" :title="t('全部归零')" @click.stop="resetVignette">
           <RotateCcw :size="11" />
         </button>
         <ChevronDown :size="13" class="chev" :class="{ open: vigOpen }" />
@@ -449,20 +457,20 @@ function resetDenoise(): void {
           v-model="target.vignette"
           :min="0"
           :max="100"
-          label="强度"
+          :label="t('强度')"
           :default="0"
           @reset="target.vignette = 0"
         />
-        <AppSlider v-model="vigRadiusModel" :min="0" :max="100" label="半径" :default="50" @reset="resetVigField('vignetteRadius')" />
-        <AppSlider v-model="vigFeatherModel" :min="0" :max="100" label="羽化" :default="50" @reset="resetVigField('vignetteFeather')" />
+        <AppSlider v-model="vigRadiusModel" :min="0" :max="100" :label="t('半径')" :default="50" @reset="resetVigField('vignetteRadius')" />
+        <AppSlider v-model="vigFeatherModel" :min="0" :max="100" :label="t('羽化')" :default="50" @reset="resetVigField('vignetteFeather')" />
         <div class="row-inline">
-          <span class="fl2">形状</span>
+          <span class="fl2">{{ t('形状') }}</span>
           <AppSegment
             small
             :model-value="vigShapeModel"
             :options="[
-              { value: 'ellipse', label: '椭圆' },
-              { value: 'circle', label: '圆形' },
+              { value: 'ellipse', label: t('椭圆') },
+              { value: 'circle', label: t('圆形') },
             ]"
             @update:model-value="vigShapeModel = $event"
           />
@@ -472,9 +480,9 @@ function resetDenoise(): void {
     <section class="group">
       <header class="group-head" @click="dnOpen = !dnOpen">
         <Sparkles :size="13" />
-        <span>降噪</span>
+        <span>{{ t('降噪') }}</span>
         <span class="flex" />
-        <button v-if="dnDirty" class="mini" title="关闭降噪" @click.stop="resetDenoise">
+        <button v-if="dnDirty" class="mini" :title="t('关闭降噪')" @click.stop="resetDenoise">
           <RotateCcw :size="11" />
         </button>
         <ChevronDown :size="13" class="chev" :class="{ open: dnOpen }" />
@@ -484,26 +492,26 @@ function resetDenoise(): void {
           v-model="denoiseModel"
           :min="0"
           :max="100"
-          label="强度"
+          :label="t('强度')"
           :default="0"
           @reset="denoiseModel = 0"
         />
         <template v-if="(target.denoise ?? 0) > 0">
           <div class="row-inline">
-            <span class="fl2">算法</span>
+            <span class="fl2">{{ t('算法') }}</span>
             <AppSegment
               small
               :model-value="denoiseMethodModel"
-              :options="DENOISE_METHODS"
+              :options="denoiseOptions"
               @update:model-value="denoiseMethodModel = $event"
             />
           </div>
           <p class="dn-hint">
             {{ (target.denoiseMethod ?? 'edge') === 'median'
-              ? '中值：去除孤点噪斑与椒盐噪，边缘最硬。'
+              ? t('中值：去除孤点噪斑与椒盐噪，边缘最硬。')
               : (target.denoiseMethod ?? 'edge') === 'smooth'
-                ? '平滑：快速均匀柔化，力度最强。'
-                : '边缘保持：联合双边滤波，去噪同时保住细节边缘。' }}
+                ? t('平滑：快速均匀柔化，力度最强。')
+                : t('边缘保持：联合双边滤波，去噪同时保住细节边缘。') }}
           </p>
         </template>
       </template>
@@ -515,27 +523,27 @@ function resetDenoise(): void {
         :disabled="individual ? matchesGlobal : isNeutral(adjust.values)"
         @click="onReset"
       >
-        <RotateCcw :size="13" />{{ individual ? '还原为全局' : '全部重置' }}
+        <RotateCcw :size="13" />{{ individual ? t('还原为全局') : t('全部重置') }}
       </AppButton>
     </div>
 
     <AppDialog
       :open="presetSaving"
-      title="存为调节预设"
+      :title="t('存为调节预设')"
       :width="360"
       @close="presetSaving = false"
     >
-      <p class="dlg-note">保存当前照片的全部调节参数（不含水印与裁剪），之后可套用到其他照片。</p>
+      <p class="dlg-note">{{ t('保存当前照片的全部调节参数（不含水印与裁剪），之后可套用到其他照片。') }}</p>
       <input
         v-model="presetName"
         class="dlg-input"
-        placeholder="预设名称"
+        :placeholder="t('预设名称')"
         spellcheck="false"
         @keyup.enter="confirmPresetSave"
       />
       <div class="dlg-actions">
-        <AppButton variant="ghost" size="sm" @click="presetSaving = false">取消</AppButton>
-        <AppButton variant="primary" size="sm" @click="confirmPresetSave">保存</AppButton>
+        <AppButton variant="ghost" size="sm" @click="presetSaving = false">{{ t('取消') }}</AppButton>
+        <AppButton variant="primary" size="sm" @click="confirmPresetSave">{{ t('保存') }}</AppButton>
       </div>
     </AppDialog>
   </div>

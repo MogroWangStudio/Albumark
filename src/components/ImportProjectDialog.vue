@@ -6,6 +6,7 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import { baseName } from '@/core/fs'
 import { isTauri, pickDirectory, pickZipPath, readFileBytes } from '@/core/platform'
 import { useWorkspaceStore, type ProjectMeta } from '@/stores/workspace'
+import { useI18n } from '@/i18n'
 
 /**
  * 工作项目导入对话框：选择导出产物（ZIP 压缩包 / 桌面端文件夹），
@@ -16,6 +17,7 @@ const props = defineProps<{ open: boolean }>()
 
 const emit = defineEmits<{ close: [] }>()
 
+const { t } = useI18n()
 const ws = useWorkspaceStore()
 
 type Phase = 'input' | 'running' | 'done'
@@ -87,10 +89,10 @@ async function importZip(): Promise<void> {
 async function importFolder(): Promise<void> {
   if (phase.value === 'running') return
   error.value = null
-  const dir = await pickDirectory('选择工作项目文件夹')
+  const dir = await pickDirectory(t('选择工作项目文件夹'))
   if (!dir) return
   phase.value = 'running'
-  progress.value = { done: 0, name: '复制文件夹…' }
+  progress.value = { done: 0, name: t('复制文件夹…') }
   try {
     imported.value = [await ws.importProjectFolder(dir)]
     phase.value = 'done'
@@ -102,29 +104,28 @@ async function importFolder(): Promise<void> {
 </script>
 
 <template>
-  <AppDialog :open="open" title="导入工作项目" :width="420" @close="requestClose">
+  <AppDialog :open="open" :title="t('导入工作项目')" :width="420" @close="requestClose">
     <!-- ① 选择态：ZIP / 文件夹入口 -->
     <template v-if="phase === 'input'">
       <p class="hint first">
-        从导出的备份导入一个工作项目到当前工作目录——ZIP 压缩包或项目文件夹
-        （含 albumark.json 清单）均可识别。
+        {{ t('从导出的备份导入一个工作项目到当前工作目录——ZIP 压缩包或项目文件夹（含 albumark.json 清单）均可识别。') }}
       </p>
       <div class="btns-start">
         <AppButton variant="primary" @click="importZip">
-          <ArchiveRestore :size="14" />选择 ZIP 文件…
+          <ArchiveRestore :size="14" />{{ t('选择 ZIP 文件…') }}
         </AppButton>
         <AppButton v-if="isTauri" @click="importFolder">
-          <FolderOpen :size="14" />选择项目文件夹…
+          <FolderOpen :size="14" />{{ t('选择项目文件夹…') }}
         </AppButton>
       </div>
       <input ref="zipInput" type="file" accept=".zip,application/zip,application/x-zip-compressed" class="hidden" />
 
       <p v-if="error" class="error" role="alert">
-        <TriangleAlert :size="13" />导入失败：{{ error }}
+        <TriangleAlert :size="13" />{{ t('导入失败：{0}', error) }}
       </p>
 
       <div class="btns">
-        <AppButton variant="ghost" @click="requestClose">关闭</AppButton>
+        <AppButton variant="ghost" @click="requestClose">{{ t('关闭') }}</AppButton>
       </div>
     </template>
 
@@ -132,13 +133,13 @@ async function importFolder(): Promise<void> {
     <template v-else-if="phase === 'running'">
       <div class="count">
         <FolderUp :size="15" />
-        <span>正在导入…</span>
+        <span>{{ t('正在导入…') }}</span>
       </div>
       <div class="track">
         <div class="fill indeterminate" />
       </div>
       <p class="status">
-        已导入 <strong>{{ progress.done }}</strong> 个文件
+        {{ t('已导入 {0} 个文件', progress.done) }}
         <span v-if="progress.name" class="cur mono">{{ progress.name }}</span>
       </p>
     </template>
@@ -147,13 +148,17 @@ async function importFolder(): Promise<void> {
     <template v-else>
       <div class="count">
         <ArchiveRestore :size="15" />
-        <span>{{ imported.length > 1 ? `已导入 ${imported.length} 个工作项目` : `已导入「${imported[0]?.name ?? ''}」` }}</span>
+        <span>{{
+          imported.length > 1
+            ? t('已导入 {0} 个工作项目', imported.length)
+            : t('已导入「{0}」', imported[0]?.name ?? '')
+        }}</span>
       </div>
       <p class="dest">
-        {{ imported.reduce((n, p) => n + p.count, 0) }} 张照片 · 已加入当前工作目录的项目列表
+        {{ t('{0} 张照片 · 已加入当前工作目录的项目列表', imported.reduce((n, p) => n + p.count, 0)) }}
       </p>
       <div class="btns">
-        <AppButton variant="primary" @click="requestClose">完成</AppButton>
+        <AppButton variant="primary" @click="requestClose">{{ t('完成') }}</AppButton>
       </div>
     </template>
   </AppDialog>

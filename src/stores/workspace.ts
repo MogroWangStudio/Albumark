@@ -12,6 +12,7 @@ import {
   isImportableImage,
   resolveImageFormat,
 } from '@/core/imageFormat'
+import { t } from '@/i18n'
 import type { ImageItem } from '@/types/image'
 import { toast } from './toast'
 import { processItem, useImagesStore } from './images'
@@ -218,7 +219,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       await fs.readDir(path)
     } catch {
-      toast('无法读取所选文件夹', 'error')
+      toast(t('无法读取所选文件夹'), 'error')
       return false
     }
     let meta = dirs.value.find((d) => d.path === path)
@@ -234,7 +235,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   /** 桌面端：选择一个文件夹加入工作目录列表。允许非空——会自动扫描其中的 Albumark 项目。 */
   async function addDir(): Promise<boolean> {
     if (!isTauri) return false
-    const picked = await pickDirectory('选择工作目录（可以是已有项目的文件夹）')
+    const picked = await pickDirectory(t('选择工作目录（可以是已有项目的文件夹）'))
     if (!picked) return false
     return await adoptDir(picked)
   }
@@ -244,12 +245,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!sandboxedFs) return false
     const clean = sanitizeDirName(rawName)
     if (!clean) {
-      toast('请输入有效的目录名称', 'error')
+      toast(t('请输入有效的目录名称'), 'error')
       return false
     }
     const path = await fs.joinPath(DATA_FOLDER, clean)
     if (dirs.value.some((d) => d.path === path)) {
-      toast('已有同名工作目录', 'error')
+      toast(t('已有同名工作目录'), 'error')
       return false
     }
     await fs.mkdir(await fs.joinPath(path, 'images'))
@@ -336,13 +337,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!fsAvailable || !clean || clean === meta.name) return false
     const nextPath = await fs.joinPath(fs.parentPath(meta.path), clean)
     if (await fs.exists(nextPath)) {
-      toast('同名文件夹已存在，换一个名字', 'error')
+      toast(t('同名文件夹已存在，换一个名字'), 'error')
       return false
     }
     try {
       await fs.renamePath(meta.path, nextPath)
     } catch {
-      toast('重命名失败，文件夹可能正被占用', 'error')
+      toast(t('重命名失败，文件夹可能正被占用'), 'error')
       return false
     }
     // 清单的 name 写在新路径上：失败不致命（显示回落为文件夹名）
@@ -364,13 +365,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!fsAvailable || !clean || clean === meta.name) return false
     const nextPath = await fs.joinPath(fs.parentPath(meta.path), clean)
     if (await fs.exists(nextPath)) {
-      toast('同名文件夹已存在，换一个名字', 'error')
+      toast(t('同名文件夹已存在，换一个名字'), 'error')
       return false
     }
     try {
       await fs.renamePath(meta.path, nextPath)
     } catch {
-      toast('重命名失败，文件夹可能正被占用', 'error')
+      toast(t('重命名失败，文件夹可能正被占用'), 'error')
       return false
     }
     dirs.value = dirs.value.map((d) =>
@@ -408,13 +409,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (nameChanged) {
       const nextPath = await fs.joinPath(fs.parentPath(meta.path), clean)
       if (await fs.exists(nextPath)) {
-        toast('同名文件夹已存在，换一个名字', 'error')
+        toast(t('同名文件夹已存在，换一个名字'), 'error')
         return false
       }
       try {
         await fs.renamePath(meta.path, nextPath)
       } catch {
-        toast('重命名失败，文件夹可能正被占用', 'error')
+        toast(t('重命名失败，文件夹可能正被占用'), 'error')
         return false
       }
       meta.path = nextPath
@@ -440,7 +441,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!fsAvailable) return false
     const m = (await fs.readJsonFile(await fs.joinPath(meta.path, MANIFEST))) as ProjectManifest | null
     if (!m) {
-      toast('读取项目清单失败，无法设置图标', 'error')
+      toast(t('读取项目清单失败，无法设置图标'), 'error')
       return false
     }
     const v = cleanEmoji(emoji)
@@ -477,7 +478,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const clean = sanitizeDirName(name) || '未命名项目'
     const p = await fs.joinPath(dir.value.path, clean)
     if (await fs.exists(p)) {
-      toast('同名文件夹已存在，换一个名字', 'error')
+      toast(t('同名文件夹已存在，换一个名字'), 'error')
       return false
     }
     await fs.mkdir(await fs.joinPath(p, 'images'))
@@ -524,16 +525,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     fallbackName: string,
     onProgress?: (done: number, name: string) => void,
   ): Promise<ProjectMeta> {
-    if (!fsAvailable || !dir.value) throw new Error('尚未打开工作目录')
+    if (!fsAvailable || !dir.value) throw new Error(t('尚未打开工作目录'))
     const probe = await probeZipManifest(file)
-    if (!probe) throw new Error('ZIP 里没有找到工作项目（缺少 albumark.json 清单）')
+    if (!probe) throw new Error(t('ZIP 里没有找到工作项目（缺少 albumark.json 清单）'))
     let manifest: ProjectManifest
     try {
       manifest = JSON.parse(new TextDecoder().decode(probe.bytes)) as ProjectManifest
     } catch {
-      throw new Error('项目清单格式不正确')
+      throw new Error(t('项目清单格式不正确'))
     }
-    if (!manifest || !Array.isArray(manifest.images)) throw new Error('项目清单格式不正确')
+    if (!manifest || !Array.isArray(manifest.images)) throw new Error(t('项目清单格式不正确'))
     manifest.id = uid()
     const dirName = await uniqueProjectDir(manifest.name || fallbackName)
     const dest = await fs.joinPath(dir.value.path, dirName)
@@ -542,7 +543,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       manifestBytes: new TextEncoder().encode(JSON.stringify(manifest)),
       onProgress,
     })
-    if (written === 0) throw new Error('ZIP 里没有可导入的文件')
+    if (written === 0) throw new Error(t('ZIP 里没有可导入的文件'))
     await scanProjects()
     return await findImported(dest, manifest, dirName)
   }
@@ -557,7 +558,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     fallbackName: string,
     onProgress?: (done: number, name: string) => void,
   ): Promise<ProjectMeta[]> {
-    if (!fsAvailable || !dir.value) throw new Error('尚未打开工作目录')
+    if (!fsAvailable || !dir.value) throw new Error(t('尚未打开工作目录'))
     try {
       return [await importProjectZip(file, fallbackName, onProgress)]
     } catch (singleErr) {
@@ -584,7 +585,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         })
         out.push(await findImported(dest, manifest, dirName))
       }
-      if (!out.length) throw new Error('ZIP 里的项目清单都格式不正确')
+      if (!out.length) throw new Error(t('ZIP 里的项目清单都格式不正确'))
       await scanProjects()
       return out
     }
@@ -592,10 +593,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   /** 导入文件夹工作项目（桌面）：校验清单 → 原样复制 → id 重新生成。 */
   async function importProjectFolder(srcDir: string): Promise<ProjectMeta> {
-    if (!fsAvailable || !dir.value) throw new Error('尚未打开工作目录')
+    if (!fsAvailable || !dir.value) throw new Error(t('尚未打开工作目录'))
     const raw = (await fs.readJsonFile(await fs.joinPath(srcDir, MANIFEST))) as ProjectManifest | null
     if (!raw || !Array.isArray(raw.images)) {
-      throw new Error('所选文件夹不是工作项目（缺少 albumark.json 清单）')
+      throw new Error(t('所选文件夹不是工作项目（缺少 albumark.json 清单）'))
     }
     const manifest: ProjectManifest = { ...raw, id: uid() }
     const dirName = await uniqueProjectDir(manifest.name || fs.baseName(srcDir))
@@ -693,7 +694,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       const data = (await fs.readJsonFile(await fs.joinPath(meta.path, MANIFEST))) as ProjectManifest | null
       if (!data || !Array.isArray(data.images)) {
-        toast('这个文件夹不是有效的 Albumark 项目', 'error')
+        toast(t('这个文件夹不是有效的 Albumark 项目'), 'error')
         return
       }
       // 占位条目先进入项目，文件读取与解码转后台渐进补齐——安卓慢存储上不再整包等待
@@ -703,7 +704,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       void hydrateItems(data.images, meta.path)
     } catch (err) {
       // 安卓 / 慢存储上读文件可能偶发失败：给出提示而不是静默失败，让用户能重试
-      toast(`打开项目失败：${err instanceof Error ? err.message : '文件读取异常，请重试'}`, 'error')
+      toast(
+        t(
+          '打开项目失败：{0}',
+          err instanceof Error ? err.message : t('文件读取异常，请重试'),
+        ),
+        'error',
+      )
     } finally {
       loading.value = false
     }
@@ -713,7 +720,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function openEphemeralProject(): void {
     const meta: ProjectMeta = {
       id: uid(),
-      name: '临时项目',
+      name: t('临时项目'),
       path: '',
       createdAt: Date.now(),
       count: 0,
@@ -755,7 +762,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       await fs.deletePath(meta.path)
     } catch {
-      toast('无法移入回收站，项目保持原样', 'error')
+      toast(t('无法移入回收站，项目保持原样'), 'error')
       await scanProjects()
       return false
     }
@@ -783,7 +790,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       await fs.deletePath(from)
       return to
     } catch {
-      toast('移动失败,目标位置可能不可写', 'error')
+      toast(t('移动失败,目标位置可能不可写'), 'error')
       return null
     }
   }
@@ -803,7 +810,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         }
         done++
       } catch {
-        toast(`复制「${meta.name}」失败,已跳过`, 'error')
+        toast(t('复制「{0}」失败,已跳过', meta.name), 'error')
       }
     }
     if (done) await scanProjects()
@@ -841,7 +848,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         await fs.deletePath(meta.path)
         done++
       } catch {
-        toast(`删除「${meta.name}」失败,已跳过`, 'error')
+        toast(t('删除「{0}」失败,已跳过', meta.name), 'error')
       }
     }
     if (done) await scanProjects()
@@ -855,14 +862,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     for (const meta of metas) {
       const dest = await fs.joinPath(parentPath, meta.name)
       if (await fs.exists(dest)) {
-        toast(`「${meta.name}」在目标位置已存在,已跳过`, 'error')
+        toast(t('「{0}」在目标位置已存在,已跳过', meta.name), 'error')
         continue
       }
       try {
         await fs.copyDir(meta.path, dest, toDocuments)
         done++
       } catch {
-        toast(`复制「${meta.name}」失败,已跳过`, 'error')
+        toast(t('复制「{0}」失败,已跳过', meta.name), 'error')
       }
     }
     return done
@@ -876,7 +883,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     for (const meta of metas) {
       const dest = await fs.joinPath(parentPath, meta.name)
       if (await fs.exists(dest)) {
-        toast(`「${meta.name}」在目标位置已存在,已跳过`, 'error')
+        toast(t('「{0}」在目标位置已存在,已跳过', meta.name), 'error')
         continue
       }
       const movedTo = await moveDir(meta.path, dest)
@@ -970,7 +977,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         } else {
           if (mode === 'link' && !path && !toldFallback) {
             toldFallback = true
-            toast('拿不到文件的源路径，已改为复制', 'info')
+            toast(t('拿不到文件的源路径，已改为复制'), 'info')
           }
           ref.kind = 'copy'
           ref.storedAs = `${ref.id}.${imageExt(format)}`
@@ -985,7 +992,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       void processItem(item).then((patch) => images.patchItem(item.id, patch))
       scheduleSave()
     }
-    if (skipped > 0) toast(`已跳过 ${skipped} 个非 JPG/PNG 文件`)
+    if (skipped > 0) toast(t('已跳过 {0} 个非 JPG/PNG 文件', skipped))
   }
 
   /** 桌面端拖入/对话框选择的照片（带绝对路径），复制或链接按 mode 决定。 */
@@ -993,7 +1000,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (!current.value || !isTauri) return
     const supported = paths.filter((p) => isImportableImage(p))
     const skipped = paths.length - supported.length
-    if (skipped > 0) toast(`已跳过 ${skipped} 个非 JPG/PNG 文件`)
+    if (skipped > 0) toast(t('已跳过 {0} 个非 JPG/PNG 文件', skipped))
     for (const path of supported) {
       try {
         const bytes = await fs.readFile(path)
@@ -1001,7 +1008,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         // 内容优先：扩展名写错（例如被改名的 PNG）也按真实格式落盘
         const format = resolveImageFormat(bytes, name)
         if (!format) {
-          toast(`无法识别：${name}`, 'error')
+          toast(t('无法识别：{0}', name), 'error')
           continue
         }
         const code = await sha256Hex(bytes)
@@ -1021,7 +1028,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         void processItem(item).then((patch) => images.patchItem(item.id, patch))
         scheduleSave()
       } catch {
-        toast(`无法读取：${path}`, 'error')
+        toast(t('无法读取：{0}', path), 'error')
       }
     }
   }
@@ -1051,13 +1058,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const bytes = await fs.readFile(newPath)
       const code = await sha256Hex(bytes)
       if (code !== ref.code) {
-        toast('识别码不符：选择的不是原来的那张图', 'error')
+        toast(t('识别码不符：选择的不是原来的那张图'), 'error')
         return
       }
       await applyRelink(ref, bytes, newPath, code)
-      toast('已重新链接到源文件', 'success')
+      toast(t('已重新链接到源文件'), 'success')
     } catch {
-      toast('无法读取选择的文件', 'error')
+      toast(t('无法读取选择的文件'), 'error')
     }
   }
 
@@ -1147,12 +1154,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (ok) {
       toast(
         forced
-          ? `已重新链接 ${ok} 张（其中 ${forced} 张为同名但内容有差异的文件）`
-          : `已重新链接 ${ok} 张源文件`,
+          ? t('已重新链接 {0} 张（其中 {1} 张为同名但内容有差异的文件）', ok, forced)
+          : t('已重新链接 {0} 张源文件', ok),
         'success',
       )
     }
-    if (failed) toast(`${failed} 张未能重新链接`, 'error')
+    if (failed) toast(t('{0} 张未能重新链接', failed), 'error')
   }
 
   return {

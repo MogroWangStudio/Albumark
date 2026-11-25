@@ -16,6 +16,7 @@ import {
 import { exifSummaryLine } from '@/core/exif'
 import { composeThumb } from '@/core/compose'
 import { isTauri, pickDirectory } from '@/core/platform'
+import { useI18n } from '@/i18n'
 import { croppedSize, isPlainFullCrop } from '@/types/adjust'
 import type { BackgroundLayer, BorderLayer } from '@/types/watermark'
 import { useAdjustStore } from '@/stores/adjust'
@@ -30,6 +31,7 @@ const images = useImagesStore()
 const ws = useWorkspaceStore()
 const adjust = useAdjustStore()
 const wm = useWatermarkStore()
+const { t } = useI18n()
 
 const emit = defineEmits<{ photoCtx: [e: MouseEvent, id: string] }>()
 
@@ -148,7 +150,7 @@ const relinkCandidates = ref<RelinkCandidate[] | null>(null)
 
 async function relinkFolder(): Promise<void> {
   if (relinkBusy.value) return
-  const dir = await pickDirectory('选择可能包含源文件的文件夹（按文件名匹配）')
+  const dir = await pickDirectory(t('选择可能包含源文件的文件夹（按文件名匹配）'))
   if (!dir) return
   relinkBusy.value = true
   try {
@@ -182,15 +184,15 @@ const confirmText = computed(() => {
   const c = confirmState.value
   if (!c) return ''
   const permanent = !isTauri
-  const suffix = permanent ? '将被直接删除，此操作不可撤销。' : '将移入回收站，仍可从回收站找回。'
-  if (c.kind === 'one') return `移除「${c.name}」？照片${suffix}`
-  if (c.kind === 'selected') return `移除所选的 ${c.count} 张照片？照片${suffix}`
-  return `清空全部 ${c.count} 张照片？照片${suffix}`
+  const suffix = permanent ? t('将被直接删除，此操作不可撤销。') : t('将移入回收站，仍可从回收站找回。')
+  if (c.kind === 'one') return t('移除「{0}」？照片{1}', c.name, suffix)
+  if (c.kind === 'selected') return t('移除所选的 {0} 张照片？照片{1}', c.count, suffix)
+  return t('清空全部 {0} 张照片？照片{1}', c.count, suffix)
 })
 
 function askRemoveOne(id: string): void {
   const it = images.items.find((i) => i.id === id)
-  confirmState.value = { kind: 'one', id, name: it?.name ?? '照片', count: 1 }
+  confirmState.value = { kind: 'one', id, name: it?.name ?? t('照片'), count: 1 }
 }
 function askRemoveSelected(): void {
   confirmState.value = { kind: 'selected', name: '', count: images.selectedIds.size }
@@ -303,7 +305,7 @@ const marqueeStyle = computed(() => {
         >
           <CheckSquare :size="13" />
         </span>
-        <span v-if="mixedKinds && !item.missing" class="kind" :title="item.kind === 'link' ? '链接源文件' : '已复制原文件'">
+        <span v-if="mixedKinds && !item.missing" class="kind" :title="item.kind === 'link' ? t('链接源文件') : t('已复制原文件')">
           <Link2 v-if="item.kind === 'link'" :size="9" />
           <Copy v-else :size="9" />
         </span>
@@ -312,7 +314,7 @@ const marqueeStyle = computed(() => {
           :key="f"
           class="flag"
           :style="{ right: `${3 + fi * 17}px` }"
-          :title="f === 'adj' ? '这张照片已开启单独调节' : f === 'wm' ? '这张照片已开启单独水印' : '这张照片已裁剪 / 变换'"
+          :title="f === 'adj' ? t('这张照片已开启单独调节') : f === 'wm' ? t('这张照片已开启单独水印') : t('这张照片已裁剪 / 变换')"
         >
           <SlidersHorizontal v-if="f === 'adj'" :size="9" />
           <Droplets v-else-if="f === 'wm'" :size="9" />
@@ -322,7 +324,7 @@ const marqueeStyle = computed(() => {
         <button
           v-if="!images.multiSelect"
           class="rm"
-          aria-label="移除这张"
+          :aria-label="t('移除这张')"
           @click.stop="askRemoveOne(item.id)"
         >
           <X :size="11" />
@@ -330,10 +332,10 @@ const marqueeStyle = computed(() => {
       </div>
     </div>
     <div class="foot">
-      <span class="count">{{ images.count }} 张照片</span>
+      <span class="count">{{ t('{0} 张照片', images.count) }}</span>
       <template v-if="images.selectedIds.size > 1">
         <span class="sep">·</span>
-        <span>已选 {{ images.selectedIds.size }} 张</span>
+        <span>{{ t('已选 {0} 张', images.selectedIds.size) }}</span>
       </template>
       <template v-else-if="infoLine">
         <span class="sep">·</span>
@@ -347,29 +349,29 @@ const marqueeStyle = computed(() => {
         @click="relinkFolder()"
       >
         <LoaderCircle v-if="relinkBusy" :size="12" class="spin" />
-        <MapPin v-else :size="12" />{{ missingCount }} 张源文件失联，重新定位
+        <MapPin v-else :size="12" />{{ t('{0} 张源文件失联，重新定位', missingCount) }}
       </button>
       <template v-if="images.multiSelect">
-        <button class="link" @click="images.selectAll()"><Square :size="12" />全选</button>
+        <button class="link" @click="images.selectAll()"><Square :size="12" />{{ t('全选') }}</button>
         <button v-if="images.selectedIds.size" class="link warn" @click="askRemoveSelected">
-          <X :size="12" />移除所选
+          <X :size="12" />{{ t('移除所选') }}
         </button>
       </template>
-      <button v-else-if="images.selectedIds.size > 1" class="link" @click="askRemoveSelected">移除所选</button>
-      <button v-if="images.count && !images.multiSelect" class="link" @click="askRemoveAll">清空</button>
+      <button v-else-if="images.selectedIds.size > 1" class="link" @click="askRemoveSelected">{{ t('移除所选') }}</button>
+      <button v-if="images.count && !images.multiSelect" class="link" @click="askRemoveAll">{{ t('清空') }}</button>
       <button class="link toggle" :class="{ on: images.multiSelect }" @click="images.toggleMultiSelect()">
-        <CheckSquare :size="12" />{{ images.multiSelect ? '完成' : '选择' }}
+        <CheckSquare :size="12" />{{ images.multiSelect ? t('完成') : t('选择') }}
       </button>
     </div>
     <!-- 框选矩形挂到 body：.strip 的 backdrop-filter 会劫持 fixed 定位的包含块 -->
     <Teleport to="body">
       <div v-if="marquee" class="marquee" :style="marqueeStyle" aria-hidden="true" />
     </Teleport>
-    <AppDialog :open="!!confirmState" title="移除照片" :width="400" @close="confirmState = null">
+    <AppDialog :open="!!confirmState" :title="t('移除照片')" :width="400" @close="confirmState = null">
       <p class="confirm-text">{{ confirmText }}</p>
       <div class="confirm-btns">
-        <AppButton variant="ghost" size="sm" @click="confirmState = null">取消</AppButton>
-        <AppButton variant="danger" size="sm" @click="confirmRemove">移除</AppButton>
+        <AppButton variant="ghost" size="sm" @click="confirmState = null">{{ t('取消') }}</AppButton>
+        <AppButton variant="danger" size="sm" @click="confirmRemove">{{ t('移除') }}</AppButton>
       </div>
     </AppDialog>
 

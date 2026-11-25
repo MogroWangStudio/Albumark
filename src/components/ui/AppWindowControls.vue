@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { Minus, Square, X } from 'lucide-vue-next'
 import { useWindowControls } from '@/core/windowControls'
+import { useI18n } from '@/i18n'
 
 /** 自绘窗控三键（最小化 / 最大化 / 关闭）：只在 Windows/Linux 桌面显示，
  *  macOS 由系统红绿灯接管。样式与主顶栏同一套 hover 语义。 */
 const { visible, minimize, toggleMaximize, close } = useWindowControls()
+const { t } = useI18n()
 </script>
 
 <template>
   <div v-if="visible" class="win-controls">
-    <button class="win-btn" aria-label="最小化" @click="minimize"><Minus :size="14" /></button>
-    <button class="win-btn" aria-label="最大化/还原" @click="toggleMaximize"><Square :size="11" /></button>
-    <button class="win-btn close" aria-label="关闭" @click="close"><X :size="14" /></button>
+    <button class="win-btn" :aria-label="t('最小化')" @click="minimize"><Minus :size="14" /></button>
+    <button class="win-btn" :aria-label="t('最大化/还原')" @click="toggleMaximize"><Square :size="11" /></button>
+    <button class="win-btn close" :aria-label="t('关闭')" @click="close"><X :size="14" /></button>
   </div>
 </template>
 

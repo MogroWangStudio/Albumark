@@ -40,7 +40,7 @@ export function drawLayers(
     // 边框层在 Worker 里扩展画布（有背景水印时为照片外围环带）；背景层垫在
     // 照片下方，由 Worker（导出）或预览主线程组合绘制——都不在此处
     if (layer.type === 'border' || layer.type === 'background' || !layer.visible) continue
-    const box = measureLayer(layer, imgW, imgH, ctx, pxScale)
+    const box = measureLayer(layer, imgW, imgH, ctx, pxScale, layers)
     ctx.save()
     ctx.globalAlpha = layer.opacity / 100
     ctx.globalCompositeOperation =

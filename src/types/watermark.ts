@@ -23,6 +23,21 @@ export interface BaseLayer {
    * 定位锚点（九宫格）。图层定位点 = 锚点 + 偏移。
    */
   anchor: AnchorPreset
+  /**
+   * 自定义锚点的参照物：
+   * - image（缺省，兼容旧数据）：图片本身的九宫格；
+   * - layer：绑定另一个水印图层，定位点跟随父图层包围盒上的参考点
+   *   （父级移动 / 旋转，子级一起走）；
+   * - custom：图片内的任意坐标（anchorX / anchorY 百分比）。
+   */
+  anchorMode?: 'image' | 'layer' | 'custom'
+  /** anchorMode = layer：父图层 id（只能是文本 / 图片图层） */
+  anchorParentId?: string
+  /** anchorMode = layer：父图层包围盒上的九宫格参考点 */
+  anchorParent?: AnchorPreset
+  /** anchorMode = custom：定位点占图片宽 / 高的百分比（0–100） */
+  anchorX?: number
+  anchorY?: number
   /** 相对锚点的水平偏移（像素，可为负；所有照片上保持一致，不随尺寸缩放） */
   offsetX: number
   /** 相对锚点的垂直偏移（像素，可为负） */

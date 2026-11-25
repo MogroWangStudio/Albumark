@@ -6,12 +6,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
     <title>Albumark</title>
-    <style>
-      html { background: #ffffff; }
-      @media (prefers-color-scheme: dark) {
-        html { background: #000000; }
-      }
-    </style>
+    <script>
+      /* 首帧背景：样式表与 Vue 启动之前，先把已选主题的 --bg 直接铺到 html 上。
+         否则 index.html 的默认白底会在主题写入前闪一下（尤其暗房 / 蓝晒等
+         深色主题，白色闪屏非常刺眼）。下面这张表与 styles/tokens.css 的
+         --bg 一一对应，改主题底色时两处同步。 */
+      ;(function () {
+        var BG = {
+          light: '#ffffff',
+          dark: '#000000',
+          darkroom: '#17120e',
+          cyanotype: '#0d1b28',
+          infrared: '#180d12',
+          silver: '#0f1012',
+          paper: '#f5f0e6',
+          gallery: '#efebe3',
+          daguerre: '#f1f2f4',
+          chlorophyll: '#f0f1e6',
+        }
+        try {
+          var s = JSON.parse(localStorage.getItem('albumark.settings.v1') || '{}')
+          var theme = s.theme || 'auto'
+          if (theme === 'auto') {
+            theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          }
+          var root = document.documentElement
+          root.style.backgroundColor = BG[theme] || BG.dark
+          root.dataset.theme = theme
+          if (s.locale) root.lang = s.locale
+        } catch (e) {
+          document.documentElement.style.backgroundColor = '#000000'
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

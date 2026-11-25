@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
-import { ArrowLeft, Check, ChevronDown, Download, Droplets, ExternalLink, Eye, HardDrive, History, Info, LoaderCircle, Palette, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
+import { ArrowLeft, Check, ChevronDown, Download, Droplets, ExternalLink, Eye, Globe2, HardDrive, History, Info, LoaderCircle, Palette, Play, RefreshCw, Shuffle, Type } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import SettingInfo from '@/components/ui/SettingInfo.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
@@ -11,8 +11,10 @@ import AppSwitch from '@/components/ui/AppSwitch.vue'
 import AppWindowControls from '@/components/ui/AppWindowControls.vue'
 import BootScreen from '@/components/BootScreen.vue'
 import FontPickerDialog from '@/components/FontPickerDialog.vue'
+import StorageReport from '@/components/StorageReport.vue'
 import LogoMark from '@/components/brand/LogoMark.vue'
 import LogoText from '@/components/brand/LogoText.vue'
+import { LANGUAGES, useI18n } from '@/i18n'
 
 import { pickDirectory, executableDir, appDataDir, isTauri } from '@/core/platform'
 import {
@@ -52,21 +54,23 @@ const settings = useSettingsStore()
 const ws = useWorkspaceStore()
 const fonts = useFontsStore()
 const updater = useUpdaterStore()
+const { t } = useI18n()
 
 /* ---------- 侧边页面列表：点击左侧分组，右侧只显示该组内容 ---------- */
 
-type SettingsSection = 'appearance' | 'preview' | 'import' | 'data' | 'about'
+type SettingsSection = 'language' | 'appearance' | 'preview' | 'import' | 'data' | 'about'
 const activeSection = ref<SettingsSection>('appearance')
 
-/** 分组沿用既有内容划分；「数据」组仅桌面有 */
+/** 分组沿用既有内容划分；「数据」组仅桌面有；语言固定第一位 */
 const navSections = computed<{ id: SettingsSection; label: string; icon: Component }[]>(() => {
   const list: { id: SettingsSection; label: string; icon: Component }[] = [
-    { id: 'appearance', label: '外观', icon: Palette },
-    { id: 'preview', label: '预览', icon: Eye },
-    { id: 'import', label: '水印与导入', icon: Droplets },
+    { id: 'language', label: t('语言'), icon: Globe2 },
+    { id: 'appearance', label: t('外观'), icon: Palette },
+    { id: 'preview', label: t('预览'), icon: Eye },
+    { id: 'import', label: t('水印与导入'), icon: Droplets },
   ]
-  if (isTauri) list.push({ id: 'data', label: '数据', icon: HardDrive })
-  list.push({ id: 'about', label: '关于', icon: Info })
+  if (isTauri) list.push({ id: 'data', label: t('数据'), icon: HardDrive })
+  list.push({ id: 'about', label: t('关于'), icon: Info })
   return list
 })
 
@@ -147,11 +151,22 @@ const minZoomModel = computed({
   set: (v: number) => (settings.minZoom = Math.round(v) / 100),
 })
 
+/** 默认缩放：滑杆值即百分比，100 = 适应窗口（与预览缩放档位同一语义） */
+const defaultZoomModel = computed({
+  get: () => Math.round(settings.defaultZoom),
+  set: (v: number) => (settings.defaultZoom = Math.round(v)),
+})
+
 const hasCustomFont = computed(() => !!settings.fontFamily)
 const fontPickerOpen = ref(false)
 
 function onFontFocus(): void {
   void fonts.ensureFonts()
+}
+
+/** 已选字体是否在当前清单里（不在时下拉补一个当前项，避免显示空白） */
+function fontKnown(family: string): boolean {
+  return fonts.fonts.some((f) => f.family === family)
 }
 
 function onFontPicked(family: string): void {
@@ -176,8 +191,8 @@ const channelModel = computed({
 
 const channelDesc = computed(() =>
   settings.updateChannel === 'beta'
-    ? '同时检查 Pre-Release 测试版，可能不稳定'
-    : '仅检查正式发布的版本',
+    ? t('同时检查 Pre-Release 测试版，可能不稳定')
+    : t('仅检查正式发布的版本'),
 )
 
 /* ---------- 下载线路与测速 ---------- */
@@ -194,15 +209,15 @@ const currentSource = computed(
 /** 线路描述：有测速结论时汇报结论，否则说明当前线路在做什么 */
 const sourceDesc = computed(() => {
   const r = speedResult.value
-  if (speedState.value === 'testing') return '正在测速…'
-  if (!r) return currentSource.value.hint
-  if (!r.ok) return `不可用${r.error ? `：${r.error}` : ''}`
-  return `可用 · 延迟 ${r.latencyMs} ms · 约 ${r.kbps} KB/s`
+  if (speedState.value === 'testing') return t('正在测速…')
+  if (!r) return t(currentSource.value.hint)
+  if (!r.ok) return r.error ? t('不可用：{0}', r.error) : t('不可用')
+  return t('可用 · 延迟 {0} ms · 约 {1} KB/s', r.latencyMs, r.kbps)
 })
 
 const sourceItems = computed<DropdownItem[]>(() =>
   UPDATE_SOURCES.map((s) => ({
-    label: s.label,
+    label: t(s.label),
     action: () => {
       if (settings.updateSource === s.value) return
       settings.updateSource = s.value as UpdateSource
@@ -237,6 +252,8 @@ function openStudioSite(): void {
 
 const dataDirShown = ref('')
 onMounted(async () => {
+  // 先把常用字体清单同步铺上：下拉框首次打开就有内容，不必等用户聚焦才扫描
+  fonts.ensureFallback()
   if (isTauri) {
     try {
       const { join } = await import('@tauri-apps/api/path')
@@ -249,7 +266,7 @@ onMounted(async () => {
 })
 
 async function changeDataDir(): Promise<void> {
-  const dir = await pickDirectory('选择软件数据位置')
+  const dir = await pickDirectory(t('选择软件数据位置'))
   if (dir) {
     settings.dataDir = dir
     dataDirShown.value = dir
@@ -266,8 +283,8 @@ async function relaunchOobe(): Promise<void> {
 <template>
   <div class="page">
     <header class="head material" data-tauri-drag-region>
-      <AppButton variant="ghost" size="sm" @click="emit('back')"><ArrowLeft :size="14" />返回</AppButton>
-      <h1>设置</h1>
+      <AppButton variant="ghost" size="sm" @click="emit('back')"><ArrowLeft :size="14" />{{ t('返回') }}</AppButton>
+      <h1>{{ t('设置') }}</h1>
       <span class="flex" />
       <!-- 全屏覆盖页自带窗控：本页盖住主顶栏，窗口操作入口由这里承接 -->
       <AppWindowControls />
@@ -275,7 +292,7 @@ async function relaunchOobe(): Promise<void> {
 
     <div class="shell">
       <!-- 侧边页面列表：与 macOS 系统设置同构的分页导航；选中语言同 AppTabs -->
-      <aside class="nav" role="tablist" aria-label="设置分组">
+      <aside class="nav" role="tablist" :aria-label="t('设置分组')">
         <button
           v-for="s in navSections"
           :key="s.id"
@@ -291,48 +308,68 @@ async function relaunchOobe(): Promise<void> {
       </aside>
 
       <div class="body">
+      <!-- 语言：固定第一位；四张语言行，选中即生效并持久化 -->
+      <section v-show="activeSection === 'language'" class="group">
+        <h2>{{ t('语言') }}</h2>
+        <div class="lang-list" role="radiogroup" :aria-label="t('界面语言')">
+          <button
+            v-for="l in LANGUAGES"
+            :key="l.value"
+            class="lang-row"
+            role="radio"
+            :aria-checked="settings.locale === l.value"
+            :class="{ on: settings.locale === l.value }"
+            @click="settings.locale = l.value"
+          >
+            <span class="lang-native">{{ l.label }}</span>
+            <span class="lang-hint">{{ t(l.hint) }}</span>            <Check v-if="settings.locale === l.value" :size="14" class="lang-check" />
+          </button>
+        </div>
+        <p class="note">{{ t('切换后界面文案立即更新，重启后保持。') }}</p>
+      </section>
+
       <section v-show="activeSection === 'appearance'" class="group">
-        <h2>外观</h2>
+        <h2>{{ t('外观') }}</h2>
         <div class="row col">
           <div class="text">
-            <span class="label">主题</span>
+            <span class="label">{{ t('主题') }}</span>
           </div>
-          <div class="themes" role="radiogroup" aria-label="主题">
+          <div class="themes" role="radiogroup" :aria-label="t('主题')">
             <button
-              v-for="t in THEMES"
-              :key="t.id"
+              v-for="th in THEMES"
+              :key="th.id"
               class="theme"
               role="radio"
-              :aria-checked="settings.theme === t.id"
-              :title="t.hint"
-              @click="themeModel = t.id"
+              :aria-checked="settings.theme === th.id"
+              :title="t(th.hint)"
+              @click="themeModel = th.id"
             >
-              <span class="swatch" :class="{ auto: t.id === 'auto' }" :style="swatchStyle(t)">
+              <span class="swatch" :class="{ auto: th.id === 'auto' }" :style="swatchStyle(th)">
                 <span class="ln" />
                 <span class="ln2" />
                 <span class="ph"><span class="dot" /></span>
               </span>
-              <span class="t-label">{{ t.label }}</span>
+              <span class="t-label">{{ t(th.label) }}</span>
             </button>
           </div>
         </div>
         <div class="row col">
           <div class="text">
-            <span class="label">界面字号</span>
+            <span class="label">{{ t('界面字号') }}</span>
           </div>
           <AppSegment
             v-model="zoomModel"
             :options="[
-              { value: '0.9', label: '小' },
-              { value: '1', label: '标准' },
-              { value: '1.1', label: '大' },
-              { value: '1.25', label: '特大' },
+              { value: '0.9', label: t('小') },
+              { value: '1', label: t('标准') },
+              { value: '1.1', label: t('大') },
+              { value: '1.25', label: t('特大') },
             ]"
           />
         </div>
         <div class="row col">
           <div class="text">
-            <span class="label">显示字体</span>
+            <span class="label">{{ t('显示字体') }}</span>
           </div>
           <div class="font-row">
             <select
@@ -342,11 +379,19 @@ async function relaunchOobe(): Promise<void> {
               @pointerdown="onFontFocus"
               @change="settings.fontFamily = ($event.target as HTMLSelectElement).value"
             >
-              <option value="">系统默认</option>
+              <option value="">{{ t('系统默认') }}</option>
+              <!-- 已选字体暂时不在清单里（系统扫描尚未完成 / 手输字体）：补一个当前项，
+                   否则 select 匹配不到值会显示空白 -->
+              <option
+                v-if="settings.fontFamily && !fontKnown(settings.fontFamily)"
+                :value="settings.fontFamily"
+              >
+                {{ t('当前字体：{0}', settings.fontFamily) }}
+              </option>
               <optgroup
                 v-for="g in fonts.grouped()"
                 :key="g.category"
-                :label="FONT_CATEGORY_LABELS[g.category as FontCategory]"
+                :label="t(FONT_CATEGORY_LABELS[g.category as FontCategory])"
               >
                 <option v-for="f in g.items" :key="f.family" :value="f.family">
                   {{ f.family }}
@@ -355,30 +400,30 @@ async function relaunchOobe(): Promise<void> {
             </select>
             <button
               class="pick-btn"
-              title="浏览全部字体"
-              aria-label="浏览全部字体"
+              :title="t('浏览全部字体')"
+              :aria-label="t('浏览全部字体')"
               @click="fontPickerOpen = true"
             >
               <Type :size="15" />
             </button>
           </div>
-          <p v-if="fonts.loading" class="note">正在读取系统字体…</p>
+          <p v-if="fonts.loading" class="note">{{ t('正在读取系统字体…') }}</p>
           <p v-else-if="fonts.denied && hasCustomFont" class="note">
-            浏览器未授权读取系统字体，列表为常用字体清单。
+            {{ t('浏览器未授权读取系统字体，列表为常用字体清单。') }}
           </p>
         </div>
         <div class="row">
           <div class="text">
-            <span class="label">启动动画<SettingInfo tip="启动时的品牌动画，关闭后直接进入界面" /></span>
+            <span class="label">{{ t('启动动画') }}<SettingInfo :tip="t('启动时的品牌动画，关闭后直接进入界面')" /></span>
           </div>
           <AppSwitch v-model="settings.bootEnabled" />
         </div>
         <template v-if="settings.bootEnabled">
           <div class="row col">
             <div class="text">
-              <span class="label">动画款式<SettingInfo tip="八款编排各不相同；「随机」会在每次启动时抽一款" /></span>
+              <span class="label">{{ t('动画款式') }}<SettingInfo :tip="t('八款编排各不相同；「随机」会在每次启动时抽一款')" /></span>
             </div>
-            <div class="styles" role="radiogroup" aria-label="启动动画款式">
+            <div class="styles" role="radiogroup" :aria-label="t('启动动画款式')">
               <button
                 v-for="s in BOOT_STYLE_CHOICES"
                 :key="s.value"
@@ -386,7 +431,7 @@ async function relaunchOobe(): Promise<void> {
                 :class="[`st-${s.value}`, { on: settings.bootStyle === s.value }]"
                 role="radio"
                 :aria-checked="settings.bootStyle === s.value"
-                :title="s.hint"
+                :title="t(s.hint)"
                 @click="bootStyleModel = s.value"
               >
                 <span class="st-thumb">
@@ -394,63 +439,78 @@ async function relaunchOobe(): Promise<void> {
                   <LogoMark v-else class="st-logo" />
                 </span>
                 <span class="st-text">
-                  <span class="st-name">{{ s.label }}</span>
-                  <span class="st-hint">{{ s.hint }}</span>
+                  <span class="st-name">{{ t(s.label) }}</span>
+                  <span class="st-hint">{{ t(s.hint) }}</span>
                 </span>
               </button>
             </div>
           </div>
           <div class="row col">
             <div class="text">
-              <span class="label">动画时长<SettingInfo tip="整段动画的总长，随机款式同样按这个时长播放" /></span>
+              <span class="label">{{ t('动画时长') }}<SettingInfo :tip="t('整段动画的总长，随机款式同样按这个时长播放')" /></span>
             </div>
             <AppSlider
               v-model="bootDurationModel"
               :min="BOOT_DURATION_MIN"
               :max="BOOT_DURATION_MAX"
               :step="100"
-              label="时长"
-              :format="(v) => `${(v / 1000).toFixed(1)} 秒`"
+              :label="t('时长')"
+              :format="(v) => `${(v / 1000).toFixed(1)} ${t('秒')}`"
               :default="BOOT_DURATION_DEFAULT"
               @reset="settings.bootDuration = BOOT_DURATION_DEFAULT"
             />
           </div>
           <div class="row preview-row">
             <div class="text">
-              <span class="label">预览效果<SettingInfo tip="按当前款式与时长播放一次，不会改动任何设置" /></span>
+              <span class="label">{{ t('预览效果') }}<SettingInfo :tip="t('按当前款式与时长播放一次，不会改动任何设置')" /></span>
             </div>
             <AppButton size="sm" @click="previewBoot">
-              <Play :size="13" />{{ previewing ? '重新预览' : '预览动画' }}
+              <Play :size="13" />{{ previewing ? t('重新预览') : t('预览动画') }}
             </AppButton>
           </div>
         </template>
       </section>
 
       <section v-show="activeSection === 'preview'" class="group">
-        <h2>预览</h2>
+        <h2>{{ t('预览') }}</h2>
         <div class="row col">
           <div class="text">
-            <span class="label">预览安全区</span>
+            <span class="label">{{ t('默认缩放') }}<SettingInfo :tip="t('首次查看图片时的缩放大小；100% 为适应窗口，之后浏览切图保持当前缩放')" /></span>
+          </div>
+          <AppSlider
+            v-model="defaultZoomModel"
+            :min="30"
+            :max="300"
+            :step="5"
+            :label="t('默认缩放')"
+            :format="(v) => `${v}%`"
+            :default="100"
+            @reset="settings.defaultZoom = 100"
+          />
+        </div>
+        <div class="row col">
+          <div class="text">
+            <span class="label">{{ t('预览安全区') }}<SettingInfo :tip="t('用滚轮或双指可以缩到的最小比例；双击复位回到适应窗口')" /></span>
           </div>
           <AppSlider
             v-model="minZoomModel"
             :min="30"
             :max="100"
             :step="5"
-            label="最小缩放"
+            :label="t('最小缩放')"
             :format="(v) => `${v}%`"
             :default="100"
-            title="双击复位"
+            :title="t('双击复位')"
             @reset="settings.minZoom = 1"
           />
         </div>
         <div class="row col">
           <div class="text">
-            <span class="label">渲染质量</span>
+            <span class="label">{{ t('渲染质量') }}</span>
           </div>
           <AppSegment
             v-model="qualityModel"
-            :options="PREVIEW_QUALITIES"
+            :options="PREVIEW_QUALITIES.map((q) => ({ value: q.value, label: t(q.label) }))"
             wrap
           />
           <AppSlider
@@ -459,58 +519,58 @@ async function relaunchOobe(): Promise<void> {
             :min="PREVIEW_CUSTOM_MIN"
             :max="PREVIEW_CUSTOM_MAX"
             :step="50"
-            label="预览精度"
+            :label="t('预览精度')"
             :format="(v) => `${v} px`"
             :default="1200"
             @reset="settings.previewQualityValue = 1200"
           />
           <p class="note">
-            「自适应」按当前缩放实时决定预览分辨率：放大补细节，缩小降耗电；
-            其余档位是固定的渲染长边（像素），越高越清晰、也越费电。
-            导出始终使用原图全分辨率，不受此设置影响。
+            {{ t('「自适应」按当前缩放实时决定预览分辨率：放大补细节，缩小降耗电；其余档位是固定的渲染长边（像素），越高越清晰、也越费电。导出始终使用原图全分辨率，不受此设置影响。') }}
           </p>
         </div>
       </section>
 
       <section v-show="activeSection === 'import'" class="group">
-        <h2>水印与导入</h2>
+        <h2>{{ t('水印与导入') }}</h2>
         <div class="row">
           <div class="text">
-            <span class="label">水印吸附</span>
+            <span class="label">{{ t('水印吸附') }}</span>
           </div>
           <AppSwitch v-model="settings.wmSnap" />
         </div>
         <div class="row">
           <div class="text">
-            <span class="label">EXIF 缺失提醒</span>
+            <span class="label">{{ t('EXIF 缺失提醒') }}</span>
           </div>
           <AppSwitch v-model="settings.exifNotice" />
         </div>
       </section>
 
       <section v-if="isTauri" v-show="activeSection === 'data'" class="group">
-        <h2>数据</h2>
+        <h2>{{ t('数据') }}</h2>
         <div class="row col">
           <div class="text">
-            <span class="label">软件数据位置</span>
+            <span class="label">{{ t('软件数据位置') }}</span>
             <p class="desc mono">{{ dataDirShown || '…' }}</p>
           </div>
           <div class="btns">
-            <AppButton size="sm" @click="changeDataDir"><HardDrive :size="13" />更改…</AppButton>
-            <AppButton size="sm" variant="ghost" @click="relaunchOobe">重新运行引导</AppButton>
+            <AppButton size="sm" @click="changeDataDir"><HardDrive :size="13" />{{ t('更改…') }}</AppButton>
+            <AppButton size="sm" variant="ghost" @click="relaunchOobe">{{ t('重新运行引导') }}</AppButton>
           </div>
         </div>
+        <!-- 存储分析：软件数据根 + 已记录工作目录里的项目，进入该分组才扫描 -->
+        <StorageReport :root="dataDirShown" :active="activeSection === 'data'" />
       </section>
 
       <section v-show="activeSection === 'about'" class="group">
-        <h2>关于</h2>
+        <h2>{{ t('关于') }}</h2>
         <!-- 软件文字标识：与顶栏左上角同一品牌资产，居中展示 -->
         <div class="brand-lockup" aria-hidden="true">
           <LogoText class="brand-logo" />
         </div>
         <div class="row wrap">
           <div class="text">
-            <span class="label">版本</span>
+            <span class="label">{{ t('版本') }}</span>
             <p class="desc">v{{ APP_VERSION }}</p>
           </div>
           <div class="btns">
@@ -519,7 +579,7 @@ async function relaunchOobe(): Promise<void> {
               <span class="update-hint">{{ updater.readyText }}</span>
             </template>
             <template v-else-if="updateState === 'available' && updateInfo">
-              <span class="update-hint"><Check :size="13" />新版本 v{{ updateInfo.version }}</span>
+              <span class="update-hint"><Check :size="13" />{{ t('新版本 v{0}', updateInfo.version) }}</span>
             </template>
             <template v-else-if="updateState === 'paused' && updateInfo">
               <span class="update-hint">{{ updater.pausedText }}</span>
@@ -528,16 +588,16 @@ async function relaunchOobe(): Promise<void> {
               <span class="update-hint">{{ updater.progressText }}</span>
             </template>
             <span v-else-if="updateState === 'latest'" class="update-hint">
-              <Check :size="13" />已是最新版本
+              <Check :size="13" />{{ t('已是最新版本') }}
             </span>
-            <span v-else-if="updateState === 'error'" class="update-hint err">检查失败，稍后再试</span>
+            <span v-else-if="updateState === 'error'" class="update-hint err">{{ t('检查失败，稍后再试') }}</span>
             <AppButton size="sm" :disabled="updateState === 'checking'" @click="updater.checkUpdate">
               <LoaderCircle v-if="updateState === 'checking'" :size="13" class="spin" />
-              <Download v-else :size="13" />检查更新
+              <Download v-else :size="13" />{{ t('检查更新') }}
             </AppButton>
             <!-- 全部版本：可就地更新或降级（降级在弹窗内有二次确认） -->
             <AppButton size="sm" variant="ghost" @click="updater.openVersionList">
-              <History :size="13" />版本列表…
+              <History :size="13" />{{ t('版本列表…') }}
             </AppButton>
             <!-- 检查到新版本后弹窗已自动弹出；此按钮是切走页面后的重开入口 -->
             <AppButton
@@ -546,19 +606,19 @@ async function relaunchOobe(): Promise<void> {
               variant="ghost"
               @click="updater.openDialog"
             >
-              查看更新…
+              {{ t('查看更新…') }}
             </AppButton>
           </div>
         </div>
         <div class="row">
           <div class="text">
-            <span class="label">更新通道<SettingInfo :tip="channelDesc" /></span>
+            <span class="label">{{ t('更新通道') }}<SettingInfo :tip="channelDesc" /></span>
           </div>
-          <AppSegment v-model="channelModel" :options="UPDATE_CHANNELS" small />
+          <AppSegment v-model="channelModel" :options="UPDATE_CHANNELS.map((c) => ({ value: c.value, label: t(c.label) }))" small />
         </div>
         <div class="row">
           <div class="text">
-            <span class="label">下载线路</span>
+            <span class="label">{{ t('下载线路') }}</span>
             <p class="desc" :class="{ 'desc-ok': speedState === 'ok', 'desc-err': speedState === 'fail' }">
               {{ sourceDesc }}
             </p>
@@ -567,29 +627,29 @@ async function relaunchOobe(): Promise<void> {
             <AppDropdown :items="sourceItems" align="right">
               <template #trigger>
                 <span class="source-trigger">
-                  {{ currentSource.label }}<ChevronDown :size="12" />
+                  {{ t(currentSource.label) }}<ChevronDown :size="12" />
                 </span>
               </template>
             </AppDropdown>
             <AppButton size="sm" :disabled="speedState === 'testing'" @click="runSpeedTest">
               <LoaderCircle v-if="speedState === 'testing'" :size="13" class="spin" />
-              <RefreshCw v-else :size="13" />测速
+              <RefreshCw v-else :size="13" />{{ t('测速') }}
             </AppButton>
           </div>
         </div>
         <div class="row">
           <div class="text">
-            <span class="label">项目主页</span>
+            <span class="label">{{ t('项目主页') }}</span>
             <p class="desc">github.com/MogroWangStudio/Albumark</p>
           </div>
           <AppButton size="sm" variant="ghost" @click="openReleasePage('https://github.com/MogroWangStudio/Albumark')">
-            <ExternalLink :size="13" />打开
+            <ExternalLink :size="13" />{{ t('打开') }}
           </AppButton>
         </div>
         <!-- 开发者：工作室字标可点击前往官网——仿 Plainstruct 关于页：
              悬停/聚焦时字标模糊淡出，引导文字覆盖浮现 -->
         <div class="dev">
-          <span class="dev-label">开发者</span>
+          <span class="dev-label">{{ t('开发者') }}</span>
           <a
             class="studio-link"
             href="https://www.mogrowangstudio.top"
@@ -597,7 +657,7 @@ async function relaunchOobe(): Promise<void> {
           >
             <!-- 官方工作室字标（彩色稿），来自 MogroWang Studio 品牌资产 -->
             <img src="/brand/studio-logo.svg" alt="MogroWang Studio" class="studio-logo" />
-            <span class="studio-hint">点击前往 MogroWang Studio 官方网站</span>
+            <span class="studio-hint">{{ t('点击前往 MogroWang Studio 官方网站') }}</span>
           </a>
         </div>
       </section>
@@ -775,6 +835,52 @@ async function relaunchOobe(): Promise<void> {
 }
 .label {
   font-size: calc(13px * var(--ui-zoom, 1));
+  /* ⓘ 说明图标与标题文字居中对齐（不是按行盒基线对齐） */
+  display: inline-flex;
+  align-items: center;
+}
+/* 语言列表：整行单选，选中沿用 accent-soft + accent（与导航 / AppTabs 同一语言） */
+.lang-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.lang-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: var(--r-m);
+  text-align: left;
+  transition: background var(--dur-hover) var(--ease-soft);
+}
+.lang-row:hover:not(.on) {
+  background: var(--hover);
+}
+.lang-row.on {
+  background: var(--accent-soft);
+}
+.lang-native {
+  flex: none;
+  min-width: 108px;
+  font-size: calc(13px * var(--ui-zoom, 1));
+  color: var(--text);
+}
+.lang-row.on .lang-native {
+  color: var(--accent);
+  font-weight: 600;
+}
+.lang-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(11.5px * var(--ui-zoom, 1));
+  color: var(--text-3);
+}
+.lang-check {
+  flex: none;
+  color: var(--accent);
 }
 .desc {
   margin-top: 2px;

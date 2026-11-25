@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { onBeforeUnmount, watch } from 'vue'
 import { X } from 'lucide-vue-next'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const props = withDefaults(
   defineProps<{
@@ -49,7 +52,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey, true))
         <div class="panel" :style="{ maxWidth: `${width}px` }">
           <header>
             <h2>{{ title }}</h2>
-            <button class="x" aria-label="关闭" @click="emit('close')"><X :size="16" /></button>
+            <button class="x" :aria-label="t('关闭')" @click="emit('close')"><X :size="16" /></button>
           </header>
           <div class="body">
             <slot />

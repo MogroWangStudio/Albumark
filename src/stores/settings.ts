@@ -4,6 +4,8 @@ import { registerPlugin } from '@capacitor/core'
 import { isCapacitor, isTauri } from '@/core/platform'
 import { createDebouncedSaver, loadJson, saveJson } from '@/core/storage'
 import type { UpdateChannel, UpdateSource } from '@/core/updater'
+import { detectLocale, type Locale } from '@/i18n/types'
+import { currentLocale } from '@/i18n/locale'
 
 export type ThemeMode =
   | 'auto'
@@ -193,6 +195,8 @@ export function pickBootStyle(choice: BootStyleChoice): BootStyle {
 }
 
 interface AppSettings {
+  /** 界面语言：首次按系统语言选择，可在设置里随时切换 */
+  locale: Locale
   /** 外观主题：auto 跟随系统 */
   theme: ThemeMode
   /** 界面显示字体：字体族名；空 = 系统默认栈 */
@@ -209,6 +213,11 @@ interface AppSettings {
   exifNotice: boolean
   /** 预览安全区：图片最小缩放值（1 = 适应窗口，可小于 1 缩得更小） */
   minZoom: number
+  /**
+   * 默认缩放：首次查看图片时的缩放大小，100 = 适应窗口（与缩放档位同一语义），
+   * 30–300。只在打开项目后的第一张 / 重新进入照片时生效，浏览切图保持当前缩放。
+   */
+  defaultZoom: number
   /** 预览渲染质量：预设档位或 custom（配合 previewQualityValue 无极调整） */
   previewQuality: PreviewQuality
   /** 自定义预览精度：精修长边像素（仅 previewQuality = 'custom' 时生效） */
@@ -227,6 +236,7 @@ interface AppSettings {
 
 const PERSIST_KEY = 'albumark.settings.v1'
 const DEFAULTS: AppSettings = {
+  locale: detectLocale(),
   theme: 'auto',
   fontFamily: '',
   uiZoom: 1,
@@ -235,6 +245,7 @@ const DEFAULTS: AppSettings = {
   bootDuration: BOOT_DURATION_DEFAULT,
   exifNotice: true,
   minZoom: 1,
+  defaultZoom: 100,
   previewQuality: 'high',
   previewQualityValue: 1200,
   wmSnap: true,
@@ -248,6 +259,11 @@ const DEFAULTS: AppSettings = {
 function load(): AppSettings {
   const parsed = loadJson<Partial<AppSettings>>(PERSIST_KEY, {})
   const data = { ...DEFAULTS, ...parsed }
+  // 语言：未知值（旧存档 / 手改）回落到系统语言
+  if (!['zh-CN', 'en', 'ja', 'ko'].includes(data.locale)) data.locale = DEFAULTS.locale
+  // 默认缩放夹回档位
+  const dz = Number(data.defaultZoom)
+  data.defaultZoom = Number.isFinite(dz) ? Math.min(300, Math.max(30, Math.round(dz / 5) * 5)) : 100
   // 旧版本 / 手改存档的容错：款式必须存在，时长夹回档位并取整到 100ms
   if (!BOOT_STYLE_CHOICES.some((s) => s.value === data.bootStyle)) data.bootStyle = DEFAULTS.bootStyle
   const dur = Number(data.bootDuration)
@@ -281,6 +297,10 @@ const SystemBars = registerPlugin<SystemBarsPlugin>('SystemBars')
 
 export const useSettingsStore = defineStore('settings', () => {
   const initial = load()
+  // 界面语言放在 i18n 的共享 ref：core 层（原生对话框标题等）也能读，
+  // 不经过 Pinia，避免 settings、platform、i18n 三者的循环依赖
+  const locale = currentLocale
+  locale.value = initial.locale
   const theme = ref<ThemeMode>(initial.theme)
   const fontFamily = ref(initial.fontFamily)
   const uiZoom = ref(initial.uiZoom)
@@ -289,6 +309,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const bootDuration = ref(initial.bootDuration)
   const exifNotice = ref(initial.exifNotice)
   const minZoom = ref(initial.minZoom)
+  const defaultZoom = ref(initial.defaultZoom)
   const previewQuality = ref<PreviewQuality>(initial.previewQuality)
   const previewQualityValue = ref(initial.previewQualityValue)
   const wmSnap = ref(initial.wmSnap)
@@ -301,6 +322,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   function persist(): void {
     saveJson(PERSIST_KEY, {
+      locale: locale.value,
       theme: theme.value,
       fontFamily: fontFamily.value,
       uiZoom: uiZoom.value,
@@ -309,6 +331,7 @@ export const useSettingsStore = defineStore('settings', () => {
       bootDuration: bootDuration.value,
       exifNotice: exifNotice.value,
       minZoom: minZoom.value,
+      defaultZoom: defaultZoom.value,
       previewQuality: previewQuality.value,
       previewQualityValue: previewQualityValue.value,
       wmSnap: wmSnap.value,
@@ -329,6 +352,11 @@ export const useSettingsStore = defineStore('settings', () => {
     const eff = theme.value === 'auto' ? (systemDark.matches ? 'dark' : 'light') : theme.value
     document.documentElement.dataset.theme = eff
     document.documentElement.dataset.mode = resolveMode()
+  }
+
+  /** 界面语言：同步 <html lang>（排版断行 / 字体回退 / 无障碍朗读都依赖它） */
+  function applyLocale(): void {
+    document.documentElement.lang = locale.value
   }
 
   /** 自定义显示字体：写覆盖 --font，引用默认栈作后备；空值恢复默认 */
@@ -364,6 +392,7 @@ export const useSettingsStore = defineStore('settings', () => {
   })
 
   watchEffect(() => {
+    applyLocale()
     applyTheme()
     applyFont()
     applyZoom()
@@ -376,6 +405,7 @@ export const useSettingsStore = defineStore('settings', () => {
   })
 
   return {
+    locale,
     theme,
     fontFamily,
     uiZoom,
@@ -384,6 +414,7 @@ export const useSettingsStore = defineStore('settings', () => {
     bootDuration,
     exifNotice,
     minZoom,
+    defaultZoom,
     previewQuality,
     previewQualityValue,
     wmSnap,

@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { loadJson, saveJson } from '@/core/storage'
 import { cloneAdjustments, NEUTRAL, type Adjustments } from '@/types/adjust'
+import { t } from '@/i18n'
 import { toast } from './toast'
 import { useAdjustStore } from './adjust'
 import { useImagesStore } from './images'
@@ -37,13 +38,13 @@ export const useAdjustPresetsStore = defineStore('adjustPresets', () => {
 
   function persist(): void {
     if (!saveJson(PERSIST_KEY, list.value)) {
-      toast('预设保存失败：本地存储空间不足', 'error')
+      toast(t('预设保存失败：本地存储空间不足'), 'error')
     }
   }
 
   /** 名称去重：同名时追加序号，避免列表里两条一模一样的名字 */
   function uniqueName(raw: string): string {
-    const base = raw.trim() || '未命名预设'
+    const base = raw.trim() || t('未命名预设')
     if (!list.value.some((p) => p.name === base)) return base
     let i = 2
     while (list.value.some((p) => p.name === `${base} ${i}`)) i++

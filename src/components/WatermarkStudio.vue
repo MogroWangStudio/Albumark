@@ -7,20 +7,22 @@ import AppButton from '@/components/ui/AppButton.vue'
 import { type AssetMap } from '@/core/draw'
 import { backgroundAspect, layoutBackgroundFrame } from '@/core/bg'
 import { loadSampleBitmap, paintComposed, SAMPLE_VARIANTS, type SampleOrientation } from '@/core/sample'
-import { anchorPoint, hitTest, layerPivot, measureLayer } from '@/core/layout'
+import { hitTest, layerAnchor, layerPivot, measureLayer } from '@/core/layout'
 import { clampPanAxis, rubberband } from '@/core/viewmotion'
 import { resolveTokens, SAMPLE_EXIF } from '@/core/tokens'
+import { useI18n } from '@/i18n'
 import { toast } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
-import type { BackgroundLayer, WatermarkLayer } from '@/types/watermark'
+import type { BackgroundLayer, ImageLayer, TextLayer, WatermarkLayer } from '@/types/watermark'
 
 const emit = defineEmits<{ back: [] }>()
 
 const wm = useWatermarkStore()
 const settings = useSettingsStore()
 const templates = useTemplatesStore()
+const { t } = useI18n()
 
 /* ---------- 两级视图：模板管理（默认）⇄ 模板编辑 ---------- */
 
@@ -34,7 +36,7 @@ const editingBuiltin = computed(
   () => !!editingId.value && !!templates.get(editingId.value)?.builtin,
 )
 const editingName = computed(() =>
-  editingId.value ? (templates.get(editingId.value)?.name ?? '未命名模板') : '新建模板',
+  editingId.value ? (templates.get(editingId.value)?.name ?? t('未命名模板')) : t('新建模板'),
 )
 
 /** 打开一个模板进入编辑（加载其图层与素材） */
@@ -58,8 +60,8 @@ function backToManage(): void {
 /** 保存：自建模板写回；内置模板与新建模板走「另存为」 */
 function saveEdit(): void {
   if (editingId.value && !editingBuiltin.value) {
-    if (templates.update(editingId.value)) toast(`已保存「${editingName.value}」`, 'success')
-    else toast('模板过大，保存失败', 'error')
+    if (templates.update(editingId.value)) toast(t('已保存「{0}」', editingName.value), 'success')
+    else toast(t('模板过大，保存失败'), 'error')
     return
   }
   startSaveAs()
@@ -67,7 +69,7 @@ function saveEdit(): void {
 
 /** 另存为：弹出名称栏，把当前编辑内容存为新模板 */
 function startSaveAs(): void {
-  saveName.value = editingBuiltin.value ? `${editingName.value} 副本` : ''
+  saveName.value = editingBuiltin.value ? t('{0} 副本', editingName.value) : ''
   showSave.value = true
 }
 
@@ -76,13 +78,13 @@ async function saveAsNew(): Promise<void> {
   if (!name) return
   const id = templates.save(name)
   if (!id) {
-    toast('模板过大，保存失败', 'error')
+    toast(t('模板过大，保存失败'), 'error')
     return
   }
   showSave.value = false
   saveName.value = ''
   editingId.value = id
-  toast(`已保存模板「${name}」`, 'success')
+  toast(t('已保存模板「{0}」', name), 'success')
 }
 
 const canvasEl = ref<HTMLCanvasElement | null>(null)
@@ -223,19 +225,25 @@ function redraw(): void {
   wmSpace.h = bgMode ? composed.frameH : sampleH.value
 
   // 选中图层：描边框 + 锚点十字，画在水印坐标系（背景模式 = 画布，其余 = 照片区域）
-  // 强调色随主题取自令牌
+  // 强调色随主题取自令牌。与绘制共用令牌解析后的副本，父级锚点才与成品一致
+  const resolved = resolvedLayers()
   const sel = wm.selected
-  if (sel && sel.type !== 'border' && sel.type !== 'background') {
+    ? (resolved.find(
+        (l): l is TextLayer | ImageLayer =>
+          l.id === wm.selected!.id && l.type !== 'border' && l.type !== 'background',
+      ) ?? null)
+    : null
+  if (sel) {
     const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#ffa72f'
     ctx.save()
     if (!bgMode) ctx.translate(photoX, photoY)
-    const box = measureLayer(sel, wmSpace.w, wmSpace.h, measureContext())
+    const box = measureLayer(sel, wmSpace.w, wmSpace.h, measureContext(), 1, resolved)
     ctx.strokeStyle = accent
     ctx.globalAlpha = 0.95
     ctx.lineWidth = 1.5 / fit
     ctx.setLineDash([5 / fit, 4 / fit])
     ctx.strokeRect(box.cx - box.w / 2, box.cy - box.h / 2, box.w, box.h)
-    const a = anchorPoint(sel.anchor, wmSpace.w, wmSpace.h)
+    const a = layerAnchor(sel, wmSpace.w, wmSpace.h, 1, resolved, measureContext())
     ctx.setLineDash([])
     ctx.globalAlpha = 0.75
     ctx.lineWidth = 1 / fit
@@ -427,6 +435,12 @@ function onPointerDown(e: PointerEvent): void {
   const canvas = canvasEl.value
   if (!canvas || !sampleBmp || !vmap.scale) return
   stopViewAnim()
+  // 自定义锚点拾取：本次点击只落锚点
+  if (wm.pickingAnchor) {
+    const p = toImagePx(e.clientX, e.clientY)
+    wm.placeCustomAnchor((p.x / wmSpace.w) * 100, (p.y / wmSpace.h) * 100)
+    return
+  }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, downT: performance.now(), moved: false })
   canvas.setPointerCapture(e.pointerId)
 
@@ -446,15 +460,15 @@ function onPointerDown(e: PointerEvent): void {
   if (pointers.size > 2) return
 
   const p = toImagePx(e.clientX, e.clientY)
-  const list = wm.editTarget()
+  const list = resolvedLayers()
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     // 边框 / 背景层覆盖全画布、无独立位置，只能从图层列表选中
     if (l.type === 'border' || l.type === 'background' || !l.visible) continue
-    const box = measureLayer(l, wmSpace.w, wmSpace.h, measureContext())
+    const box = measureLayer(l, wmSpace.w, wmSpace.h, measureContext(), 1, list)
     if (hitTest(box, p.x, p.y)) {
       wm.selectedId = l.id
-      const c = layerPivot(l, wmSpace.w, wmSpace.h)
+      const c = layerPivot(l, wmSpace.w, wmSpace.h, 1, list, measureContext())
       dragSnap = { x: null, y: null }
       gesture = {
         type: 'layer',
@@ -541,7 +555,7 @@ function onPointerMove(e: PointerEvent): void {
         }
       }
     }
-    const a = anchorPoint(layer.anchor, wmSpace.w, wmSpace.h)
+    const a = layerAnchor(layer, wmSpace.w, wmSpace.h, 1, resolvedLayers(), measureContext())
     // 拖动中浮点平滑，松手（onPointerUp）统一取整
     wm.update(layer.id, {
       offsetX: cx - a.x,
@@ -684,7 +698,7 @@ function onCursorMove(e: PointerEvent): void {
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     if (l.type === 'border' || !l.visible) continue
-    if (hitTest(measureLayer(l, sampleW.value, sampleH.value, measureContext()), p.x, p.y)) {
+    if (hitTest(measureLayer(l, sampleW.value, sampleH.value, measureContext(), 1, resolvedLayers()), p.x, p.y)) {
       grabbing.value = true
       return
     }
@@ -729,19 +743,19 @@ watch(mode, async (m) => {
   <div class="studio">
     <header class="head material" data-tauri-drag-region>
       <template v-if="mode === 'manage'">
-        <AppButton variant="ghost" size="sm" @click="emit('back')"><ArrowLeft :size="14" />返回</AppButton>
-        <h1>水印工作室</h1>
+        <AppButton variant="ghost" size="sm" @click="emit('back')"><ArrowLeft :size="14" />{{ t('返回') }}</AppButton>
+        <h1>{{ t('水印工作室') }}</h1>
         <span class="flex" />
-        <AppButton size="sm" variant="primary" @click="openCreate"><Plus :size="13" />新建模板</AppButton>
+        <AppButton size="sm" variant="primary" @click="openCreate"><Plus :size="13" />{{ t('新建模板') }}</AppButton>
       </template>
       <template v-else>
-        <AppButton variant="ghost" size="sm" @click="backToManage"><ArrowLeft :size="14" />模板库</AppButton>
-        <h1 class="edit-title" :title="editingName">{{ editingName }}</h1>
-        <span v-if="editingBuiltin" class="badge">内置 · 保存将另存为副本</span>
+        <AppButton variant="ghost" size="sm" @click="backToManage"><ArrowLeft :size="14" />{{ t('模板库') }}</AppButton>
+        <h1 class="edit-title" :title="t(editingName)">{{ t(editingName) }}</h1>
+        <span v-if="editingBuiltin" class="badge">{{ t('内置 · 保存将另存为副本') }}</span>
         <span class="flex" />
-        <AppButton size="sm" @click="saveEdit"><Save :size="13" />{{ editingBuiltin ? '另存为副本' : '保存' }}</AppButton>
+        <AppButton size="sm" @click="saveEdit"><Save :size="13" />{{ editingBuiltin ? t('另存为副本') : t('保存') }}</AppButton>
         <AppButton v-if="!editingBuiltin && editingId" size="sm" variant="ghost" @click="startSaveAs">
-          <Check :size="13" />另存为新模板
+          <Check :size="13" />{{ t('另存为新模板') }}
         </AppButton>
       </template>
     </header>
@@ -750,11 +764,11 @@ watch(mode, async (m) => {
       <input
         v-model="saveName"
         class="text-input"
-        placeholder="模板名称"
+        :placeholder="t('模板名称')"
         @keyup.enter="saveAsNew"
       />
-      <AppButton size="sm" variant="primary" @click="saveAsNew">保存</AppButton>
-      <AppButton size="sm" variant="ghost" @click="showSave = false">取消</AppButton>
+      <AppButton size="sm" variant="primary" @click="saveAsNew">{{ t('保存') }}</AppButton>
+      <AppButton size="sm" variant="ghost" @click="showSave = false">{{ t('取消') }}</AppButton>
     </div>
 
     <!-- 模板管理：卡片列出全部模板（默认视图） -->
@@ -766,24 +780,24 @@ watch(mode, async (m) => {
     <div v-show="mode === 'edit'" class="body">
       <div ref="boxEl" class="preview">
         <!-- 样张方向：竖构图是水印最容易翻车的场景，随时切换对照 -->
-        <div class="orient material" role="group" aria-label="样张方向">
+        <div class="orient material" role="group" :aria-label="t('样张方向')">
           <button
             class="orient-btn"
             :class="{ on: !portrait }"
             :aria-pressed="!portrait"
-            title="横屏样张 16:9"
+            :title="t('横屏样张 16:9')"
             @click="setOrientation(false)"
           >
-            横屏
+            {{ t('横屏') }}
           </button>
           <button
             class="orient-btn"
             :class="{ on: portrait }"
             :aria-pressed="portrait"
-            title="竖屏样张 9:16"
+            :title="t('竖屏样张 9:16')"
             @click="setOrientation(true)"
           >
-            竖屏
+            {{ t('竖屏') }}
           </button>
         </div>
         <canvas

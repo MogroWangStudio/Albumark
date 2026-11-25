@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RotateCcw } from 'lucide-vue-next'
+import { useI18n } from '@/i18n'
 import type { Component } from 'vue'
 
 const props = withDefaults(
@@ -41,6 +42,8 @@ const emit = defineEmits<{
   'update:modelValue': [value: number]
   reset: []
 }>()
+
+const { t } = useI18n()
 
 /** 值偏离归位值时显示重置按钮；未提供 default 则不显示 */
 const showReset = computed(
@@ -297,13 +300,13 @@ function onTrackUp(e: PointerEvent): void {
 
 <template>
   <div class="field" :class="{ disabled }">
-    <div class="head" :title="title" @dblclick="emit('reset')">
+    <div class="head" :title="t(title)" @dblclick="emit('reset')">
       <span v-if="icon" class="icon"><component :is="icon" :size="14" /></span>
       <label>{{ label }}</label>
       <button
         v-if="showReset"
         class="mini-reset"
-        title="复位此值"
+        :title="t('复位此值')"
         @click.stop="emit('reset')"
         @dblclick.stop
       >
@@ -325,7 +328,7 @@ function onTrackUp(e: PointerEvent): void {
         v-else
         class="val"
         :class="{ scrubbing }"
-        title="按住拖动微调 · 双击键入"
+        :title="t('按住拖动微调 · 双击键入')"
         @pointerdown="onValDown"
         @pointermove="onValMove"
         @pointerup="onValUp"

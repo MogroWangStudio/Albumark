@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   ArrowDown,
   ArrowUp,
+  CopyPlus,
   Eye,
   EyeOff,
   Frame,
   GripVertical,
   Image as ImageIcon,
+  LocateFixed,
   Pencil,
   Replace,
   RotateCcw,
@@ -24,6 +26,7 @@ import AppSwitch from '@/components/ui/AppSwitch.vue'
 import FontPickerDialog from '@/components/FontPickerDialog.vue'
 import { TOKENS, missingTokens } from '@/core/tokens'
 import { BG_RATIO_PRESETS } from '@/core/bg'
+import { useI18n } from '@/i18n'
 import { renderTemplateThumb } from '@/core/sample'
 import { toast } from '@/stores/toast'
 import { useFontsStore, FONT_CATEGORY_LABELS } from '@/stores/fonts'
@@ -65,6 +68,9 @@ const props = withDefaults(
 const wm = useWatermarkStore()
 const templates = useTemplatesStore()
 const fonts = useFontsStore()
+const { t } = useI18n()
+
+onMounted(() => fonts.ensureFallback())
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const replaceTargetId = ref<string | null>(null)
@@ -74,6 +80,14 @@ const showSave = ref(false)
 const saveName = ref('')
 const contentEl = ref<HTMLTextAreaElement | null>(null)
 const fontPickerOpen = ref(false)
+
+// 切换选中图层即退出锚点拾取，避免下一次无关点击被当成落锚
+watch(
+  () => wm.selectedId,
+  () => {
+    wm.pickingAnchor = false
+  },
+)
 
 const selectedText = computed(() =>
   wm.selected?.type === 'text' ? (wm.selected as TextLayer) : null,
@@ -87,6 +101,60 @@ const selectedBorder = computed(() =>
 const selectedBackground = computed(() =>
   wm.selected?.type === 'background' ? (wm.selected as BackgroundLayer) : null,
 )
+
+/* ---------- 自定义锚点：参照物（当前图片 / 其他水印）+ 自由坐标 ---------- */
+
+const anchorMode = computed<'image' | 'layer' | 'custom'>(() => {
+  const l = wm.selected
+  if (!l || l.type === 'border' || l.type === 'background') return 'image'
+  return l.anchorMode ?? 'image'
+})
+
+/** 可绑定为父级的水印：文本 / 图片图层（边框与背景没有独立包围盒） */
+const parentCandidates = computed(() =>
+  editLayers.value.filter(
+    (l) => l.id !== wm.selectedId && (l.type === 'text' || l.type === 'image'),
+  ),
+)
+
+const anchorParentId = computed(() => {
+  const l = wm.selected
+  return l && l.type !== 'border' && l.type !== 'background' ? (l.anchorParentId ?? '') : ''
+})
+
+const anchorParentPreset = computed(() => {
+  const l = wm.selected
+  return l && l.type !== 'border' && l.type !== 'background'
+    ? (l.anchorParent ?? l.anchor)
+    : 'middle-center'
+})
+
+const customX = computed(() => {
+  const l = wm.selected
+  if (!l || l.type === 'border' || l.type === 'background') return 50
+  return Math.round(l.anchorX ?? 50)
+})
+const customY = computed(() => {
+  const l = wm.selected
+  if (!l || l.type === 'border' || l.type === 'background') return 50
+  return Math.round(l.anchorY ?? 50)
+})
+
+function setParent(id: string): void {
+  const l = wm.selected
+  if (!l || l.type === 'border' || l.type === 'background') return
+  wm.update(l.id, {
+    anchorMode: 'layer',
+    anchorParentId: id || undefined,
+    anchorParent: l.anchorParent ?? l.anchor,
+  })
+}
+
+function setParentAnchor(a: AnchorPreset): void {
+  const l = wm.selected
+  if (!l || l.type === 'border' || l.type === 'background') return
+  wm.update(l.id, { anchorMode: 'layer', anchorParent: a })
+}
 
 /* ---------- 边框四边同步：链接时统一调整，各边不同则自动断开 ---------- */
 
@@ -185,24 +253,29 @@ watch(tplOpen, async (open) => {
   if (!open) return
   const seq = ++tplRenderSeq
   await nextTick()
-  for (const t of templates.all) {
-    const canvas = tplCanvases.get(t.id)
+  for (const tpl of templates.all) {
+    const canvas = tplCanvases.get(tpl.id)
     if (!canvas) continue
-    await renderTemplateThumb(canvas, t.layers, t.assets as never[])
+    await renderTemplateThumb(canvas, tpl.layers, tpl.assets as never[])
     if (seq !== tplRenderSeq) return
   }
 })
 
 function applyTpl(mode: 'replace' | 'append'): void {
-  const t = tplPending.value
-  if (!t) return
+  const tpl = tplPending.value
+  if (!tpl) return
   try {
-    wm.applyToTarget(t.layers, t.assets as never[], mode)
+    wm.applyToTarget(tpl.layers, tpl.assets as never[], mode)
   } catch {
-    toast('应用模板失败，请重试', 'error')
+    toast(t('应用模板失败，请重试'), 'error')
     return
   }
-  toast(mode === 'replace' ? `已覆盖为模板「${t.name}」` : `已追加模板「${t.name}」`, 'success')
+  toast(
+    mode === 'replace'
+      ? t('已覆盖为模板「{0}」', tpl.name)
+      : t('已追加模板「{0}」', tpl.name),
+    'success',
+  )
   tplOpen.value = false
 }
 
@@ -249,13 +322,12 @@ const anchors: { key: AnchorPreset; label: string }[] = [
 
 /** 内容里用到的 EXIF 令牌在当前照片上解析不出值 → 常驻警告 */
 const missing = computed(() => {
-  const t = selectedText.value
-  if (!t) return []
-  return missingTokens(t.content, props.exif, props.baseName)
+  const txt = selectedText.value
+  if (!txt) return []
+  return missingTokens(txt.content, props.exif, props.baseName)
 })
 
-/* 偏移即固定像素：所有照片上距离一致，不随图片尺寸 / 比例缩放（边框、背景层无此通用偏移） */
-const offX = computed(() =>
+/* 偏移即固定像素：所有照片上距离一致，不随图片尺寸 / 比例缩放（边框、背景层无此通用偏移） */const offX = computed(() =>
   wm.selected && wm.selected.type !== 'border' && wm.selected.type !== 'background' ? wm.selected.offsetX : 0,
 )
 const offY = computed(() =>
@@ -301,12 +373,12 @@ async function onImageFile(e: Event): Promise<void> {
       await onBackgroundFile(file)
     } else if (replaceTargetId.value) {
       await wm.replaceImageFile(replaceTargetId.value, file)
-      toast('素材已替换')
+      toast(t('素材已替换'))
     } else {
       await wm.addImageFile(file)
     }
   } catch (err) {
-    toast(err instanceof Error ? err.message : '素材导入失败', 'error')
+    toast(err instanceof Error ? err.message : t('素材导入失败'), 'error')
   }
   replaceTargetId.value = null
 }
@@ -320,9 +392,9 @@ const bgOverride = computed(() => wm.bgOverrideFor(props.activeId))
 const bgSourceName = computed(() => {
   const bg = selectedBackground.value
   if (!bg) return ''
-  if (bgOverride.value) return wm.assets[bgOverride.value.assetId]?.name ?? '自定义背景'
-  if (bg.source === 'custom' && bg.assetId) return wm.assets[bg.assetId]?.name ?? '自定义背景'
-  return '当前照片'
+  if (bgOverride.value) return wm.assets[bgOverride.value.assetId]?.name ?? t('自定义背景')
+  if (bg.source === 'custom' && bg.assetId) return wm.assets[bg.assetId]?.name ?? t('自定义背景')
+  return t('当前照片')
 })
 
 const bgIsCustom = computed(() => {
@@ -360,7 +432,7 @@ const bgPerImageModel = computed({
     if (on) {
       // 仅当前照片：覆盖指向层上的自定义图，层回到 self（其余照片用各自照片）
       if (!bg.assetId) {
-        toast('先选择一张背景图', 'error')
+        toast(t('先选择一张背景图'), 'error')
         return
       }
       wm.setBgOverride(props.activeId, bg.assetId)
@@ -403,10 +475,20 @@ function setOverlayOn(on: unknown): void {
   }
 }
 
+/** 各图层类型的默认名称（存储值固定为中文，显示时再按当前语言翻译；图片图层用文件名，无默认名） */
+const DEFAULT_LAYER_NAMES: Partial<Record<WatermarkLayer['type'], string>> = {
+  text: '文本水印',
+  border: '边框',
+  background: '背景水印',
+}
+
 function layerName(l: WatermarkLayer): string {
   // 自定义名称优先（默认名「文本水印」视为未命名，继续显示内容前缀）
-  if (l.name.trim() && l.name !== '文本水印') return l.name
-  if (l.type === 'text') return l.content.split('\n')[0]?.slice(0, 16) || '文本水印'
+  if (l.name.trim() && l.name !== DEFAULT_LAYER_NAMES.text) {
+    // 默认名（边框 / 背景水印）原样存的是中文串：只在显示侧翻译
+    return DEFAULT_LAYER_NAMES[l.type] === l.name ? t(l.name) : l.name
+  }
+  if (l.type === 'text') return l.content.split('\n')[0]?.slice(0, 16) || t('文本水印')
   return l.name
 }
 
@@ -501,12 +583,12 @@ async function saveTemplate(): Promise<void> {
   const name = saveName.value.trim()
   if (!name) return
   if (!templates.save(name)) {
-    toast('模板过大，保存失败', 'error')
+    toast(t('模板过大，保存失败'), 'error')
     return
   }
   showSave.value = false
   saveName.value = ''
-  toast(`已保存模板「${name}」`, 'success')
+  toast(t('已保存模板「{0}」', name), 'success')
 }
 
 function insertToken(key: string): void {
@@ -529,8 +611,8 @@ function insertToken(key: string): void {
 
 /* 字体选择窗口：全量系统字体按语言分类浏览，也支持键入清单外的名称 */
 function onFontPicked(family: string): void {
-  const t = selectedText.value
-  if (t) wm.update(t.id, { fontFamily: `"${family}"` })
+  const txt = selectedText.value
+  if (txt) wm.update(txt.id, { fontFamily: `"${family}"` })
 }
 
 /** 窗口高亮当前字体：水印值带引号包裹，去掉后与清单比对 */
@@ -540,19 +622,20 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
 <template>
   <div class="panel-scroll">
     <div class="row adds">
-      <AppButton size="sm" @click="wm.addText()"><Type :size="13" />文本</AppButton>
-      <AppButton size="sm" @click="pickImage(null)"><ImageIcon :size="13" />图片 / SVG</AppButton>
-      <AppButton size="sm" @click="wm.addBorderLayer()"><Frame :size="13" />边框</AppButton>
-      <AppButton size="sm" @click="wm.addBackgroundLayer()"><Wallpaper :size="13" />背景</AppButton>
+      <AppButton size="sm" @click="wm.addText()"><Type :size="13" />{{ t('文本') }}</AppButton>
+      <AppButton size="sm" @click="pickImage(null)"><ImageIcon :size="13" />{{ t('图片 / SVG') }}</AppButton>
+      <AppButton size="sm" @click="wm.addBorderLayer()"><Frame :size="13" />{{ t('边框') }}</AppButton>
+      <AppButton size="sm" @click="wm.addBackgroundLayer()"><Wallpaper :size="13" />{{ t('背景') }}</AppButton>
     </div>
     <div v-if="showTemplates" class="row">
-      <AppButton size="sm" @click="openTplPicker">应用模板</AppButton>
+      <AppButton size="sm" @click="openTplPicker">{{ t('应用模板') }}</AppButton>
+      <AppButton size="sm" variant="ghost" @click="showSave = true">{{ t('保存为模板') }}</AppButton>
     </div>
 
     <div v-if="showSave" class="save-row">
-      <input v-model="saveName" class="text-input" placeholder="模板名称" @keyup.enter="saveTemplate" />
-      <AppButton size="sm" variant="primary" @click="saveTemplate">保存</AppButton>
-      <AppButton size="sm" variant="ghost" @click="showSave = false">取消</AppButton>
+      <input v-model="saveName" class="text-input" :placeholder="t('模板名称')" @keyup.enter="saveTemplate" />
+      <AppButton size="sm" variant="primary" @click="saveTemplate">{{ t('保存') }}</AppButton>
+      <AppButton size="sm" variant="ghost" @click="showSave = false">{{ t('取消') }}</AppButton>
     </div>
 
     <ul class="layers" ref="listEl" v-if="editLayers.length">
@@ -566,7 +649,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
       >
         <button
           class="drag"
-          aria-label="拖动调整顺序"
+          :aria-label="t('拖动调整顺序')"
           @pointerdown="onDragStart($event, i, l.id)"
           @pointermove="onDragMove"
           @pointerup="onDragEnd"
@@ -588,42 +671,45 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           @keyup.escape="renamingId = null"
           @blur="commitRename"
         />
-        <span v-else class="name" title="双击重命名" @dblclick.stop="startRename(l)">{{ layerName(l) }}</span>
-        <button class="tool" aria-label="重命名图层" title="重命名" @click.stop="startRename(l)">
+        <span v-else class="name" :title="t('双击重命名')" @dblclick.stop="startRename(l)">{{ layerName(l) }}</span>
+        <button class="tool" :aria-label="t('重命名图层')" :title="t('重命名')" @click.stop="startRename(l)">
           <Pencil :size="13" />
+        </button>
+        <button class="tool" :aria-label="t('原地复制图层')" :title="t('原地复制')" @click.stop="wm.duplicate(l.id)">
+          <CopyPlus :size="13" />
         </button>
         <button
           class="tool"
-          :aria-label="l.visible ? '隐藏图层' : '显示图层'"
+          :aria-label="l.visible ? t('隐藏图层') : t('显示图层')"
           @click.stop="wm.update(l.id, { visible: !l.visible })"
         >
           <Eye v-if="l.visible" :size="13" />
           <EyeOff v-else :size="13" />
         </button>
-        <button class="tool" aria-label="上移" :disabled="i === 0" @click.stop="wm.move(i, -1)">
+        <button class="tool" :aria-label="t('上移')" :disabled="i === 0" @click.stop="wm.move(i, -1)">
           <ArrowUp :size="13" />
         </button>
         <button
           class="tool"
-          aria-label="下移"
+          :aria-label="t('下移')"
           :disabled="i === editLayers.length - 1"
           @click.stop="wm.move(i, 1)"
         >
           <ArrowDown :size="13" />
         </button>
-        <button class="tool danger" aria-label="删除图层" @click.stop="wm.remove(l.id)">
+        <button class="tool danger" :aria-label="t('删除图层')" @click.stop="wm.remove(l.id)">
           <Trash2 :size="13" />
         </button>
       </li>
     </ul>
-    <p v-else class="empty">还没有图层</p>
+    <p v-else class="empty">{{ t('还没有图层') }}</p>
 
     <template v-if="selectedText">
       <section>
-        <h3>内容</h3>
+        <h3>{{ t('内容') }}</h3>
         <div v-if="missing.length" class="warn" role="alert">
           <TriangleAlert :size="13" />
-          <span>这张照片缺少：{{ missing.map((m) => m.label).join('、') }}，对应令牌会留空。</span>
+          <span>{{ t('这张照片缺少：{0}，对应令牌会留空。', missing.map((m) => t(m.label)).join(t('、'))) }}</span>
         </div>
         <textarea
           ref="contentEl"
@@ -634,13 +720,13 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           @input="wm.update(selectedText!.id, { content: ($event.target as HTMLTextAreaElement).value })"
         />
         <div class="tokens">
-          <button v-for="t in TOKENS" :key="t.key" class="chip" @click="insertToken(t.key)">
-            {{ t.label }}
+          <button v-for="tok in TOKENS" :key="tok.key" class="chip" @click="insertToken(tok.key)">
+            {{ t(tok.label) }}
           </button>
         </div>
 
         <div class="field">
-          <span>字体</span>
+          <span>{{ t('字体') }}</span>
           <div class="font-row">
             <select
               class="select"
@@ -650,13 +736,13 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               @change="wm.update(selectedText!.id, { fontFamily: ($event.target as HTMLSelectElement).value })"
             >
               <option v-if="isCustomFont" value="__current__">
-                自定义：{{ selectedText!.fontFamily.replace(/"/g, '') }}
+                {{ t('自定义：{0}', selectedText!.fontFamily.replace(/"/g, '')) }}
               </option>
-              <option :value="DEFAULT_FONT">系统默认</option>
+              <option :value="DEFAULT_FONT">{{ t('系统默认') }}</option>
               <optgroup
                 v-for="g in fonts.grouped()"
                 :key="g.category"
-                :label="FONT_CATEGORY_LABELS[g.category]"
+                :label="t(FONT_CATEGORY_LABELS[g.category])"
               >
                 <option v-for="f in g.items" :key="f.family" :value="`&quot;${f.family}&quot;`">
                   {{ f.family }}
@@ -665,8 +751,8 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
             </select>
             <button
               class="pick-btn"
-              title="浏览全部字体"
-              aria-label="浏览全部字体"
+              :title="t('浏览全部字体')"
+              :aria-label="t('浏览全部字体')"
               @click="fontPickerOpen = true"
             >
               <Type :size="15" />
@@ -678,15 +764,15 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :min="100"
           :max="900"
           :step="1"
-          label="字重"
+          :label="t('字重')"
           :default="600"
           @update:model-value="wm.update(selectedText!.id, { fontWeight: $event })"
           @reset="wm.update(selectedText!.id, { fontWeight: 600 })"
         />
-        <p v-if="fonts.loading" class="hint">正在读取系统字体…</p>
-        <p v-else-if="fonts.denied" class="hint">浏览器未授权读取系统字体，以下为常用字体清单，也可在字体窗口中键入名称。</p>
+        <p v-if="fonts.loading" class="hint">{{ t('正在读取系统字体…') }}</p>
+        <p v-else-if="fonts.denied" class="hint">{{ t('浏览器未授权读取系统字体，以下为常用字体清单，也可在字体窗口中键入名称。') }}</p>
         <div class="row-inline">
-          <span class="fl">颜色</span>
+          <span class="fl">{{ t('颜色') }}</span>
           <input
             type="color"
             class="color"
@@ -697,15 +783,15 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
             :model-value="selectedText.italic"
             @update:model-value="wm.update(selectedText!.id, { italic: $event })"
           />
-          <span class="fl">斜体</span>
+          <span class="fl">{{ t('斜体') }}</span>
           <span class="flex" />
           <AppSegment
             small
             :model-value="selectedText.align"
             :options="[
-              { value: 'left', label: '左' },
-              { value: 'center', label: '中' },
-              { value: 'right', label: '右' },
+              { value: 'left', label: t('左') },
+              { value: 'center', label: t('中') },
+              { value: 'right', label: t('右') },
             ]"
             @update:model-value="wm.update(selectedText!.id, { align: $event as TextLayer['align'] })"
           />
@@ -715,7 +801,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :min="0"
           :max="30"
           :step="0.5"
-          label="字距"
+          :label="t('字距')"
           @update:model-value="wm.update(selectedText!.id, { letterSpacing: $event })"
           @reset="wm.update(selectedText!.id, { letterSpacing: 4 })"
         />
@@ -724,14 +810,14 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :min="1"
           :max="2.5"
           :step="0.05"
-          label="行高"
+          :label="t('行高')"
           :format="(v) => v.toFixed(2)"
           @update:model-value="wm.update(selectedText!.id, { lineHeight: $event })"
           @reset="wm.update(selectedText!.id, { lineHeight: 1.45 })"
         />
 
         <details class="group">
-          <summary>描边</summary>
+          <summary>{{ t('描边') }}</summary>
           <AppSwitch
             :model-value="selectedText.stroke.enabled"
             @update:model-value="wm.update(selectedText!.id, { stroke: { ...selectedText!.stroke, enabled: $event } })"
@@ -742,7 +828,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               :min="0"
               :max="20"
               :step="0.5"
-              label="描边宽度"
+              :label="t('描边宽度')"
               @update:model-value="wm.update(selectedText!.id, { stroke: { ...selectedText!.stroke, width: $event } })"
               @reset="wm.update(selectedText!.id, { stroke: { ...selectedText!.stroke, width: 6 } })"
             />
@@ -756,7 +842,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
         </details>
 
         <details class="group">
-          <summary>阴影</summary>
+          <summary>{{ t('阴影') }}</summary>
           <AppSwitch
             :model-value="selectedText.shadow.enabled"
             @update:model-value="wm.update(selectedText!.id, { shadow: { ...selectedText!.shadow, enabled: $event } })"
@@ -766,7 +852,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               :model-value="selectedText.shadow.blur"
               :min="0"
               :max="60"
-              label="模糊"
+              :label="t('模糊')"
               @update:model-value="wm.update(selectedText!.id, { shadow: { ...selectedText!.shadow, blur: $event } })"
               @reset="wm.update(selectedText!.id, { shadow: { ...selectedText!.shadow, blur: 18 } })"
             />
@@ -774,7 +860,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               :model-value="selectedText.shadow.opacity"
               :min="0"
               :max="100"
-              label="不透明度"
+              :label="t('不透明度')"
               @update:model-value="wm.update(selectedText!.id, { shadow: { ...selectedText!.shadow, opacity: $event } })"
               @reset="wm.update(selectedText!.id, { shadow: { ...selectedText!.shadow, opacity: 55 } })"
             />
@@ -782,7 +868,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               :model-value="selectedText.shadow.x"
               :min="-40"
               :max="40"
-              label="水平偏移"
+              :label="t('水平偏移')"
               @update:model-value="wm.update(selectedText!.id, { shadow: { ...selectedText!.shadow, x: $event } })"
               @reset="wm.update(selectedText!.id, { shadow: { ...selectedText!.shadow, x: 0 } })"
             />
@@ -790,7 +876,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               :model-value="selectedText.shadow.y"
               :min="-40"
               :max="40"
-              label="垂直偏移"
+              :label="t('垂直偏移')"
               @update:model-value="wm.update(selectedText!.id, { shadow: { ...selectedText!.shadow, y: $event } })"
               @reset="wm.update(selectedText!.id, { shadow: { ...selectedText!.shadow, y: 8 } })"
             />
@@ -798,14 +884,14 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
         </details>
 
         <details class="group">
-          <summary>背景填充</summary>
+          <summary>{{ t('背景填充') }}</summary>
           <AppSwitch
             :model-value="selectedText.background.enabled"
             @update:model-value="wm.update(selectedText!.id, { background: { ...selectedText!.background, enabled: $event } })"
           />
           <template v-if="selectedText.background.enabled">
             <div class="row-inline">
-              <span class="fl">颜色</span>
+              <span class="fl">{{ t('颜色') }}</span>
               <input
                 type="color"
                 class="color"
@@ -817,7 +903,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               :model-value="selectedText.background.opacity"
               :min="0"
               :max="100"
-              label="不透明度"
+              :label="t('不透明度')"
               @update:model-value="wm.update(selectedText!.id, { background: { ...selectedText!.background, opacity: $event } })"
               @reset="wm.update(selectedText!.id, { background: { ...selectedText!.background, opacity: 45 } })"
             />
@@ -826,7 +912,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               :min="0"
               :max="30"
               :step="0.5"
-              label="内边距"
+              :label="t('内边距')"
               @update:model-value="wm.update(selectedText!.id, { background: { ...selectedText!.background, padding: $event } })"
               @reset="wm.update(selectedText!.id, { background: { ...selectedText!.background, padding: 6 } })"
             />
@@ -834,7 +920,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               :model-value="selectedText.background.radius"
               :min="0"
               :max="50"
-              label="圆角"
+              :label="t('圆角')"
               @update:model-value="wm.update(selectedText!.id, { background: { ...selectedText!.background, radius: $event } })"
               @reset="wm.update(selectedText!.id, { background: { ...selectedText!.background, radius: 14 } })"
             />
@@ -845,10 +931,10 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
 
     <template v-if="selectedImage">
       <section>
-        <h3>素材</h3>
+        <h3>{{ t('素材') }}</h3>
         <p class="asset-name">{{ selectedImage.name }}</p>
         <AppButton size="sm" @click="pickImage(selectedImage.id)">
-          <Replace :size="13" />替换图片
+          <Replace :size="13" />{{ t('替换图片') }}
         </AppButton>
       </section>
     </template>
@@ -856,44 +942,44 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
     <!-- 背景水印：照片浮在背景图上，背景可模糊；自定义图可仅当前照片使用 -->
     <template v-if="selectedBackground">
       <section>
-        <h3>背景图</h3>
+        <h3>{{ t('背景图') }}</h3>
         <p class="asset-name">{{ bgSourceName }}</p>
         <div class="row">
-          <AppButton size="sm" @click="pickBackground"><Replace :size="13" />选择图片</AppButton>
+          <AppButton size="sm" @click="pickBackground"><Replace :size="13" />{{ t('选择图片') }}</AppButton>
           <AppButton v-if="bgIsCustom" size="sm" @click="bgResetSelf">
-            <RotateCcw :size="13" />恢复当前照片
+            <RotateCcw :size="13" />{{ t('恢复当前照片') }}
           </AppButton>
         </div>
         <div v-if="(props.activeId && selectedBackground.source !== 'self') || bgOverride" class="linked-row">
           <div class="text">
-            <span class="fl">仅当前照片使用</span>
-            <p class="mode-hint">开启后其他照片仍以各自照片作为背景</p>
+            <span class="fl">{{ t('仅当前照片使用') }}</span>
+            <p class="mode-hint">{{ t('开启后其他照片仍以各自照片作为背景') }}</p>
           </div>
           <AppSwitch v-model="bgPerImageModel" />
         </div>
       </section>
       <section>
-        <h3>画布外扩</h3>
+        <h3>{{ t('画布外扩') }}</h3>
         <AppSegment v-model="bgFitModel" small :options="[
-          { value: 'background', label: '按背景比例' },
-          { value: 'custom', label: '自定义' },
+          { value: 'background', label: t('按背景比例') },
+          { value: 'custom', label: t('自定义') },
         ]" />
         <template v-if="selectedBackground.fit === 'background'">
           <div class="field">
-            <span class="fl">画幅比例</span>
+            <span class="fl">{{ t('画幅比例') }}</span>
             <AppSegment
               v-model="bgRatioModel"
               small
               wrap
-              :options="BG_RATIO_PRESETS.map((p) => ({ value: p.value, label: p.label }))"
+              :options="BG_RATIO_PRESETS.map((p) => ({ value: p.value, label: t(p.label) }))"
             />
-            <p class="mode-hint">画幅按所选比例锁定，方向跟随照片（横照片取横版）。</p>
+            <p class="mode-hint">{{ t('画幅按所选比例锁定，方向跟随照片（横照片取横版）。') }}</p>
           </div>
           <AppSlider
             :model-value="selectedBackground.expand"
             :min="0"
             :max="100"
-            label="外扩程度"
+            :label="t('外扩程度')"
             :format="(v) => `${Math.round(v)}%`"
             @update:model-value="wm.update(selectedBackground!.id, { expand: $event })"
             @reset="wm.update(selectedBackground!.id, { expand: 30 })"
@@ -904,7 +990,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
             :model-value="selectedBackground.expandX"
             :min="0"
             :max="60"
-            label="水平外扩"
+            :label="t('水平外扩')"
             :format="(v) => `${v.toFixed(1)}%`"
             @update:model-value="wm.update(selectedBackground!.id, { expandX: $event })"
             @reset="wm.update(selectedBackground!.id, { expandX: 12 })"
@@ -913,7 +999,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
             :model-value="selectedBackground.expandY"
             :min="0"
             :max="60"
-            label="垂直外扩"
+            :label="t('垂直外扩')"
             :format="(v) => `${v.toFixed(1)}%`"
             @update:model-value="wm.update(selectedBackground!.id, { expandY: $event })"
             @reset="wm.update(selectedBackground!.id, { expandY: 12 })"
@@ -921,11 +1007,11 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
         </template>
       </section>
       <section>
-        <h3>背景遮罩</h3>
+        <h3>{{ t('背景遮罩') }}</h3>
         <div class="switch-row">
           <div class="text">
-            <span class="fl">颜色遮罩</span>
-            <p class="mode-hint">在背景图上叠一层纯色，压暗或统一背景色调；照片不受影响</p>
+            <span class="fl">{{ t('颜色遮罩') }}</span>
+            <p class="mode-hint">{{ t('在背景图上叠一层纯色，压暗或统一背景色调；照片不受影响') }}</p>
           </div>
           <AppSwitch
             :model-value="bgOverlayOn"
@@ -934,7 +1020,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
         </div>
         <template v-if="bgOverlayOn">
           <div class="row-inline">
-            <span class="fl">遮罩颜色</span>
+            <span class="fl">{{ t('遮罩颜色') }}</span>
             <span class="flex" />
             <input
               type="color"
@@ -947,7 +1033,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
             :model-value="selectedBackground.overlayOpacity ?? 0"
             :min="0"
             :max="100"
-            label="遮罩不透明度"
+            :label="t('遮罩不透明度')"
             :format="(v) => `${Math.round(v)}%`"
             @update:model-value="wm.update(selectedBackground!.id, { overlayOpacity: $event })"
             @reset="wm.update(selectedBackground!.id, { overlayOpacity: 35 })"
@@ -955,12 +1041,12 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
         </template>
       </section>
       <section>
-        <h3>照片效果</h3>
+        <h3>{{ t('照片效果') }}</h3>
         <AppSlider
           :model-value="selectedBackground.blur"
           :min="0"
           :max="100"
-          label="背景高斯模糊"
+          :label="t('背景高斯模糊')"
           @update:model-value="wm.update(selectedBackground!.id, { blur: $event })"
           @reset="wm.update(selectedBackground!.id, { blur: 35 })"
         />
@@ -968,7 +1054,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :model-value="selectedBackground.photoScale"
           :min="30"
           :max="150"
-          label="图片大小"
+          :label="t('图片大小')"
           :format="(v) => `${Math.round(v)}%`"
           @update:model-value="wm.update(selectedBackground!.id, { photoScale: $event })"
           @reset="wm.update(selectedBackground!.id, { photoScale: 100 })"
@@ -977,7 +1063,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :model-value="selectedBackground.radius"
           :min="0"
           :max="300"
-          label="图片圆角"
+          :label="t('图片圆角')"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="wm.update(selectedBackground!.id, { radius: $event })"
           @reset="wm.update(selectedBackground!.id, { radius: 0 })"
@@ -986,19 +1072,19 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :model-value="selectedBackground.shadow"
           :min="0"
           :max="100"
-          label="图片阴影"
+          :label="t('图片阴影')"
           @update:model-value="wm.update(selectedBackground!.id, { shadow: $event })"
           @reset="wm.update(selectedBackground!.id, { shadow: 25 })"
         />
       </section>
       <section>
-        <h3>图片位置</h3>
-        <p class="mode-hint">也可以在预览中直接拖动照片调整位置</p>
+        <h3>{{ t('图片位置') }}</h3>
+        <p class="mode-hint">{{ t('也可以在预览中直接拖动照片调整位置') }}</p>
         <AppSlider
           :model-value="selectedBackground.offsetX"
           :min="-400"
           :max="400"
-          label="水平"
+          :label="t('水平')"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="wm.update(selectedBackground!.id, { offsetX: Math.round($event) })"
           @reset="wm.update(selectedBackground!.id, { offsetX: 0 })"
@@ -1007,7 +1093,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :model-value="selectedBackground.offsetY"
           :min="-400"
           :max="400"
-          label="垂直"
+          :label="t('垂直')"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="wm.update(selectedBackground!.id, { offsetY: Math.round($event) })"
           @reset="wm.update(selectedBackground!.id, { offsetY: 0 })"
@@ -1018,16 +1104,16 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
     <!-- 边框层：同步模式下统一调整，断开后四边独立 -->
     <template v-if="selectedBorder">
       <section>
-        <h3>边框</h3>
+        <h3>{{ t('边框') }}</h3>
         <div class="linked-row">
-          <span class="fl">四边同步</span>
+          <span class="fl">{{ t('四边同步') }}</span>
           <AppSwitch
             :model-value="borderLinkedModel"
             @update:model-value="borderLinkedModel = $event"
           />
         </div>
         <div v-if="borderLinked" class="border-row">
-          <span class="border-label">四边</span>
+          <span class="border-label">{{ t('四边') }}</span>
           <AppSlider
             class="border-width"
             :model-value="selectedBorder.top"
@@ -1042,13 +1128,13 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
             class="color-input"
             type="color"
             :value="selectedBorder.colorTop"
-            title="四边颜色"
+            :title="t('四边颜色')"
             @input="setBorderColor('top', ($event.target as HTMLInputElement).value)"
           />
         </div>
         <template v-else>
           <div v-for="side in SIDES" :key="side" class="border-row">
-            <span class="border-label">{{ SIDE_LABELS[side] }}</span>
+            <span class="border-label">{{ t(SIDE_LABELS[side]) }}</span>
             <AppSlider
               class="border-width"
               :model-value="selectedBorder[side]"
@@ -1063,7 +1149,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               class="color-input"
               type="color"
               :value="borderColor(side)"
-              :title="`${SIDE_LABELS[side]}边颜色`"
+              :title="t('{0}边颜色', t(SIDE_LABELS[side]))"
               @input="setBorderColor(side, ($event.target as HTMLInputElement).value)"
             />
           </div>
@@ -1073,25 +1159,107 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
 
     <template v-if="wm.selected && wm.selected.type !== 'border' && wm.selected.type !== 'background'">
       <section>
-        <h3>位置与变换</h3>
-        <p class="anchor-label">定位锚点</p>
-        <div class="anchor-grid" role="group" aria-label="定位锚点">
-          <button
-            v-for="a in anchors"
-            :key="a.key"
-            :title="a.label"
-            :class="{ on: wm.selected!.anchor === a.key }"
-            @click="wm.positionPreset(a.key)"
-          >
-            <span />
-          </button>
+        <h3>{{ t('位置与变换') }}</h3>
+        <div class="anchor-mode">
+          <AppSegment
+            small
+            :model-value="anchorMode"
+            :options="[
+              { value: 'image', label: t('当前图片') },
+              { value: 'layer', label: t('其他水印') },
+              { value: 'custom', label: t('自由坐标') },
+            ]"
+            @update:model-value="wm.setAnchorMode($event as 'image' | 'layer' | 'custom')"
+          />
         </div>
-        <template v-if="wm.selected!.type === 'text'">
-          <p class="anchor-label">文字框锚点</p>          <div class="anchor-grid" role="group" aria-label="文字框锚点">
+
+        <!-- 参照当前图片：原有九宫格定位 -->
+        <template v-if="anchorMode === 'image'">
+          <p class="anchor-label">{{ t('定位锚点') }}</p>
+          <div class="anchor-grid" role="group" :aria-label="t('定位锚点')">
             <button
               v-for="a in anchors"
               :key="a.key"
-              :title="a.label"
+              :title="t(a.label)"
+              :class="{ on: wm.selected!.anchor === a.key }"
+              @click="wm.positionPreset(a.key)"
+            >
+              <span />
+            </button>
+          </div>
+        </template>
+
+        <!-- 参照其他水印：选父图层 + 父级包围盒上的参考点，位置随之联动 -->
+        <template v-else-if="anchorMode === 'layer'">
+          <div class="field">
+            <span>{{ t('参照水印') }}</span>
+            <select
+              class="select"
+              :value="anchorParentId"
+              @change="setParent(($event.target as HTMLSelectElement).value)"
+            >
+              <option value="" disabled>{{ t('选择一个水印图层') }}</option>
+              <option v-for="p in parentCandidates" :key="p.id" :value="p.id">
+                {{ layerName(p) }}
+              </option>
+            </select>
+          </div>
+          <p v-if="!parentCandidates.length" class="hint">{{ t('添加第二个水印后即可互相绑定。') }}</p>
+          <p v-else-if="!anchorParentId" class="hint">{{ t('选择父级水印，位置会跟着它移动与旋转。') }}</p>
+          <template v-else>
+            <p class="anchor-label">{{ t('父级参考点') }}</p>
+            <div class="anchor-grid" role="group" :aria-label="t('父级参考点')">
+              <button
+                v-for="a in anchors"
+                :key="a.key"
+                :title="t(a.label)"
+                :class="{ on: anchorParentPreset === a.key }"
+                @click="setParentAnchor(a.key)"
+              >
+                <span />
+              </button>
+            </div>
+          </template>
+        </template>
+
+        <!-- 自由坐标：在图片内任意位置落点，也可直接在预览画布上点选 -->
+        <template v-else>
+          <AppSlider
+            :model-value="customX"
+            :min="0"
+            :max="100"
+            :label="t('横向位置')"
+            :format="(v) => `${v}%`"
+            :default="50"
+            @update:model-value="wm.update(wm.selected!.id, { anchorMode: 'custom', anchorX: $event })"
+            @reset="wm.update(wm.selected!.id, { anchorMode: 'custom', anchorX: 50 })"
+          />
+          <AppSlider
+            :model-value="customY"
+            :min="0"
+            :max="100"
+            :label="t('纵向位置')"
+            :format="(v) => `${v}%`"
+            :default="50"
+            @update:model-value="wm.update(wm.selected!.id, { anchorMode: 'custom', anchorY: $event })"
+            @reset="wm.update(wm.selected!.id, { anchorMode: 'custom', anchorY: 50 })"
+          />
+          <AppButton
+            size="sm"
+            :variant="wm.pickingAnchor ? 'primary' : 'ghost'"
+            @click="wm.pickingAnchor = !wm.pickingAnchor"
+          >
+            <LocateFixed :size="13" />{{ wm.pickingAnchor ? t('取消点选') : t('在预览中点选位置') }}
+          </AppButton>
+          <p v-if="wm.pickingAnchor" class="hint">{{ t('在预览画布上点击目标位置即可落锚。') }}</p>
+        </template>
+
+        <template v-if="wm.selected!.type === 'text'">
+          <p class="anchor-label">{{ t('文字框锚点') }}</p>          <div class="anchor-grid" role="group" :aria-label="t('文字框锚点')">
+            <button
+              v-for="a in anchors"
+              :key="a.key"
+              :title="t(a.label)"
               :class="{ on: (selectedText!.boxAnchor ?? 'middle-center') === a.key }"
               @click="wm.update(selectedText!.id, { boxAnchor: a.key })"
             >
@@ -1103,7 +1271,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :model-value="offX"
           :min="-1200"
           :max="1200"
-          label="距锚点 · 水平"
+          :label="t('距锚点 · 水平')"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="setOffsetX"
           @reset="setOffsetX(0)"
@@ -1112,7 +1280,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :model-value="offY"
           :min="-1200"
           :max="1200"
-          label="距锚点 · 垂直"
+          :label="t('距锚点 · 垂直')"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="setOffsetY"
           @reset="setOffsetY(0)"
@@ -1123,7 +1291,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :min="8"
           :max="Math.round(long * 0.35)"
           :step="0.5"
-          label="文字大小"
+          :label="t('文字大小')"
           :format="(v) => `${Math.round(v)} px`"
           @update:model-value="setFontPx"
           @reset="setFontPx(Math.round(long * 0.036))"
@@ -1134,7 +1302,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :min="1"
           :max="80"
           :step="0.1"
-          label="素材高度"
+          :label="t('素材高度')"
           :format="(v) => `${v.toFixed(1)}%`"
           @update:model-value="wm.update(wm.selected!.id, { scale: $event })"
           @reset="wm.update(wm.selected!.id, { scale: 20 })"
@@ -1143,7 +1311,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :model-value="wm.selected.rotation"
           :min="-180"
           :max="180"
-          label="旋转"
+          :label="t('旋转')"
           :format="(v) => `${v}°`"
           @update:model-value="wm.update(wm.selected!.id, { rotation: $event })"
           @reset="wm.update(wm.selected!.id, { rotation: 0 })"
@@ -1152,36 +1320,36 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
           :model-value="wm.selected.opacity"
           :min="0"
           :max="100"
-          label="不透明度"
+          :label="t('不透明度')"
           @update:model-value="wm.update(wm.selected!.id, { opacity: $event })"
           @reset="wm.update(wm.selected!.id, { opacity: 100 })"
         />
         <div class="row-inline">
-          <span class="fl">混合</span>
+          <span class="fl">{{ t('混合') }}</span>
           <select
             class="select grow"
             :value="(wm.selected as ImageLayer).blend"
             @change="wm.update(wm.selected!.id, { blend: ($event.target as HTMLSelectElement).value as ImageLayer['blend'] })"
           >
-            <option v-for="b in BLEND_OPTIONS" :key="b.value" :value="b.value">{{ b.label }}</option>
+            <option v-for="b in BLEND_OPTIONS" :key="b.value" :value="b.value">{{ t(b.label) }}</option>
           </select>
         </div>
 
         <details class="group" :open="wm.selected.tile.enabled">
-          <summary>平铺整图</summary>
+          <summary>{{ t('平铺整图') }}</summary>
           <div class="row-inline">
             <AppSwitch
               :model-value="wm.selected.tile.enabled"
               @update:model-value="wm.update(wm.selected!.id, { tile: { ...wm.selected!.tile, enabled: $event } })"
             />
-            <span class="fl">铺满整张照片</span>
+            <span class="fl">{{ t('铺满整张照片') }}</span>
           </div>
           <template v-if="wm.selected.tile.enabled">
             <AppSlider
               :model-value="wm.selected.tile.gapX"
               :min="0"
               :max="300"
-              label="水平间距"
+              :label="t('水平间距')"
               :format="(v) => `${v}%`"
               @update:model-value="wm.update(wm.selected!.id, { tile: { ...wm.selected!.tile, gapX: $event } })"
               @reset="wm.update(wm.selected!.id, { tile: { ...wm.selected!.tile, gapX: 120 } })"
@@ -1190,7 +1358,7 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
               :model-value="wm.selected.tile.gapY"
               :min="0"
               :max="300"
-              label="垂直间距"
+              :label="t('垂直间距')"
               :format="(v) => `${v}%`"
               @update:model-value="wm.update(wm.selected!.id, { tile: { ...wm.selected!.tile, gapY: $event } })"
               @reset="wm.update(wm.selected!.id, { tile: { ...wm.selected!.tile, gapY: 90 } })"
@@ -1209,24 +1377,24 @@ const currentFontName = computed(() => selectedText.value?.fontFamily.replace(/"
     />
 
     <!-- 模板选择：卡片网格带缩略图，选模板后决定完全覆盖还是追加水印层 -->
-    <AppDialog :open="tplOpen" title="选择水印模板" :width="480" @close="tplOpen = false">
+    <AppDialog :open="tplOpen" :title="t('选择水印模板')" :width="480" @close="tplOpen = false">
       <div v-if="!tplPending" class="tpl-grid">
-        <button v-for="t in templates.all" :key="t.id" class="tpl-card" @click="tplPending = t">
-          <canvas :ref="setTplCanvas(t.id)" class="tpl-thumb" />
-          <span class="tpl-name">{{ t.name }}</span>
-          <span class="tpl-meta">{{ t.layers.length }} 个图层{{ t.builtin ? ' · 内置' : '' }}</span>
+        <button v-for="tpl in templates.all" :key="tpl.id" class="tpl-card" @click="tplPending = tpl">
+          <canvas :ref="setTplCanvas(tpl.id)" class="tpl-thumb" />
+          <span class="tpl-name">{{ t(tpl.name) }}</span>
+          <span class="tpl-meta">{{ t('{0} 个图层', tpl.layers.length) }}<template v-if="tpl.builtin"> · {{ t('内置') }}</template></span>
         </button>
-        <p v-if="!templates.all.length" class="empty">还没有模板。先把当前配置存为模板。</p>
+        <p v-if="!templates.all.length" class="empty">{{ t('还没有模板。先把当前配置存为模板。') }}</p>
       </div>
       <div v-else class="tpl-confirm">
         <p class="tpl-question">
-          应用模板「{{ tplPending.name }}」（{{ tplPending.layers.length }} 个图层）：
+          {{ t('应用模板「{0}」（{1} 个图层）：', tplPending.name, tplPending.layers.length) }}
         </p>
         <div class="tpl-btns">
-          <AppButton variant="ghost" size="sm" @click="tplPending = null">返回</AppButton>
+          <AppButton variant="ghost" size="sm" @click="tplPending = null">{{ t('返回') }}</AppButton>
           <span class="flex" />
-          <AppButton size="sm" @click="applyTpl('append')">追加水印层</AppButton>
-          <AppButton variant="primary" size="sm" @click="applyTpl('replace')">完全覆盖</AppButton>
+          <AppButton size="sm" @click="applyTpl('append')">{{ t('追加水印层') }}</AppButton>
+          <AppButton variant="primary" size="sm" @click="applyTpl('replace')">{{ t('完全覆盖') }}</AppButton>
         </div>
       </div>
     </AppDialog>
@@ -1614,6 +1782,10 @@ h3 {
   color: var(--text-3);
   text-align: center;
   margin-bottom: 5px;
+}
+/* 锚点参照切换：三段等宽，标签短，不折行 */
+.anchor-mode {
+  margin-bottom: 10px;
 }
 .anchor-grid {
   display: grid;

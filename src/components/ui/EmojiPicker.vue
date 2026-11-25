@@ -3,9 +3,11 @@
  *  固定的常用清单（按近似主题分组），不做搜索——图标是装饰性标识，
  *  扫一眼点一下的成本远低于输入。 */
 import AppButton from './AppButton.vue'
+import { useI18n } from '@/i18n'
 
 const props = defineProps<{ modelValue?: string }>()
 const emit = defineEmits<{ pick: [emoji: string]; clear: [] }>()
+const { t } = useI18n()
 
 const GROUPS: { label: string; items: string[] }[] = [
   {
@@ -42,7 +44,7 @@ function onKey(e: KeyboardEvent): void {
 <template>
   <div class="picker">
     <div v-for="g in GROUPS" :key="g.label" class="group">
-      <span class="g-label">{{ g.label }}</span>
+      <span class="g-label">{{ t(g.label) }}</span>
       <div class="grid">
         <button
           v-for="e in g.items"
@@ -61,7 +63,7 @@ function onKey(e: KeyboardEvent): void {
     </div>
     <div class="foot">
       <AppButton size="sm" variant="ghost" :disabled="!props.modelValue" @click="emit('clear')">
-        清除图标
+        {{ t('清除图标') }}
       </AppButton>
     </div>
   </div>

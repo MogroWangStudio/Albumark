@@ -4,6 +4,9 @@ import { Check, Images } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import type { ImageItem } from '@/types/image'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   open: boolean
@@ -116,8 +119,8 @@ function apply(): void {
 </script>
 
 <template>
-  <AppDialog :open="open" title="框选要导出的照片" :width="720" @close="emit('close')">
-    <p class="lead">拖框批量选择，或按住 Shift 点击首尾连续选段；单张点击切换勾选。</p>
+  <AppDialog :open="open" :title="t('框选要导出的照片')" :width="720" @close="emit('close')">
+    <p class="lead">{{ t('拖框批量选择，或按住 Shift 点击首尾连续选段；单张点击切换勾选。') }}</p>
     <div ref="gridEl" class="pick-grid" @pointerdown="onGridDown">
       <button
         v-for="(it, i) in items"
@@ -136,10 +139,10 @@ function apply(): void {
       <div v-if="rubberStyle" class="rubber" :style="rubberStyle" aria-hidden="true"></div>
     </div>
     <div class="actions">
-      <span class="count">已选 {{ selectedCount }} / {{ items.length }}</span>
-      <AppButton size="sm" variant="ghost" @click="emit('close')">取消</AppButton>
+      <span class="count">{{ t('已选 {0} / {1}', selectedCount, items.length) }}</span>
+      <AppButton size="sm" variant="ghost" @click="emit('close')">{{ t('取消') }}</AppButton>
       <AppButton size="sm" variant="primary" :disabled="!selectedCount" @click="apply">
-        确定
+        {{ t('确定') }}
       </AppButton>
     </div>
   </AppDialog>

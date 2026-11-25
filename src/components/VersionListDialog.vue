@@ -6,6 +6,7 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import { compareVersions, type ReleaseEntry } from '@/core/updater'
 import { APP_VERSION } from '@/core/version'
 import { isCapacitor } from '@/core/platform'
+import { useI18n } from '@/i18n'
 import { useUpdaterStore } from '@/stores/updater'
 
 /**
@@ -17,6 +18,7 @@ import { useUpdaterStore } from '@/stores/updater'
  */
 
 const updater = useUpdaterStore()
+const { t } = useI18n()
 
 interface Row {
   entry: ReleaseEntry
@@ -87,25 +89,25 @@ watch(
 <template>
   <AppDialog
     :open="updater.versionListOpen"
-    title="版本列表"
+    :title="t('版本列表')"
     :width="560"
     @close="updater.closeVersionList"
   >
     <div class="lede">
-      <span>当前 v{{ APP_VERSION }}</span>
-      <span v-if="rows.length" class="count">{{ rows.length }} 个已发布版本</span>
+      <span>{{ t('当前 v{0}', APP_VERSION) }}</span>
+      <span v-if="rows.length" class="count">{{ t('{0} 个已发布版本', rows.length) }}</span>
     </div>
 
     <div v-if="updater.releasesState === 'loading' || updater.releasesState === 'idle'" class="state">
-      <LoaderCircle :size="14" class="spin" />正在读取版本列表…
+      <LoaderCircle :size="14" class="spin" />{{ t('正在读取版本列表…') }}
     </div>
 
     <div v-else-if="updater.releasesState === 'error'" class="state">
-      <span>版本列表读取失败，可能是网络或接口限流。</span>
-      <AppButton size="sm" @click="updater.loadReleases(true)">重试</AppButton>
+      <span>{{ t('版本列表读取失败，可能是网络或接口限流。') }}</span>
+      <AppButton size="sm" @click="updater.loadReleases(true)">{{ t('重试') }}</AppButton>
     </div>
 
-    <div v-else-if="!rows.length" class="state">暂无已发布版本。</div>
+    <div v-else-if="!rows.length" class="state">{{ t('暂无已发布版本。') }}</div>
 
     <ul v-else class="list">
       <li v-for="row in rows" :key="row.version" class="item" :class="{ current: row.cmp === 0 }">
@@ -117,25 +119,25 @@ watch(
             @click="toggle(row.version)"
           >
             <span class="ver">v{{ row.version }}</span>
-            <span v-if="row.cmp === 0" class="tag now">当前</span>
-            <span v-else-if="row.entry.prerelease" class="tag">预发布</span>
-            <span v-if="row.version === lastReleased && row.cmp !== 0" class="tag latest">最新</span>
+            <span v-if="row.cmp === 0" class="tag now">{{ t('当前') }}</span>
+            <span v-else-if="row.entry.prerelease" class="tag">{{ t('预发布') }}</span>
+            <span v-if="row.version === lastReleased && row.cmp !== 0" class="tag latest">{{ t('最新') }}</span>
             <span class="date">{{ row.date }}</span>
             <ChevronDown :size="14" class="chev" :class="{ open: expanded === row.version }" />
           </button>
 
           <div class="ops">
-            <span v-if="row.cmp === 0" class="now-hint">正在使用</span>
+            <span v-if="row.cmp === 0" class="now-hint">{{ t('正在使用') }}</span>
             <AppButton
               v-else-if="row.cmp > 0"
               size="sm"
               variant="primary"
               @click="updater.selectRelease(row.entry)"
             >
-              更新
+              {{ t('更新') }}
             </AppButton>
             <AppButton v-else size="sm" variant="danger" @click="askDowngrade(row.version)">
-              降级
+              {{ t('降级') }}
             </AppButton>
           </div>
         </div>
@@ -143,23 +145,27 @@ watch(
         <div v-if="expanded === row.version" class="detail">
           <!-- 降级确认：警告在读说明之前，先看清代价再决定 -->
           <div v-if="confirming === row.version" class="warn">
-            <p class="warn-title">降级到 v{{ row.version }}？</p>            <p class="warn-body">
-              降级会用旧版本覆盖当前安装，且不会自动回滚。项目数据与设置可能已被新版本改写，
-              旧版本未必能完整读取，可能出现不可逆的 bug——请先备份工作目录。
+            <p class="warn-title">{{ t('降级到 v{0}？', row.version) }}</p>
+            <p class="warn-body">
+              {{
+                t(
+                  '降级会用旧版本覆盖当前安装，且不会自动回滚。项目数据与设置可能已被新版本改写，旧版本未必能完整读取，可能出现不可逆的 bug——请先备份工作目录。',
+                )
+              }}
             </p>
             <p v-if="isCapacitor" class="warn-body">
-              安卓系统不允许覆盖安装更低版本：确认后需先卸载当前应用，本地应用数据会一并清除。
+              {{ t('安卓系统不允许覆盖安装更低版本：确认后需先卸载当前应用，本地应用数据会一并清除。') }}
             </p>
             <div class="warn-actions">
-              <AppButton size="sm" variant="ghost" @click="cancelDowngrade">取消</AppButton>
+              <AppButton size="sm" variant="ghost" @click="cancelDowngrade">{{ t('取消') }}</AppButton>
               <AppButton size="sm" variant="danger" @click="confirmDowngrade(row)">
-                仍要降级
+                {{ t('仍要降级') }}
               </AppButton>
             </div>
           </div>
 
           <p v-if="row.notes" class="notes">{{ row.notes }}</p>
-          <p v-else class="notes empty">该版本没有附更新说明。</p>
+          <p v-else class="notes empty">{{ t('该版本没有附更新说明。') }}</p>
         </div>
       </li>
     </ul>

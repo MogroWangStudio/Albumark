@@ -5,6 +5,7 @@ import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import AppSegment from '@/components/ui/AppSegment.vue'
 import { useWorkspaceStore, type ImportMode } from '@/stores/workspace'
+import { useI18n } from '@/i18n'
 
 /**
  * 导入预览窗：选照片 / 拖入照片后先在这里确认数量与入库方式（复制 or 链接），
@@ -18,6 +19,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ close: []; confirm: [mode: ImportMode] }>()
 
+const { t } = useI18n()
 const ws = useWorkspaceStore()
 const mode = ref<ImportMode>('copy')
 
@@ -40,32 +42,32 @@ function confirm(): void {
 </script>
 
 <template>
-  <AppDialog :open="open" title="导入照片" :width="420" @close="emit('close')">
+  <AppDialog :open="open" :title="t('导入照片')" :width="420" @close="emit('close')">
     <div class="count">
       <Images :size="15" />
-      <span>已选择 <strong>{{ items.length }}</strong> 张照片</span>
+      <span>{{ t('已选择 {0} 张照片', items.length) }}</span>
     </div>
     <ul ref="listEl" class="files">
       <li v-for="n in names" :key="n">{{ n }}</li>
     </ul>
 
     <div class="mode-pick">
-      <span class="fl">照片入库方式</span>
+      <span class="fl">{{ t('照片入库方式') }}</span>
       <AppSegment
         v-if="canLink"
         v-model="mode"
         :options="[
-          { value: 'copy', label: '复制原文件' },
-          { value: 'link', label: '链接源文件' },
+          { value: 'copy', label: t('复制原文件') },
+          { value: 'link', label: t('链接源文件') },
         ]"
       />
-      <span v-else class="copy-only"><Copy :size="13" />复制原文件</span>
+      <span v-else class="copy-only"><Copy :size="13" />{{ t('复制原文件') }}</span>
     </div>
 
     <div class="btns">
-      <AppButton variant="ghost" @click="emit('close')">取消</AppButton>
+      <AppButton variant="ghost" @click="emit('close')">{{ t('取消') }}</AppButton>
       <AppButton variant="primary" :disabled="!items.length" @click="confirm">
-        <Copy v-if="mode === 'copy'" :size="14" /><Link2 v-else :size="14" />导入
+        <Copy v-if="mode === 'copy'" :size="14" /><Link2 v-else :size="14" />{{ t('导入') }}
       </AppButton>
     </div>
   </AppDialog>

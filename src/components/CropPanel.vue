@@ -6,6 +6,7 @@ import AppSegment from '@/components/ui/AppSegment.vue'
 import AppSlider from '@/components/ui/AppSlider.vue'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
+import { useI18n } from '@/i18n'
 import {
   CROP_MIN,
   CROP_RATIOS,
@@ -23,6 +24,10 @@ import {
 
 const adjust = useAdjustStore()
 const images = useImagesStore()
+const { t } = useI18n()
+
+/** 比例预设：选项标签随语言即时更新（选中值仍是原字符串） */
+const ratioOptions = computed(() => CROP_RATIOS.map((o) => ({ ...o, label: t(o.label) })))
 
 /** 裁剪后输出的像素尺寸（含旋转 / 翻转），显示在标题行 */
 const draftState = computed(() => {
@@ -116,19 +121,19 @@ function onCustomRatio(e: Event): void {
 <template>
   <div class="panel-scroll">
     <div class="head">
-      <h1>裁剪</h1>
+      <h1>{{ t('裁剪') }}</h1>
       <span class="size">{{ draftState }}</span>
     </div>
-    <AppSegment v-model="adjust.cropRatio" :options="CROP_RATIOS" small class="ratios" />
+    <AppSegment v-model="adjust.cropRatio" :options="ratioOptions" small class="ratios" />
     <!-- 自定义比例：键入宽高数值即应用（选预设后两格清空） -->
     <div class="custom-ratio">
-      <span class="fl">自定义</span>
+      <span class="fl">{{ t('自定义') }}</span>
       <input
         class="num"
         type="number"
         min="0.01"
         step="any"
-        placeholder="宽"
+        :placeholder="t('宽')"
         :value="customRatio.w"
         @input="onCustomRatio($event)"
       />
@@ -138,7 +143,7 @@ function onCustomRatio(e: Event): void {
         type="number"
         min="0.01"
         step="any"
-        placeholder="高"
+        :placeholder="t('高')"
         :value="customRatio.h"
         @input="onCustomRatio($event)"
       />
@@ -148,8 +153,8 @@ function onCustomRatio(e: Event): void {
         <button
           class="flip"
           :class="{ on: adjust.cropDraft?.flipH }"
-          title="水平翻转"
-          aria-label="水平翻转"
+          :title="t('水平翻转')"
+          :aria-label="t('水平翻转')"
           @click="toggleFlip('h')"
         >
           <FlipHorizontal2 :size="14" />
@@ -157,8 +162,8 @@ function onCustomRatio(e: Event): void {
         <button
           class="flip"
           :class="{ on: adjust.cropDraft?.flipV }"
-          title="垂直翻转"
-          aria-label="垂直翻转"
+          :title="t('垂直翻转')"
+          :aria-label="t('垂直翻转')"
           @click="toggleFlip('v')"
         >
           <FlipVertical2 :size="14" />
@@ -171,7 +176,7 @@ function onCustomRatio(e: Event): void {
         :max="CROP_ROT_MAX"
         :step="0.5"
         :bend="1"
-        label="旋转"
+        :label="t('旋转')"
         :format="(v) => `${v}°`"
         :default="0"
         @update:model-value="setRot"
@@ -179,14 +184,14 @@ function onCustomRatio(e: Event): void {
       />
     </div>
     <div class="row">
-      <span class="hint">切到其他页时自动应用，可随时回来重新调整。</span>
+      <span class="hint">{{ t('切到其他页时自动应用，可随时回来重新调整。') }}</span>
       <AppButton
         variant="ghost"
         size="sm"
         :disabled="!adjust.cropDraft || isPlainFullCrop(adjust.cropDraft)"
         @click="resetCropDraft"
       >
-        <RotateCcw :size="13" />重置
+        <RotateCcw :size="13" />{{ t('重置') }}
       </AppButton>
     </div>
   </div>

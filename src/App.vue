@@ -32,6 +32,7 @@ import { isCapacitor, isTauri, pickImagePaths } from '@/core/platform'
 import { isImportableImage } from '@/core/imageFormat'
 import { projectMomentum, springTo, type SpringHandle } from '@/core/spring'
 import { baseName } from '@/core/fs'
+import { useI18n } from '@/i18n'
 import { toast } from '@/stores/toast'
 import { closeCtxMenu, ctxMenu, openCtxMenu } from '@/stores/ctxMenu'
 import { useAdjustStore } from '@/stores/adjust'
@@ -49,6 +50,7 @@ const history = useHistoryStore()
 const ws = useWorkspaceStore()
 const adjust = useAdjustStore()
 const settings = useSettingsStore()
+const { t } = useI18n()
 
 // 水印作用域的绑定在水印 store 内部：由当前工作项目（ws.current）直接推导并
 // 自动换装配置（见 stores/watermark.ts 的 derivedScope watch）。这里不再做任何
@@ -98,7 +100,7 @@ function queueImport(items: PendingImport[]): void {
   // 「已选择 N 张照片」，也不该在确认后才被告知跳过
   const picked = items.filter((i) => isImportableImage(i.name))
   const skipped = items.length - picked.length
-  if (skipped > 0) toast(`已跳过 ${skipped} 个非 JPG/PNG 文件`)
+  if (skipped > 0) toast(t('已跳过 {0} 个非 JPG/PNG 文件', skipped))
   if (!picked.length) return
   pendingImport.value = picked
   importPreviewOpen.value = true
@@ -107,7 +109,7 @@ function queueImport(items: PendingImport[]): void {
 function openPicker(): void {
   if (!inProject.value) return
   if (isTauri) {
-    void pickImagePaths('选择照片').then((paths) => {
+    void pickImagePaths(t('选择照片')).then((paths) => {
       queueImport(paths.map((p) => ({ path: p, name: baseName(p) })))
     })
   } else {
@@ -364,10 +366,10 @@ function onGlobalContextMenu(e: MouseEvent): void {
 
 function onPreviewCtx(e: MouseEvent): void {
   openContextMenu(e, [
-    { label: '适应窗口', action: () => previewRef.value?.fitView() },
-    { label: '实际大小 100%', action: () => previewRef.value?.setZoom(1) },
-    { label: panelOpen.value ? '收起操作面板' : '展开操作面板', action: () => (panelOpen.value = !panelOpen.value) },
-    { label: '导入照片…', action: () => openPicker() },
+    { label: t('适应窗口'), action: () => previewRef.value?.fitView() },
+    { label: t('实际大小 100%'), action: () => previewRef.value?.setZoom(1) },
+    { label: t(panelOpen.value ? '收起操作面板' : '展开操作面板'), action: () => (panelOpen.value = !panelOpen.value) },
+    { label: t('导入照片…'), action: () => openPicker() },
   ])
 }
 
@@ -375,28 +377,28 @@ function onPhotoCtx(e: MouseEvent, id: string): void {
   const item = images.items.find((i) => i.id === id)
   // 预设套用放在右键菜单里：先点照片再选预设，是最短的一条路径
   const presetItems: ContextMenuItem[] = presets.list.slice(0, 6).map((p) => ({
-    label: `套用预设「${p.name}」`,
+    label: t('套用预设「{0}」', p.name),
     action: () => {
       presets.apply(p, [id])
-      toast(`已将「${p.name}」套用到这张照片`, 'success')
+      toast(t('已将「{0}」套用到这张照片', p.name), 'success')
     },
   }))
   openContextMenu(e, [
     {
-      label: '设为当前照片',
+      label: t('设为当前照片'),
       disabled: id === images.activeId,
       action: () => images.select(id),
     },
     ...presetItems,
     item?.missing
-      ? { label: '重新定位源文件…', action: () => relinkOne(id) }
-      : { label: '从项目中移除', danger: true, action: () => void ws.removeImage(id) },
+      ? { label: t('重新定位源文件…'), action: () => relinkOne(id) }
+      : { label: t('从项目中移除'), danger: true, action: () => void ws.removeImage(id) },
   ])
 }
 
 /** 单张重定位：选文件 → 识别码校对 → 重新链接（预览占位按钮与右键共用） */
 function relinkOne(id: string): void {
-  void pickImagePaths('定位原文件').then(([p]) => {
+  void pickImagePaths(t('定位原文件')).then(([p]) => {
     if (p) void ws.relink(id, p)
   })
 }
@@ -485,7 +487,7 @@ async function onAndroidBack(): Promise<void> {
     return
   }
   lastBackAt = now
-  toast('再侧滑一次退出应用')
+  toast(t('再侧滑一次退出应用'))
 }
 
 /** 防抖保存的兜底：切后台/页面隐藏时立即写出，防止 400ms 窗口内被系统杀掉丢数据 */
@@ -628,13 +630,13 @@ onBeforeUnmount(() => {
                   <AppTabs
                     v-model="adjust.panel"
                     :options="[
-                      { value: 'watermark', label: '水印', icon: Droplets },
-                      { value: 'adjust', label: '调节', icon: SlidersHorizontal },
-                      { value: 'crop', label: '裁剪', icon: Crop },
-                      { value: 'export', label: '导出', icon: Upload },
+                      { value: 'watermark', label: t('水印'), icon: Droplets },
+                      { value: 'adjust', label: t('调节'), icon: SlidersHorizontal },
+                      { value: 'crop', label: t('裁剪'), icon: Crop },
+                      { value: 'export', label: t('导出'), icon: Upload },
                     ]"
                   />
-                  <button class="collapse" title="收起面板" @click="panelOpen = false">
+                  <button class="collapse" :title="t('收起面板')" @click="panelOpen = false">
                     <ChevronRight v-if="panelSide === 'right'" :size="14" />
                     <ChevronLeft v-else :size="14" />
                   </button>
@@ -653,7 +655,7 @@ onBeforeUnmount(() => {
             v-show="inProject && !panelOpen"
             class="panel-tab"
             :class="`side-${panelSide}`"
-            title="展开面板"
+            :title="t('展开面板')"
             @click="panelOpen = true"
           >
             <ChevronLeft v-if="panelSide === 'right'" :size="15" />

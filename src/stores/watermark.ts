@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { uid } from '@/core/id'
 import { createDebouncedSaver, loadJson, saveJson } from '@/core/storage'
 import { blobToDataUrl, dataUrlToBlob, rasterizeSvg } from '@/core/svg'
+import { t } from '@/i18n'
 import type {
   AnchorPreset,
   BackgroundLayer,
@@ -214,6 +215,56 @@ export const useWatermarkStore = defineStore('watermark', () => {
     () => editTarget().find((l) => l.id === selectedId.value) ?? null,
   )
 
+  /** 自定义锚点拾取模式：下一次在预览画布上点击即为选中图层落锚点 */
+  const pickingAnchor = ref(false)
+
+  /** 切换锚点参照；切到「水印」时默认绑定列表里第一个其他文本 / 图片图层 */
+  function setAnchorMode(mode: 'image' | 'layer' | 'custom'): void {
+    const l = selected.value
+    if (!l || l.type === 'border' || l.type === 'background') return
+    const patch: LayerPatch = { anchorMode: mode }
+    if (mode === 'layer' && !l.anchorParentId) {
+      const other = editTarget().find(
+        (x) => x.id !== l.id && (x.type === 'text' || x.type === 'image'),
+      )
+      if (other) {
+        ;(patch as TextLayerPatch).anchorParentId = other.id
+        ;(patch as TextLayerPatch).anchorParent = l.anchor
+      }
+    }
+    if (mode === 'custom') {
+      if (!Number.isFinite(l.anchorX)) (patch as TextLayerPatch).anchorX = 50
+      if (!Number.isFinite(l.anchorY)) (patch as TextLayerPatch).anchorY = 50
+    }
+    update(l.id, patch)
+  }
+
+  /** 预览画布点选自定义锚点：写入百分比坐标并退出拾取 */
+  function placeCustomAnchor(xPct: number, yPct: number): void {
+    const l = selected.value
+    if (!l || l.type === 'border' || l.type === 'background') return
+    update(l.id, {
+      anchorMode: 'custom',
+      anchorX: Math.min(100, Math.max(0, xPct)),
+      anchorY: Math.min(100, Math.max(0, yPct)),
+    })
+    pickingAnchor.value = false
+  }
+
+  /** 原地复制：位置、尺寸、旋转、锚点与父级绑定全部保留，紧跟原图层之后 */
+  function duplicate(id: string): void {
+    const list = editTarget()
+    const i = list.findIndex((l) => l.id === id)
+    if (i < 0) return
+    const src = deepClone(toRaw(list[i]))
+    const copy = { ...src, id: uid() } as WatermarkLayer
+    // 文本按内容命名展示，重名会让列表两条一模一样；其余类型补「副本」区分
+    if (copy.type !== 'text') copy.name = `${copy.name} ${t('副本')}`
+    list.splice(i + 1, 0, copy)
+    selectedId.value = copy.id
+    if (!studioActive.value && !editId.value) schedulePersist()
+  }
+
   function update(id: string, patch: LayerPatch): void {
     const layer = editTarget().find((l) => l.id === id)
     if (!layer) return
@@ -317,7 +368,7 @@ export const useWatermarkStore = defineStore('watermark', () => {
       bmp.close()
       return prep
     } catch {
-      throw new Error('图片无法解析')
+      throw new Error(t('图片无法解析'))
     }
   }
 
@@ -734,6 +785,10 @@ export const useWatermarkStore = defineStore('watermark', () => {
     enterStudio,
     exitStudio,
     selected,
+    pickingAnchor,
+    setAnchorMode,
+    placeCustomAnchor,
+    duplicate,
     effectiveLayers,
     editTarget,
     isIndividual,

@@ -3,6 +3,9 @@ import { computed } from 'vue'
 import { ImagePlus, Link2 } from 'lucide-vue-next'
 import LogoMark from '@/components/brand/LogoMark.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import { useI18n } from '@/i18n'
+
+const { t } = useI18n()
 
 const props = withDefaults(
   defineProps<{
@@ -22,8 +25,17 @@ defineEmits<{
 
 /** 按系统时间向用户问好 */
 const hour = new Date().getHours()
-const greeting =
-  hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
+const greeting = computed(() =>
+  hour < 5
+    ? t('夜深了')
+    : hour < 11
+      ? t('早上好')
+      : hour < 13
+        ? t('中午好')
+        : hour < 18
+          ? t('下午好')
+          : t('晚上好'),
+)
 
 /** 与预览画布同规则：内容中心让位到面板之外的剩余空白 */
 const shift = computed(() =>
@@ -41,10 +53,10 @@ const lift = computed(() => (props.panelBottomInset > 0 ? props.panelBottomInset
   >
     <LogoMark class="mark" />
     <h1>{{ greeting }}</h1>
-    <p>选择或拖入照片，开始今天的辑录。</p>
+    <p>{{ t('选择或拖入照片，开始今天的辑录。') }}</p>
     <div class="actions">
-      <AppButton variant="primary" @click="$emit('pick')"><ImagePlus :size="15" />选择照片</AppButton>
-      <AppButton @click="$emit('openUrl')"><Link2 :size="15" />导入链接</AppButton>
+      <AppButton variant="primary" @click="$emit('pick')"><ImagePlus :size="15" />{{ t('选择照片') }}</AppButton>
+      <AppButton @click="$emit('openUrl')"><Link2 :size="15" />{{ t('导入链接') }}</AppButton>
     </div>
   </div>
 </template>

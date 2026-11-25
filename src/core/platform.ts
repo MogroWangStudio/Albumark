@@ -1,4 +1,6 @@
 /** 平台能力检测与适配：Tauri 桌面端走插件 API，其余环境走浏览器能力。 */
+import { t } from '@/i18n'
+
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /**
@@ -63,7 +65,7 @@ export async function appDataDir(): Promise<string> {
   }
 }
 
-export async function pickDirectory(title = '选择文件夹'): Promise<string | null> {
+export async function pickDirectory(title = t('选择文件夹')): Promise<string | null> {
   if (!isTauri) return null
   const { open } = await import('@tauri-apps/plugin-dialog')
   const dir = await open({ directory: true, multiple: false, title })
@@ -77,7 +79,7 @@ export async function pickImagePaths(title = '选择照片'): Promise<string[]> 
   const paths = await open({
     multiple: true,
     title,
-    filters: [{ name: '图片文件（JPG/PNG）', extensions: ['jpg', 'jpeg', 'png'] }],
+    filters: [{ name: t('图片文件（JPG/PNG）'), extensions: ['jpg', 'jpeg', 'png'] }],
   })
   return Array.isArray(paths) ? paths : paths ? [paths] : []
 }
@@ -89,7 +91,7 @@ export async function pickZipPath(title = '导入工作项目'): Promise<string 
   const path = await open({
     multiple: false,
     title,
-    filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
+    filters: [{ name: t('ZIP 压缩包'), extensions: ['zip'] }],
   })
   return typeof path === 'string' ? path : null
 }
@@ -132,7 +134,7 @@ export async function pickSavePath(suggestedName: string): Promise<string | null
   const { save } = await import('@tauri-apps/plugin-dialog')
   const path = await save({
     defaultPath: suggestedName,
-    filters: [{ name: 'ZIP 压缩包', extensions: ['zip'] }],
+    filters: [{ name: t('ZIP 压缩包'), extensions: ['zip'] }],
   })
   return path ?? null
 }
@@ -147,7 +149,7 @@ export async function fetchImageBlob(url: string): Promise<Blob> {
   const res = await fetch(url, { mode: 'cors' })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const blob = await res.blob()
-  if (!blob.type.startsWith('image/')) throw new Error('链接内容不是图片')
+  if (!blob.type.startsWith('image/')) throw new Error(t('链接内容不是图片'))
   return blob
 }
 

@@ -6,11 +6,13 @@ import { croppedSize } from '@/types/adjust'
 import { useAdjustStore } from '@/stores/adjust'
 import { useImagesStore } from '@/stores/images'
 import { useWatermarkStore } from '@/stores/watermark'
+import { useI18n } from '@/i18n'
 
 /** 悬浮面板的水印页：单独水印开关 + 图层编辑器，工作室入口在主窗口顶栏 */
 const images = useImagesStore()
 const wm = useWatermarkStore()
 const adjust = useAdjustStore()
+const { t } = useI18n()
 
 const activeId = computed(() => images.active?.id ?? null)
 const individual = computed(() => wm.isIndividual(activeId.value))
@@ -46,8 +48,8 @@ const imgH = computed(() => {
 <template>
   <div class="panel-scroll">
     <div class="head">
-      <h1>水印</h1>
-      <span class="fl">水印仅适用于此图片</span>
+      <h1>{{ t('水印') }}</h1>
+      <span class="fl">{{ t('水印仅适用于此图片') }}</span>
       <AppSwitch
         :model-value="individual"
         :disabled="!activeId"

@@ -10,6 +10,7 @@ import {
 } from 'lucide-vue-next'
 import LogoText from '@/components/brand/LogoText.vue'
 import AppWindowControls from '@/components/ui/AppWindowControls.vue'
+import { useI18n } from '@/i18n'
 import { useHistoryStore } from '@/stores/history'
 import { toast } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -23,18 +24,23 @@ const emit = defineEmits<{
 
 const ws = useWorkspaceStore()
 const history = useHistoryStore()
+const { t } = useI18n()
 const pressed = ref(false)
 
 /** 快捷键提示按平台显示：macOS 用 ⌘，其余用 Ctrl+ */
 const mod = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl+'
 
 const undoTitle = computed(() => {
-  if (history.suspended) return '水印工作室的草稿不进入撤销历史'
-  return history.canUndo ? `撤销${history.undoLabel}（${mod}Z）` : '没有可撤销的操作'
+  if (history.suspended) return t('水印工作室的草稿不进入撤销历史')
+  return history.canUndo
+    ? t('撤销{0}（{1}Z）', t(history.undoLabel), mod)
+    : t('没有可撤销的操作')
 })
 const redoTitle = computed(() => {
-  if (history.suspended) return '水印工作室的草稿不进入撤销历史'
-  return history.canRedo ? `重做${history.redoLabel}（${mod}⇧Z）` : '没有可重做的操作'
+  if (history.suspended) return t('水印工作室的草稿不进入撤销历史')
+  return history.canRedo
+    ? t('重做{0}（{1}⇧Z）', t(history.redoLabel), mod)
+    : t('没有可重做的操作')
 })
 
 // 药丸集合组里的控件：工作区 / 导入 / 水印工作室 / 设置
@@ -91,7 +97,7 @@ function onLogoClick(): void {
     playEgg()
     return
   }
-  toast(eggLines[Math.floor(Math.random() * eggLines.length)])
+  toast(t(eggLines[Math.floor(Math.random() * eggLines.length)]))
 }
 
 onUnmounted(() => {
@@ -117,7 +123,7 @@ onUnmounted(() => {
       <button
         v-if="ws.inProject || ws.dir"
         class="ws-chip"
-        :title="ws.current?.path || ws.dir?.path || '本次会话'"
+        :title="ws.current?.path || ws.dir?.path || t('本次会话')"
         @click="emit('openWorkspace')"
       >
         <!-- 打开项目的 emoji 优先，其次当前目录的；无图标回落文件夹图形 -->
@@ -125,18 +131,18 @@ onUnmounted(() => {
           ws.current?.emoji ?? ws.dir?.emoji
         }}</span>
         <FolderOpen v-else :size="12" />
-        <span>{{ ws.current?.name ?? ws.dir?.name ?? '工作区' }}</span>
+        <span>{{ ws.current?.name ?? ws.dir?.name ?? t('工作区') }}</span>
       </button>
     </div>
 
     <div class="right">
       <!-- 撤销 / 重做：状态由编辑历史决定，禁用时给出原因 -->
-      <div class="history" role="group" aria-label="撤销与重做">
+      <div class="history" role="group" :aria-label="t('撤销与重做')">
         <button
           class="hist"
           :disabled="!history.canUndo || history.suspended"
           :title="undoTitle"
-          aria-label="撤销"
+          :aria-label="t('撤销')"
           @click="history.undo()"
         >
           <Undo2 :size="15" />
@@ -145,28 +151,33 @@ onUnmounted(() => {
           class="hist"
           :disabled="!history.canRedo || history.suspended"
           :title="redoTitle"
-          aria-label="重做"
+          :aria-label="t('重做')"
           @click="history.redo()"
         >
           <Redo2 :size="15" />
         </button>
       </div>
 
-      <div class="pill" role="toolbar" aria-label="主工具">
+      <div class="pill" role="toolbar" :aria-label="t('主工具')">
         <button class="pill-item" @click="emit('openWorkspace')">
-          <FolderOpen :size="15" /><span>工作区</span>
+          <FolderOpen :size="15" /><span>{{ t('工作区') }}</span>
         </button>
         <span class="pill-sep" />
-        <button class="pill-item" :disabled="!canImport" :title="canImport ? '导入图片' : '先进入工作区后才能导入'" @click="emit('import')">
-          <ImagePlus :size="15" /><span>导入图片</span>
+        <button
+          class="pill-item"
+          :disabled="!canImport"
+          :title="canImport ? t('导入图片') : t('先进入工作区后才能导入')"
+          @click="emit('import')"
+        >
+          <ImagePlus :size="15" /><span>{{ t('导入图片') }}</span>
         </button>
         <span class="pill-sep" />
-        <button class="pill-item" title="水印工作室" @click="emit('studio')">
-          <Brush :size="15" /><span>水印工作室</span>
+        <button class="pill-item" :title="t('水印工作室')" @click="emit('studio')">
+          <Brush :size="15" /><span>{{ t('水印工作室') }}</span>
         </button>
         <span class="pill-sep" />
         <button class="pill-item" @click="emit('settings')">
-          <Settings :size="15" /><span>设置</span>
+          <Settings :size="15" /><span>{{ t('设置') }}</span>
         </button>
       </div>
 

@@ -9,6 +9,7 @@ import { copyDir, joinPath, openWriter } from '@/core/fs'
 import { fmtSize } from '@/core/format'
 import { isTauri, pickDirectory, pickSavePath, revealInFolder } from '@/core/platform'
 import { toast } from '@/stores/toast'
+import { useI18n } from '@/i18n'
 
 /**
  * 工作项目 / 工作目录的导出确认对话框：先看文件详情（文件数 · 总大小），
@@ -21,6 +22,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ close: [] }>()
+
+const { t } = useI18n()
 
 type Phase = 'input' | 'running' | 'done'
 const phase = ref<Phase>('input')
@@ -40,11 +43,11 @@ watch(
     progress.value = { done: 0, total: 0 }
     resultPath.value = null
     error.value = null
-    const t = props.target
-    if (t) {
-      void statFolder(t.path).then(
+    const tgt = props.target
+    if (tgt) {
+      void statFolder(tgt.path).then(
         (s) => {
-          if (props.target?.path === t.path) stats.value = s
+          if (props.target?.path === tgt.path) stats.value = s
         },
         () => {
           /* 统计失败保持空态，确认时仍可尝试导出 */
@@ -68,8 +71,8 @@ function timestamp(): string {
 
 /** 确认导出：按平台与格式分流落盘（详见各分支注释） */
 async function confirmExport(): Promise<void> {
-  const t = props.target
-  if (!t || phase.value === 'running') return
+  const tgt = props.target
+  if (!tgt || phase.value === 'running') return
   phase.value = 'running'
   error.value = null
   resultPath.value = null
@@ -78,20 +81,20 @@ async function confirmExport(): Promise<void> {
       let dest: string | null = null
       let displayPath: string
       if (isTauri) {
-        dest = await pickSavePath(`${t.name}.zip`)
+        dest = await pickSavePath(`${tgt.name}.zip`)
         if (!dest) {
           phase.value = 'input' // 用户取消另存为：留在确认态
           return
         }
         displayPath = dest
       } else {
-        const sub = `${t.name}_${timestamp()}`
+        const sub = `${tgt.name}_${timestamp()}`
         dest = `Albumark/${sub}.zip`
         displayPath = `Documents/Albumark/${sub}.zip`
       }
       const w = await openWriter(dest, !isTauri)
       try {
-        await zipFolderTo(t.path, (chunk) => w.write(chunk), (done, total) => {
+        await zipFolderTo(tgt.path, (chunk) => w.write(chunk), (done, total) => {
           progress.value = { done, total }
         })
       } finally {
@@ -100,22 +103,22 @@ async function confirmExport(): Promise<void> {
       resultPath.value = displayPath
     } else {
       if (isTauri) {
-        const dir = await pickDirectory('选择导出位置')
+        const dir = await pickDirectory(t('选择导出位置'))
         if (!dir) {
           phase.value = 'input'
           return
         }
-        const dest = await joinPath(dir, t.name)
+        const dest = await joinPath(dir, tgt.name)
         if (await fsExists(dest)) {
-          toast('目标位置已有同名文件夹，换一个位置或重命名后再导出', 'error')
+          toast(t('目标位置已有同名文件夹，换一个位置或重命名后再导出'), 'error')
           phase.value = 'input'
           return
         }
-        await copyDir(t.path, dest)
+        await copyDir(tgt.path, dest)
         resultPath.value = dest
       } else {
-        const sub = `${t.name}_${timestamp()}`
-        await copyDir(t.path, `Albumark/${sub}`, true)
+        const sub = `${tgt.name}_${timestamp()}`
+        await copyDir(tgt.path, `Albumark/${sub}`, true)
         resultPath.value = `Documents/Albumark/${sub}`
       }
     }
@@ -139,7 +142,7 @@ async function openResult(): Promise<void> {
 <template>
   <AppDialog
     :open="open"
-    :title="target?.kind === 'dir' ? '导出工作目录' : '导出工作项目'"
+    :title="target?.kind === 'dir' ? t('导出工作目录') : t('导出工作项目')"
     :width="420"
     @close="requestClose"
   >
@@ -148,40 +151,41 @@ async function openResult(): Promise<void> {
       <div class="count">
         <FolderOpen :size="15" />
         <span>
-          「{{ target?.name }}」
+          {{ t('「{0}」', target?.name ?? '') }}
           <template v-if="stats">
-            · <strong>{{ stats.files }}</strong> 个文件 · {{ fmtSize(stats.bytes) }}
+            · <strong>{{ stats.files }}</strong> {{ t('个文件') }} · {{ fmtSize(stats.bytes) }}
           </template>
-          <template v-else> · 正在统计文件…</template>
+          <template v-else> · {{ t('正在统计文件…') }}</template>
         </span>
       </div>
 
       <div class="mode-pick">
-        <span class="fl">导出格式</span>
+        <span class="fl">{{ t('导出格式') }}</span>
         <AppSegment
           v-model="format"
           :options="[
-            { value: 'zip', label: 'ZIP 压缩包' },
-            { value: 'folder', label: '文件夹' },
+            { value: 'zip', label: t('ZIP 压缩包') },
+            { value: 'folder', label: t('文件夹') },
           ]"
         />
       </div>
       <p class="hint">
-        {{ isTauri
-          ? (format === 'zip' ? '确认后选择保存位置，打包为 ZIP 压缩包。' : '确认后选择导出位置，文件夹原样复制。')
-          : '将写入公共 Documents/Albumark/ 下按名称与时间命名的位置。'
+        {{
+          isTauri
+            ? (format === 'zip' ? t('确认后选择保存位置，打包为 ZIP 压缩包。') : t('确认后选择导出位置，文件夹原样复制。'))
+            : t('将写入公共 Documents/Albumark/ 下按名称与时间命名的位置。')
         }}
-        导出内容为原样备份，含项目清单，解压到工作目录即可重新识别打开。
+        {{ t('导出内容为原样备份，含项目清单，解压到工作目录即可重新识别打开。') }}
       </p>
 
       <p v-if="error" class="error" role="alert">
-        <TriangleAlert :size="13" />导出失败：{{ error }}
+        <TriangleAlert :size="13" />{{ t('导出失败：{0}', error) }}
       </p>
 
       <div class="btns">
-        <AppButton variant="ghost" @click="requestClose">取消</AppButton>
+        <AppButton variant="ghost" @click="requestClose">{{ t('取消') }}</AppButton>
         <AppButton variant="primary" @click="confirmExport">
-          <FileArchive v-if="format === 'zip'" :size="14" /><FolderDown v-else :size="14" />导出
+          <FileArchive v-if="format === 'zip'" :size="14" /><FolderDown v-else :size="14" />{{ t('导出') }}
         </AppButton>
       </div>
     </template>
@@ -190,7 +194,7 @@ async function openResult(): Promise<void> {
     <template v-else-if="phase === 'running'">
       <div class="count">
         <FolderDown :size="15" />
-        <span>正在导出「{{ target?.name }}」…</span>
+        <span>{{ t('正在导出「{0}」…', target?.name ?? '') }}</span>
       </div>
       <div class="track">
         <div
@@ -198,21 +202,21 @@ async function openResult(): Promise<void> {
           :style="{ width: progress.total ? `${Math.round((progress.done / progress.total) * 100)}%` : '0%' }"
         />
       </div>
-      <p class="status">{{ progress.done }} / {{ progress.total }} 个文件</p>
+      <p class="status">{{ t('{0} / {1} 个文件', progress.done, progress.total) }}</p>
     </template>
 
     <!-- ③ 完成：目的地 + 打开所在文件夹 -->
     <template v-else>
       <div class="count">
         <FolderDown :size="15" />
-        <span>已导出「{{ target?.name }}」</span>
+        <span>{{ t('已导出「{0}」', target?.name ?? '') }}</span>
       </div>
       <p v-if="resultPath" class="dest mono">{{ resultPath }}</p>
       <div class="btns">
         <AppButton v-if="isTauri" @click="openResult">
-          <FolderOpen :size="14" />打开所在文件夹
+          <FolderOpen :size="14" />{{ t('打开所在文件夹') }}
         </AppButton>
-        <AppButton variant="primary" @click="requestClose">完成</AppButton>
+        <AppButton variant="primary" @click="requestClose">{{ t('完成') }}</AppButton>
       </div>
     </template>
   </AppDialog>

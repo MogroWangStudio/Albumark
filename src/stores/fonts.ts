@@ -76,6 +76,15 @@ export const useFontsStore = defineStore('fonts', () => {
     return typeof (window as { queryLocalFonts?: unknown }).queryLocalFonts === 'function'
   }
 
+  /**
+   * 先铺常用清单（不触发系统字体权限请求）：设置页下拉首次打开就有内容。
+   * 真正的系统字体扫描仍由 ensureFonts 在用户聚焦 / 点击时发起，成功后
+   * 整表替换；失败则保留这份清单。
+   */
+  function ensureFallback(): void {
+    if (!fonts.value.length) fonts.value = FALLBACK
+  }
+
   async function ensureFonts(): Promise<void> {
     if (loaded.value || loading.value) return
     loading.value = true
@@ -120,5 +129,5 @@ export const useFontsStore = defineStore('fonts', () => {
       .filter((g) => g.items.length)
   }
 
-  return { fonts, loaded, loading, denied, supportLocalFonts, ensureFonts, grouped }
+  return { fonts, loaded, loading, denied, supportLocalFonts, ensureFonts, ensureFallback, grouped }
 })

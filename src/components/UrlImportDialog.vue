@@ -4,10 +4,12 @@ import { CircleAlert, CircleCheck, LoaderCircle } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import { useImagesStore } from '@/stores/images'
+import { useI18n } from '@/i18n'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
+const { t } = useI18n()
 const images = useImagesStore()
 const text = ref('')
 const running = ref(false)
@@ -62,7 +64,7 @@ function close(): void {
 </script>
 
 <template>
-  <AppDialog :open="props.open" title="从链接导入照片" @close="close">
+  <AppDialog :open="props.open" :title="t('从链接导入照片')" @close="close">
     <textarea
       v-model="text"
       class="urls"
@@ -74,10 +76,10 @@ function close(): void {
     <div class="row">
       <AppButton variant="primary" :disabled="!hasInput || running" @click="start">
         <LoaderCircle v-if="running" :size="14" class="spin" />
-        {{ running ? '导入中…' : '开始导入' }}
+        {{ running ? t('导入中…') : t('开始导入') }}
       </AppButton>
-      <AppButton variant="ghost" @click="close">关闭</AppButton>
-      <span v-if="okCount" class="ok-hint">已导入 {{ okCount }} 张</span>
+      <AppButton variant="ghost" @click="close">{{ t('关闭') }}</AppButton>
+      <span v-if="okCount" class="ok-hint">{{ t('已导入 {0} 张', okCount) }}</span>
     </div>
     <ul v-if="rows.length" class="results">
       <li v-for="r in rows" :key="r.url" :class="r.status">

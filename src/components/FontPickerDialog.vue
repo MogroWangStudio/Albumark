@@ -4,6 +4,7 @@ import { Check, Search } from 'lucide-vue-next'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import { FONT_CATEGORY_LABELS, useFontsStore, type FontCategory } from '@/stores/fonts'
 import { toast } from '@/stores/toast'
+import { useI18n } from '@/i18n'
 
 /** 独立的字体选择窗口：列出系统全部字体（按语言分类），行内以该字体本身渲染预览。 */
 const props = defineProps<{
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   select: [family: string]
 }>()
 
+const { t } = useI18n()
 const fonts = useFontsStore()
 const query = ref('')
 const activeCat = ref<FontCategory | 'all'>('all')
@@ -52,7 +54,7 @@ function quote(family: string): string {
 
 function pick(family: string): void {
   const known = fonts.fonts.some((f) => f.family === family)
-  if (!known) toast(`已使用字体「${family}」`, 'success') // 清单外键入的名称提示生效
+  if (!known) toast(t('已使用字体「{0}」', family), 'success') // 清单外键入的名称提示生效
   emit('select', family)
   emit('close')
 }
@@ -65,7 +67,7 @@ function onSearchEnter(): void {
 </script>
 
 <template>
-  <AppDialog :open="open" title="选择字体" :width="560" @close="emit('close')">
+  <AppDialog :open="open" :title="t('选择字体')" :width="560" @close="emit('close')">
     <div class="picker">
       <div class="search-row">
         <Search :size="14" class="search-icon" />
@@ -74,19 +76,19 @@ function onSearchEnter(): void {
           v-model="query"
           class="search"
           type="text"
-          aria-label="搜索字体"
-          placeholder="搜索字体，回车应用输入的名称"
+          :aria-label="t('搜索字体')"
+          :placeholder="t('搜索字体，回车应用输入的名称')"
           spellcheck="false"
           @keyup.enter="onSearchEnter"
         />
       </div>
-      <div class="cats" role="tablist" aria-label="按语言分类">
+      <div class="cats" role="tablist" :aria-label="t('按语言分类')">
         <button
           class="cat"
           :class="{ on: activeCat === 'all' }"
           @click="activeCat = 'all'"
         >
-          全部
+          {{ t('全部') }}
         </button>
         <button
           v-for="c in categories"
@@ -95,13 +97,13 @@ function onSearchEnter(): void {
           :class="{ on: activeCat === c }"
           @click="activeCat = activeCat === c ? 'all' : c"
         >
-          {{ FONT_CATEGORY_LABELS[c] }}
+          {{ t(FONT_CATEGORY_LABELS[c]) }}
         </button>
       </div>
-      <div class="list" role="listbox" aria-label="系统字体">
-        <p v-if="fonts.loading && !fonts.fonts.length" class="status">正在读取系统字体…</p>
+      <div class="list" role="listbox" :aria-label="t('系统字体')">
+        <p v-if="fonts.loading && !fonts.fonts.length" class="status">{{ t('正在读取系统字体…') }}</p>
         <template v-else>
-          <p v-if="!filtered.length" class="status">没有匹配的字体，回车可应用输入的名称。</p>
+          <p v-if="!filtered.length" class="status">{{ t('没有匹配的字体，回车可应用输入的名称。') }}</p>
           <button
             v-for="f in filtered"
             :key="f.family"
@@ -111,13 +113,13 @@ function onSearchEnter(): void {
             @click="pick(f.family)"
           >
             <span class="fname" :style="{ fontFamily: quote(f.family) }">{{ f.family }}</span>
-            <span class="fcat">{{ FONT_CATEGORY_LABELS[f.category] }}</span>
+            <span class="fcat">{{ t(FONT_CATEGORY_LABELS[f.category]) }}</span>
             <Check v-if="f.family === current" :size="14" class="fmark" />
           </button>
         </template>
       </div>
       <p v-if="fonts.denied" class="status denied">
-        浏览器未授权读取系统字体，列表为常用字体清单；可直接键入字体名称后回车。
+        {{ t('浏览器未授权读取系统字体，列表为常用字体清单；可直接键入字体名称后回车。') }}
       </p>
     </div>
   </AppDialog>

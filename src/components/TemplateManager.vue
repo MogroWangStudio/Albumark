@@ -6,12 +6,14 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
 import type { DropdownItem } from '@/components/ui/AppDropdown.vue'
 import { renderTemplateThumb } from '@/core/sample'
+import { useI18n } from '@/i18n'
 import { useTemplatesStore } from '@/stores/templates'
 import type { WatermarkTemplate } from '@/types/watermark'
 
 const emit = defineEmits<{ edit: [id: string]; create: [] }>()
 
 const templates = useTemplatesStore()
+const { t } = useI18n()
 
 /* ---------- 缩略图：canvas 按模板 id 登记，列表变化后逐个重绘 ---------- */
 
@@ -30,17 +32,17 @@ async function renderAll(): Promise<void> {
   // 等 DOM 更新完成即可：getBoundingClientRect 会强制同步布局，不依赖 rAF
   // （后台窗口/无焦点标签页的 rAF 会被浏览器暂停，await 它可能永远挂起）
   await nextTick()
-  for (const t of templates.all) {
-    const canvas = thumbEls.get(t.id)
+  for (const tpl of templates.all) {
+    const canvas = thumbEls.get(tpl.id)
     if (!canvas) continue
-    await renderTemplateThumb(canvas, t.layers, t.assets)
+    await renderTemplateThumb(canvas, tpl.layers, tpl.assets)
     if (seq !== renderSeq) return
   }
 }
 
 onMounted(renderAll)
 watch(
-  () => templates.all.map((t) => `${t.id}:${t.name}:${t.layers.length}:${t.updatedAt ?? t.createdAt}`).join('|'),
+  () => templates.all.map((tpl) => `${tpl.id}:${tpl.name}:${tpl.layers.length}:${tpl.updatedAt ?? tpl.createdAt}`).join('|'),
   renderAll,
 )
 
@@ -50,40 +52,40 @@ const renameTarget = ref<WatermarkTemplate | null>(null)
 const renameName = ref('')
 const removeTarget = ref<WatermarkTemplate | null>(null)
 
-function cardItems(t: WatermarkTemplate): DropdownItem[] {
+function cardItems(tpl: WatermarkTemplate): DropdownItem[] {
   return [
-    { label: '编辑', action: () => emit('edit', t.id) },
-    { label: '复制为新模板', action: () => void templates.duplicate(t.id) },
-    ...(t.builtin
+    { label: t('编辑'), action: () => emit('edit', tpl.id) },
+    { label: t('复制为新模板'), action: () => void templates.duplicate(tpl.id) },
+    ...(tpl.builtin
       ? []
       : [
           {
-            label: '重命名',
+            label: t('重命名'),
             action: () => {
-              renameTarget.value = t
-              renameName.value = t.name
+              renameTarget.value = tpl
+              renameName.value = tpl.name
             },
           },
-          { label: '删除', danger: true, action: () => (removeTarget.value = t) },
+          { label: t('删除'), danger: true, action: () => (removeTarget.value = tpl) },
         ]),
   ]
 }
 
 function confirmRename(): void {
-  const t = renameTarget.value
-  if (t) templates.rename(t.id, renameName.value)
+  const tpl = renameTarget.value
+  if (tpl) templates.rename(tpl.id, renameName.value)
   renameTarget.value = null
 }
 
 function confirmRemove(): void {
-  const t = removeTarget.value
+  const tpl = removeTarget.value
   removeTarget.value = null
-  if (t) templates.remove(t.id)
+  if (tpl) templates.remove(tpl.id)
 }
 
-function fmtDate(t?: number): string {
-  if (!t) return ''
-  const d = new Date(t)
+function fmtDate(ts?: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
 }
 </script>
@@ -91,19 +93,19 @@ function fmtDate(t?: number): string {
 <template>
   <div class="tmanage">
     <div class="grid">
-      <div v-for="t in templates.all" :key="t.id" class="tcard" @click="emit('edit', t.id)">
+      <div v-for="tpl in templates.all" :key="tpl.id" class="tcard" @click="emit('edit', tpl.id)">
         <div class="thumb-box">
-          <canvas :ref="setThumbRef(t.id)" class="thumb" />
+          <canvas :ref="setThumbRef(tpl.id)" class="thumb" />
         </div>
         <div class="tmeta">
-          <span class="tname" :title="t.name">{{ t.name }}</span>
-          <span class="tinfo">{{ t.layers.length }} 个图层<template v-if="t.updatedAt ?? t.createdAt"> · {{ fmtDate(t.updatedAt ?? t.createdAt) }}</template></span>
+          <span class="tname" :title="t(tpl.name)">{{ t(tpl.name) }}</span>
+          <span class="tinfo">{{ t('{0} 个图层', tpl.layers.length) }}<template v-if="tpl.updatedAt ?? tpl.createdAt"> · {{ fmtDate(tpl.updatedAt ?? tpl.createdAt) }}</template></span>
         </div>
-        <span v-if="t.builtin" class="badge">内置</span>
-        <AppDropdown :items="cardItems(t)" align="right">
+        <span v-if="tpl.builtin" class="badge">{{ t('内置') }}</span>
+        <AppDropdown :items="cardItems(tpl)" align="right">
           <template #trigger>
             <!-- 点击由 .dd-trigger 处理并阻止冒泡，无需在此 stop（会拦断 toggle） -->
-            <button class="tmore" title="更多操作"><MoreHorizontal :size="15" /></button>
+            <button class="tmore" :title="t('更多操作')"><MoreHorizontal :size="15" /></button>
           </template>
         </AppDropdown>
       </div>
@@ -112,33 +114,33 @@ function fmtDate(t?: number): string {
     <!-- 重命名 -->
     <AppDialog
       :open="!!renameTarget"
-      title="重命名模板"
+      :title="t('重命名模板')"
       :width="360"
       @close="renameTarget = null"
     >
       <input
         v-model="renameName"
         class="text-input"
-        placeholder="模板名称"
+        :placeholder="t('模板名称')"
         @keyup.enter="confirmRename"
       />
       <div class="confirm-btns">
-        <AppButton variant="ghost" @click="renameTarget = null">取消</AppButton>
-        <AppButton variant="primary" @click="confirmRename"><Pencil :size="13" />重命名</AppButton>
+        <AppButton variant="ghost" @click="renameTarget = null">{{ t('取消') }}</AppButton>
+        <AppButton variant="primary" @click="confirmRename"><Pencil :size="13" />{{ t('重命名') }}</AppButton>
       </div>
     </AppDialog>
 
     <!-- 删除确认 -->
     <AppDialog
       :open="!!removeTarget"
-      title="删除模板"
+      :title="t('删除模板')"
       :width="380"
       @close="removeTarget = null"
     >
-      <p class="confirm-text">将删除模板「{{ removeTarget?.name }}」，此操作不可撤销。确定删除吗？</p>
+      <p class="confirm-text">{{ t('将删除模板「{0}」，此操作不可撤销。确定删除吗？', removeTarget?.name ?? '') }}</p>
       <div class="confirm-btns">
-        <AppButton variant="ghost" @click="removeTarget = null">取消</AppButton>
-        <AppButton variant="danger" @click="confirmRemove"><Trash2 :size="13" />删除</AppButton>
+        <AppButton variant="ghost" @click="removeTarget = null">{{ t('取消') }}</AppButton>
+        <AppButton variant="danger" @click="confirmRemove"><Trash2 :size="13" />{{ t('删除') }}</AppButton>
       </div>
     </AppDialog>
   </div>

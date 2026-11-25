@@ -6,9 +6,11 @@ import AppDialog from '@/components/ui/AppDialog.vue'
 import { APP_VERSION } from '@/core/version'
 import { openReleasePage } from '@/core/updater'
 import { isCapacitor } from '@/core/platform'
+import { useI18n } from '@/i18n'
 import { useUpdaterStore } from '@/stores/updater'
 
 const updater = useUpdaterStore()
+const { t } = useI18n()
 
 /** 进度条宽度：总大小未知（null）时不驱动宽度，走不确定态动画 */
 const fillWidth = computed(() =>
@@ -19,7 +21,7 @@ const fillWidth = computed(() =>
 <template>
   <AppDialog
     :open="updater.dialogOpen"
-    :title="updater.isDowngrade ? '版本回退' : '软件更新'"
+    :title="updater.isDowngrade ? t('版本回退') : t('软件更新')"
     :width="520"
     @close="updater.closeDialog"
   >
@@ -34,10 +36,15 @@ const fillWidth = computed(() =>
       <!-- 降级警告：覆盖安装、不可自动回滚，先讲清代价再给下载入口 -->
       <div v-if="updater.isDowngrade" class="downgrade-warn">
         <p>
-          这是降级安装：旧版本会覆盖当前版本，且不会自动回滚。项目数据与设置可能已被新版本改写，
-          旧版本未必能完整读取，可能出现不可逆的 bug——建议先备份工作目录。
+          {{
+            t(
+              '这是降级安装：旧版本会覆盖当前版本，且不会自动回滚。项目数据与设置可能已被新版本改写，旧版本未必能完整读取，可能出现不可逆的 bug——建议先备份工作目录。',
+            )
+          }}
         </p>
-        <p v-if="isCapacitor">安卓系统不允许覆盖安装更低版本，需先卸载当前应用，本地应用数据会一并清除。</p>
+        <p v-if="isCapacitor">
+          {{ t('安卓系统不允许覆盖安装更低版本，需先卸载当前应用，本地应用数据会一并清除。') }}
+        </p>
       </div>
 
       <!-- 下载与安装状态：进度条 + 就地走字的状态行 -->
@@ -62,8 +69,8 @@ const fillWidth = computed(() =>
 
       <!-- 更新日志：Release 说明原文（纯文本，外部内容不注入 DOM 结构） -->
       <section class="notes">
-        <h3>更新内容</h3>
-        <p class="notes-text">{{ updater.updateInfo.notes || '本次更新没有附更新说明。' }}</p>
+        <h3>{{ t('更新内容') }}</h3>
+        <p class="notes-text">{{ updater.updateInfo.notes || t('本次更新没有附更新说明。') }}</p>
       </section>
 
       <!-- 动作随状态切换，按钮永远朝着一个明确的下一步 -->
@@ -76,7 +83,7 @@ const fillWidth = computed(() =>
             @click="updater.installStaged"
           >
             <LoaderCircle v-if="updater.updateState === 'installing'" :size="13" class="spin" />
-            <RefreshCw v-else :size="13" />立即重启安装
+            <RefreshCw v-else :size="13" />{{ t('立即重启安装') }}
           </AppButton>
           <AppButton
             size="sm"
@@ -84,42 +91,42 @@ const fillWidth = computed(() =>
             :disabled="updater.updateState === 'installing'"
             @click="updater.deferInstall"
           >
-            稍后
+            {{ t('稍后') }}
           </AppButton>
         </template>
         <template v-else-if="updater.updateInfo.assetUrl">
           <template v-if="updater.isDownloading">
             <AppButton size="sm" variant="primary" @click="updater.pauseDownload">
-              <Pause :size="13" />暂停
+              <Pause :size="13" />{{ t('暂停') }}
             </AppButton>
-            <AppButton size="sm" variant="ghost" @click="updater.cancelDownload">取消</AppButton>
+            <AppButton size="sm" variant="ghost" @click="updater.cancelDownload">{{ t('取消') }}</AppButton>
           </template>
           <template v-else-if="updater.updateState === 'paused'">
             <AppButton size="sm" variant="primary" @click="updater.resumeDownload">
-              <Play :size="13" />继续下载
+              <Play :size="13" />{{ t('继续下载') }}
             </AppButton>
-            <AppButton size="sm" variant="ghost" @click="updater.cancelDownload">取消</AppButton>
+            <AppButton size="sm" variant="ghost" @click="updater.cancelDownload">{{ t('取消') }}</AppButton>
           </template>
           <template v-else>
             <AppButton size="sm" variant="primary" @click="updater.installUpdate">
-              <Download :size="13" />{{ updater.isDowngrade ? '下载并降级' : '立即更新' }}
+              <Download :size="13" />{{ updater.isDowngrade ? t('下载并降级') : t('立即更新') }}
             </AppButton>
             <AppButton size="sm" variant="ghost" @click="openReleasePage(updater.updateInfo.url)">
-              <ExternalLink :size="13" />发布页
+              <ExternalLink :size="13" />{{ t('发布页') }}
             </AppButton>
           </template>
         </template>
         <template v-else>
           <!-- 没有本平台包体：自动更新走不通，引导去发布页手动获取 -->
-          <span class="no-asset">本平台暂无自动更新包，请前往发布页手动下载</span>
+          <span class="no-asset">{{ t('本平台暂无自动更新包，请前往发布页手动下载') }}</span>
           <AppButton size="sm" variant="primary" @click="openReleasePage(updater.updateInfo.url)">
-            <ExternalLink :size="13" />打开发布页
+            <ExternalLink :size="13" />{{ t('打开发布页') }}
           </AppButton>
         </template>
       </div>
     </div>
     <!-- 防御：弹窗在没有检查结果时被打开（正常入口不会走到这里） -->
-    <p v-else class="empty">尚未检查更新。</p>
+    <p v-else class="empty">{{ t('尚未检查更新。') }}</p>
   </AppDialog>
 </template>
 
