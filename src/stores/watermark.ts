@@ -190,10 +190,11 @@ export const useWatermarkStore = defineStore('watermark', () => {
     return !!id && id in perImage.value
   }
 
-  /** 编辑上下文跟随当前照片：有独立水印则编辑它，否则回全局 */
+  /** 编辑上下文跟随当前照片：有独立水印则编辑它，否则回全局。
+   *  切换查看的照片不自动选中任何图层——选中是用户的主动动作。 */
   function setEditContext(id: string | null): void {
     editId.value = id && perImage.value[id] ? id : null
-    selectedId.value = editTarget()[0]?.id ?? null
+    selectedId.value = null
   }
 
   /** 开启时把当前生效的图层深拷贝为这张照片的独立水印，关闭即恢复项目级水印 */

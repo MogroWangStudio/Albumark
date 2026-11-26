@@ -214,9 +214,9 @@ const messages: Record<string, string> = {
   "先选择一张背景图": "Choose a background image first",
   "图片无法解析": "Cannot read this image",
   "导入水印模板": "Import watermark template",
-  "水印模板 (.amwm)": "Watermark template (.amwm)",
+  "水印模板 (.zip)": "Watermark template (.zip)",
   "导入模板…": "Import template…",
-  "导出 .amwm": "Export .amwm",
+  "导出模板": "Export template",
   "已导入模板「{0}」": "Imported template “{0}”",
   "已导出模板「{0}」": "Exported template “{0}”",
   "导出模板失败": "Failed to export template",
@@ -246,6 +246,23 @@ const messages: Record<string, string> = {
   "韩文": "Korean",
   "等宽": "Monospace",
   "其他": "Other",
+
+  // 工作室测试图片
+  "选择测试图片": "Choose a test image",
+  "图片文件（JPG/PNG/WEBP）": "Image files (JPG/PNG/WEBP)",
+  "测试图片…": "Test image…",
+  "用一张自己的照片检查水印": "Check the watermark against one of your own photos",
+  "恢复样张": "Restore sample",
+  "回到内置横 / 竖样张": "Return to the built-in horizontal / vertical sample",
+
+  // 选中框手柄
+  "调整大小": "Resize",
+
+  // 模板 zip 描述 / 数据文件
+  "水印模板缺少描述文件": "The watermark template is missing its descriptor file",
+  "水印模板描述文件损坏": "The watermark template descriptor is corrupted",
+  "水印模板缺少水印数据": "The watermark template is missing its watermark data",
+  "水印模板数据损坏": "The watermark template data is corrupted",
 }
 
 export default messages

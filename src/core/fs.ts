@@ -82,6 +82,53 @@ export async function fileSize(path: string, toDocuments = false): Promise<numbe
   return st.type === 'file' ? Number(st.size ?? 0) : 0
 }
 
+/**
+ * 递归统计文件夹占用（工作目录 / 工作项目卡片的体积显示用）。
+ * 受限并发遍历，避免一次压满磁盘 I/O；文件数超过 limit 时停止计数并标记
+ * partial（数字仍是已统计部分），防止用户把超大目录设为工作目录时卡住。
+ */
+export async function dirSize(
+  path: string,
+  limit = 20000,
+): Promise<{ bytes: number; files: number; partial: boolean }> {
+  let bytes = 0
+  let files = 0
+  let partial = false
+  const queue: string[] = [path]
+  while (queue.length) {
+    const batch = queue.splice(0, 16)
+    await Promise.all(
+      batch.map(async (dir) => {
+        let entries: DirEntry[]
+        try {
+          entries = await readDir(dir)
+        } catch {
+          partial = true
+          return
+        }
+        for (const e of entries) {
+          if (!e.name) continue
+          if (e.isDir) {
+            queue.push(await joinPath(dir, e.name))
+            continue
+          }
+          if (files >= limit) {
+            partial = true
+            continue
+          }
+          files++
+          try {
+            bytes += await fileSize(await joinPath(dir, e.name))
+          } catch {
+            partial = true
+          }
+        }
+      }),
+    )
+  }
+  return { bytes, files, partial }
+}
+
 export interface SequentialWriter {
   write(chunk: Uint8Array): Promise<void>
   close(): Promise<void>

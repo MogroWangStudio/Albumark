@@ -1,21 +1,23 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ArrowLeft, Check, Plus, Save } from 'lucide-vue-next'
+import { ArrowLeft, Check, Download, ImagePlus, Plus, RotateCcw, Save } from 'lucide-vue-next'
 import LayerEditor from '@/components/LayerEditor.vue'
 import TemplateManager from '@/components/TemplateManager.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import { type AssetMap } from '@/core/draw'
 import { backgroundAspect, layoutBackgroundFrame } from '@/core/bg'
 import { loadSampleBitmap, paintComposed, SAMPLE_VARIANTS, type SampleOrientation } from '@/core/sample'
-import { hitTest, layerAnchor, layerPivot, measureLayer } from '@/core/layout'
+import { hitTest, layerAnchor, layerHandles, layerPivot, measureLayer } from '@/core/layout'
 import { clampPanAxis, rubberband } from '@/core/viewmotion'
+import { pickBinaryFile, saveBinaryFile, isTauri } from '@/core/platform'
+import { packWatermarkTemplate, TEMPLATE_MIME, watermarkFileName } from '@/core/watermarkFile'
 import { resolveTokens, SAMPLE_EXIF } from '@/core/tokens'
 import { useI18n } from '@/i18n'
 import { toast } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplatesStore } from '@/stores/templates'
 import { useWatermarkStore } from '@/stores/watermark'
-import type { BackgroundLayer, ImageLayer, TextLayer, WatermarkLayer } from '@/types/watermark'
+import type { BackgroundLayer, ImageLayer, TextLayer, WatermarkLayer, WatermarkTemplate } from '@/types/watermark'
 
 const emit = defineEmits<{ back: [] }>()
 
@@ -87,6 +89,30 @@ async function saveAsNew(): Promise<void> {
   toast(t('已保存模板「{0}」', name), 'success')
 }
 
+/** 导出当前编辑内容为单个 .zip 模板（不要求先保存，便于快速分享草稿） */
+async function exportEditing(): Promise<void> {
+  const data = wm.serialize()
+  const meta = editingId.value ? templates.get(editingId.value) : undefined
+  const tpl: WatermarkTemplate = {
+    id: editingId.value ?? 'current',
+    name: meta?.name ?? editingName.value,
+    createdAt: meta?.createdAt ?? Date.now(),
+    layers: data.layers,
+    assets: data.assets,
+  }
+  try {
+    const saved = await saveBinaryFile(watermarkFileName(tpl.name), packWatermarkTemplate(tpl), {
+      label: t('水印模板 (.zip)'),
+      extensions: ['zip'],
+      mime: TEMPLATE_MIME,
+      sub: 'watermarks',
+    })
+    if (saved) toast(t('已导出模板「{0}」', tpl.name), 'success')
+  } catch (err) {
+    toast(err instanceof Error ? err.message : t('导出模板失败'), 'error')
+  }
+}
+
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 const boxEl = ref<HTMLDivElement | null>(null)
 /** 画布上悬停/拖动到图层时的抓取光标 */
@@ -120,20 +146,32 @@ const sampleH = computed(() => testH.value)
 /** 源样张缓存（按横 / 竖选择）与最终裁剪结果缓存（按尺寸） */
 const sourceBmps = new Map<SampleOrientation, ImageBitmap>()
 const sampleBmps = new Map<string, ImageBitmap>()
+/** 自定义测试图片：非空时完全取代内置横 / 竖样张 */
+let customSource: ImageBitmap | null = null
+let customKey = ''
+let customSeq = 0
+const hasCustomSample = ref(false)
+const customFileInput = ref<HTMLInputElement | null>(null)
 
 function sourceOrientation(): SampleOrientation {
   return testH.value > testW.value ? 'portrait' : 'landscape'
 }
 
 async function ensureSampleBitmap(): Promise<ImageBitmap> {
-  const key = `${sourceOrientation()}:${testW.value}x${testH.value}`
+  const key = `${customSource ? `c:${customKey}` : sourceOrientation()}:${testW.value}x${testH.value}`
   const cached = sampleBmps.get(key)
   if (cached) return cached
-  const o = sourceOrientation()
-  let src = sourceBmps.get(o)
-  if (!src) {
-    src = await loadSampleBitmap(SAMPLE_VARIANTS[o])
-    sourceBmps.set(o, src)
+  let src: ImageBitmap
+  if (customSource) {
+    src = customSource
+  } else {
+    const o = sourceOrientation()
+    let loaded = sourceBmps.get(o)
+    if (!loaded) {
+      loaded = await loadSampleBitmap(SAMPLE_VARIANTS[o])
+      sourceBmps.set(o, loaded)
+    }
+    src = loaded
   }
   // cover 裁切：保持样张原比例，裁掉多余部分铺满目标画布
   const canvas = document.createElement('canvas')
@@ -155,6 +193,67 @@ async function ensureSampleBitmap(): Promise<ImageBitmap> {
   }
   sampleBmps.set(key, bmp)
   return bmp
+}
+
+function clearSampleCache(): void {
+  for (const b of sampleBmps.values()) b.close()
+  sampleBmps.clear()
+}
+
+/** 载入用户自己的测试图片：工作室里用真实照片检验水印观感 */
+async function setCustomSample(blob: Blob): Promise<void> {
+  try {
+    const bmp = await createImageBitmap(blob)
+    customSource?.close()
+    customSource = bmp
+    customKey = `${++customSeq}:${bmp.width}x${bmp.height}`
+    hasCustomSample.value = true
+    clearSampleCache()
+    sampleBmp = null
+    await applyTestSize(testW.value, testH.value)
+  } catch {
+    toast(t('图片无法解析'), 'error')
+  }
+}
+
+function chooseTestImage(): void {
+  if (isTauri) {
+    void pickTestImage()
+    return
+  }
+  customFileInput.value?.click()
+}
+
+async function pickTestImage(): Promise<void> {
+  const picked = await pickBinaryFile(
+    t('选择测试图片'),
+    ['jpg', 'jpeg', 'png', 'webp'],
+    t('图片文件（JPG/PNG/WEBP）'),
+  )
+  if (!picked) return
+  const ext = picked.name.toLowerCase().split('.').pop()
+  const type = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
+  await setCustomSample(
+    new Blob([picked.bytes.slice().buffer as ArrayBuffer], { type }),
+  )
+}
+
+async function onCustomFile(e: Event): Promise<void> {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (file) await setCustomSample(file)
+}
+
+/** 恢复内置样张 */
+async function resetSample(): Promise<void> {
+  customSource?.close()
+  customSource = null
+  customKey = ''
+  hasCustomSample.value = false
+  clearSampleCache()
+  sampleBmp = null
+  await applyTestSize(testW.value, testH.value)
 }
 
 /** 切换测试画幅：重取样张位图、复位缩放与平移（画幅变了，旧视图没有意义） */
@@ -204,6 +303,22 @@ const wmSpace = reactive({ w: 1920, h: 1080 })
 
 function hasVisibleBackground(): boolean {
   return wm.editTarget().some((l) => l.type === 'background' && l.visible)
+}
+
+/** 选中框手柄的屏幕尺度：四角缩放点 + 顶部旋转点 */
+const HANDLE_HIT_CSS = 14
+const HANDLE_SIZE_CSS = 10
+const ROTATE_GAP_CSS = 26
+
+function clampN(v: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, v))
+}
+
+function normDeg(v: number): number {
+  let r = v
+  while (r > 180) r -= 360
+  while (r <= -180) r += 360
+  return r
 }
 
 let mctx: CanvasRenderingContext2D | null = null
@@ -319,6 +434,35 @@ function redraw(): void {
     ctx.moveTo(a.x, a.y - r * 1.8)
     ctx.lineTo(a.x, a.y + r * 1.8)
     ctx.stroke()
+
+    // 缩放 / 旋转手柄：与预览叠加层同一 layerHandles 几何
+    const ipp = dpr / fit // 每个 CSS 像素对应的图片像素
+    const handles = layerHandles(box, ROTATE_GAP_CSS * ipp)
+    const half = (HANDLE_SIZE_CSS * ipp) / 2
+    const rad = (box.rotation * Math.PI) / 180
+    const topMid = {
+      x: box.cx + (box.h / 2) * Math.sin(rad),
+      y: box.cy - (box.h / 2) * Math.cos(rad),
+    }
+    const rot = handles.find((h) => h.id === 'rotate')!
+    ctx.setLineDash([])
+    ctx.globalAlpha = 0.6
+    ctx.lineWidth = 1 * ipp
+    ctx.beginPath()
+    ctx.moveTo(topMid.x, topMid.y)
+    ctx.lineTo(rot.x, rot.y)
+    ctx.stroke()
+    ctx.globalAlpha = 0.95
+    ctx.fillStyle = accent
+    for (const h of handles) {
+      if (h.id === 'rotate') {
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, half * 1.15, 0, Math.PI * 2)
+        ctx.fill()
+      } else {
+        ctx.fillRect(h.x - half, h.y - half, half * 2, half * 2)
+      }
+    }
     ctx.restore()
   }
   vmap.scale = fit
@@ -454,6 +598,22 @@ const pointers = new Map<number, PointerState>()
 type Gesture =
   | { type: 'idle' }
   | { type: 'layer'; id: string; startClient: { x: number; y: number }; startCx: number; startCy: number }
+  | {
+      type: 'scale'
+      id: string
+      center: { x: number; y: number }
+      startDist: number
+      startScale: number
+      minScale: number
+      maxScale: number
+    }
+  | {
+      type: 'rotate'
+      id: string
+      center: { x: number; y: number }
+      startAngle: number
+      startRotation: number
+    }
   | { type: 'pan'; startPan: { x: number; y: number }; startClient: { x: number; y: number } }
   | {
       type: 'pinch'
@@ -525,6 +685,45 @@ function onPointerDown(e: PointerEvent): void {
 
   const p = toImagePx(e.clientX, e.clientY)
   const list = resolvedLayers()
+  // 选中框手柄优先于图层本体：拖动四角改尺寸，拖动顶部圆点改角度
+  const sel = wm.selected
+  if (sel && sel.type !== 'border' && sel.type !== 'background') {
+    const resolvedSel =
+      list.find(
+        (l): l is TextLayer | ImageLayer =>
+          l.id === sel.id && l.type !== 'border' && l.type !== 'background',
+      ) ?? (sel as TextLayer | ImageLayer)
+    const box = measureLayer(resolvedSel, wmSpace.w, wmSpace.h, measureContext(), 1, list)
+    const cssPerImg = vmap.scale / vmap.dpr
+    const handles = layerHandles(box, ROTATE_GAP_CSS / cssPerImg)
+    const tol = HANDLE_HIT_CSS / cssPerImg
+    const hitHandle = handles.find((h) => Math.hypot(p.x - h.x, p.y - h.y) <= tol)
+    const layer = wm.editTarget().find((l) => l.id === sel.id)
+    if (hitHandle && layer && layer.type !== 'border' && layer.type !== 'background') {
+      if (hitHandle.id === 'rotate') {
+        gesture = {
+          type: 'rotate',
+          id: layer.id,
+          center: { x: box.cx, y: box.cy },
+          startAngle: Math.atan2(p.y - box.cy, p.x - box.cx),
+          startRotation: layer.rotation,
+        }
+      } else {
+        const startDist = Math.hypot(p.x - box.cx, p.y - box.cy) || 1
+        gesture = {
+          type: 'scale',
+          id: layer.id,
+          center: { x: box.cx, y: box.cy },
+          startDist,
+          startScale: layer.scale,
+          minScale: 0.5,
+          maxScale: layer.type === 'text' ? 40 : 100,
+        }
+      }
+      grabbing.value = true
+      return
+    }
+  }
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     // 边框 / 背景层覆盖全画布、无独立位置，只能从图层列表选中
@@ -577,6 +776,23 @@ function onPointerMove(e: PointerEvent): void {
     viewPan.x = mid.x - u.x * z
     viewPan.y = mid.y - u.y * z
     redraw()
+    return
+  }
+
+  if (gesture.type === 'scale' || gesture.type === 'rotate') {
+    const p = toImagePx(e.clientX, e.clientY)
+    const g = gesture
+    if (g.type === 'scale') {
+      const dist = Math.hypot(p.x - g.center.x, p.y - g.center.y) || 1
+      const scale = clampN(g.startScale * (dist / g.startDist), g.minScale, g.maxScale)
+      wm.update(g.id, { scale })
+    } else {
+      const cur = Math.atan2(p.y - g.center.y, p.x - g.center.x)
+      let delta = cur - g.startAngle
+      if (delta > Math.PI) delta -= Math.PI * 2
+      else if (delta < -Math.PI) delta += Math.PI * 2
+      wm.update(g.id, { rotation: Math.round(normDeg(g.startRotation + (delta * 180) / Math.PI) * 10) / 10 })
+    }
     return
   }
 
@@ -650,6 +866,14 @@ function onPointerMove(e: PointerEvent): void {
   }
 }
 
+function settleHandleGesture(g: Gesture): void {
+  if (g.type !== 'scale' && g.type !== 'rotate') return
+  const layer = wm.editTarget().find((l) => l.id === g.id)
+  if (!layer || layer.type === 'border' || layer.type === 'background') return
+  if (g.type === 'scale') wm.update(g.id, { scale: Math.round(layer.scale * 10) / 10 })
+  else wm.update(g.id, { rotation: Math.round(normDeg(layer.rotation)) })
+}
+
 function onPointerUp(e: PointerEvent): void {
   const pt = pointers.get(e.pointerId)
   pointers.delete(e.pointerId)
@@ -686,6 +910,8 @@ function onPointerUp(e: PointerEvent): void {
       if (l && 'offsetX' in l && 'offsetY' in l) {
         wm.update(g.id, { offsetX: Math.round(l.offsetX), offsetY: Math.round(l.offsetY) })
       }
+    } else settleHandleGesture(g)
+    if (g.type === 'layer' || g.type === 'scale' || g.type === 'rotate') {
       gesture = { type: 'idle' }
       grabbing.value = false
     }
@@ -700,6 +926,8 @@ function onPointerUp(e: PointerEvent): void {
       wm.update(g.id, { offsetX: Math.round(l.offsetX), offsetY: Math.round(l.offsetY) })
     }
   }
+  settleHandleGesture(g)
+  if (g.type === 'scale' || g.type === 'rotate') grabbing.value = false
   gesture = { type: 'idle' }
 
   // 双击空白处：放大 ⇄ 复位（落在水印上时双击属于图层操作，不触发）
@@ -759,6 +987,22 @@ function onCursorMove(e: PointerEvent): void {
   if (!sampleBmp || !vmap.scale) return
   const p = toImagePx(e.clientX, e.clientY)
   const list = resolvedLayers()
+  // 手柄上显示抓取光标（与图层本体一致，避免指针「看起来不能拖」）
+  const sel = wm.selected
+  if (sel && sel.type !== 'border' && sel.type !== 'background') {
+    const resolvedSel =
+      list.find(
+        (l): l is TextLayer | ImageLayer =>
+          l.id === sel.id && l.type !== 'border' && l.type !== 'background',
+      ) ?? (sel as TextLayer | ImageLayer)
+    const box = measureLayer(resolvedSel, wmSpace.w, wmSpace.h, measureContext(), 1, list)
+    const cssPerImg = vmap.scale / vmap.dpr
+    const handles = layerHandles(box, ROTATE_GAP_CSS / cssPerImg)
+    if (handles.some((h) => Math.hypot(p.x - h.x, p.y - h.y) <= HANDLE_HIT_CSS / cssPerImg)) {
+      grabbing.value = true
+      return
+    }
+  }
   for (let i = list.length - 1; i >= 0; i--) {
     const l = list[i]
     if (l.type === 'border' || !l.visible) continue
@@ -786,6 +1030,8 @@ onBeforeUnmount(() => {
   ro?.disconnect()
   stopViewAnim()
   sampleBmp = null
+  customSource?.close()
+  customSource = null
   for (const b of sampleBmps.values()) b.close()
   sampleBmps.clear()
   for (const b of sourceBmps.values()) b.close()
@@ -820,6 +1066,9 @@ watch(mode, async (m) => {
         <span v-if="editingBuiltin" class="badge">{{ t('内置 · 保存将另存为副本') }}</span>
         <span class="flex" />
         <AppButton size="sm" @click="saveEdit"><Save :size="13" />{{ editingBuiltin ? t('另存为副本') : t('保存') }}</AppButton>
+        <AppButton size="sm" variant="ghost" @click="exportEditing">
+          <Download :size="13" />{{ t('导出模板') }}
+        </AppButton>
         <AppButton v-if="!editingBuiltin && editingId" size="sm" variant="ghost" @click="startSaveAs">
           <Check :size="13" />{{ t('另存为新模板') }}
         </AppButton>
@@ -881,7 +1130,25 @@ watch(mode, async (m) => {
             <button class="ratio-apply" @click="applyCustomSize">{{ t('应用') }}</button>
           </template>
           <span v-else class="ratio-size">{{ sampleW }}×{{ sampleH }}</span>
+          <button class="ratio-apply" :title="t('用一张自己的照片检查水印')" @click="chooseTestImage">
+            <ImagePlus :size="12" />{{ t('测试图片…') }}
+          </button>
+          <button
+            v-if="hasCustomSample"
+            class="ratio-apply"
+            :title="t('回到内置横 / 竖样张')"
+            @click="resetSample"
+          >
+            <RotateCcw :size="12" />{{ t('恢复样张') }}
+          </button>
         </div>
+        <input
+          ref="customFileInput"
+          type="file"
+          accept="image/*"
+          hidden
+          @change="onCustomFile"
+        />
         <canvas
           ref="canvasEl"
           class="sample"
@@ -1055,6 +1322,10 @@ h1 {
   background: var(--accent-soft);
   color: var(--accent);
   font-size: calc(11.5px * var(--ui-zoom, 1));
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
 }
 /* 画布铺满容器（四周留边），缩放与平移都发生在画布内部的绘制变换里。
    不加圆角与投影：样张本身就是照片，多余的白底圆角卡片会干扰对水印的判断 */

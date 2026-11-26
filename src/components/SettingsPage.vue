@@ -34,6 +34,13 @@ import {
   PREVIEW_CUSTOM_MAX,
   PREVIEW_CUSTOM_MIN,
   PREVIEW_QUALITIES,
+  PROJECT_CARD_COLUMNS_MAX,
+  PROJECT_CARD_COLUMNS_MIN,
+  PROJECT_CARD_HEIGHT_MAX,
+  PROJECT_CARD_HEIGHT_MIN,
+  PROJECT_CARD_RADIUS_MAX,
+  PROJECT_CARD_RADIUS_MIN,
+  PROJECT_CARD_STYLES,
   THEMES,
   UPDATE_CHANNELS,
   UPDATE_SOURCES,
@@ -42,6 +49,7 @@ import {
   type BootStyle,
   type BootStyleChoice,
   type PreviewQuality,
+  type ProjectCardStyle,
   type ThemeDef,
   type ThemeMode,
 } from '@/stores/settings'
@@ -157,10 +165,28 @@ const defaultZoomModel = computed({
   set: (v: number) => (settings.defaultZoom = Math.round(v)),
 })
 
-/** 放大平移安全区：像素，0 = 可贴边平移 */
+/** 放大平移安全区：像素，0 = 最多贴边；数值越大，放大后可平移范围越大 */
 const panMarginModel = computed({
   get: () => Math.round(settings.panMargin),
   set: (v: number) => (settings.panMargin = Math.round(v)),
+})
+
+/* ---------- 工作项目卡片：样式 / 列数 / 高度 / 圆角 ---------- */
+const cardStyleModel = computed({
+  get: () => settings.projectCardStyle,
+  set: (v: unknown) => (settings.projectCardStyle = v as ProjectCardStyle),
+})
+const cardColumnsModel = computed({
+  get: () => settings.projectCardColumns,
+  set: (v: number) => (settings.projectCardColumns = Math.round(v)),
+})
+const cardHeightModel = computed({
+  get: () => settings.projectCardHeight,
+  set: (v: number) => (settings.projectCardHeight = Math.round(v)),
+})
+const cardRadiusModel = computed({
+  get: () => settings.projectCardRadius,
+  set: (v: number) => (settings.projectCardRadius = Math.round(v)),
 })
 
 const hasCustomFont = computed(() => !!settings.fontFamily)
@@ -418,6 +444,66 @@ async function relaunchOobe(): Promise<void> {
             {{ t('浏览器未授权读取系统字体，列表为常用字体清单。') }}
           </p>
         </div>
+        <div class="row col">
+          <div class="text">
+            <span class="label">{{ t('工作项目卡片') }}<SettingInfo :tip="t('缩略图卡片用项目第一张照片做背景，自左上到右下渐显；纯净卡片为旧版样式')" /></span>
+          </div>
+          <AppSegment
+            v-model="cardStyleModel"
+            :options="PROJECT_CARD_STYLES.map((s) => ({ value: s.value, label: t(s.label) }))"
+          />
+        </div>
+        <div class="row col">
+          <div class="text">
+            <span class="label">{{ t('卡片列数') }}<SettingInfo :tip="t('工作项目卡片一行显示几个；列数越多，卡片越窄')" /></span>
+          </div>
+          <AppSlider
+            v-model="cardColumnsModel"
+            :min="PROJECT_CARD_COLUMNS_MIN"
+            :max="PROJECT_CARD_COLUMNS_MAX"
+            :step="1"
+            :label="t('列数')"
+            :format="(v) => t('{0} 列', v)"
+            :default="4"
+            @reset="settings.projectCardColumns = 4"
+          />
+        </div>
+        <div class="row col">
+          <div class="text">
+            <span class="label">{{ t('卡片高度') }}</span>
+          </div>
+          <AppSlider
+            v-model="cardHeightModel"
+            :min="PROJECT_CARD_HEIGHT_MIN"
+            :max="PROJECT_CARD_HEIGHT_MAX"
+            :step="2"
+            :label="t('高度')"
+            :format="(v) => `${v} px`"
+            :default="118"
+            @reset="settings.projectCardHeight = 118"
+          />
+        </div>
+        <div class="row col">
+          <div class="text">
+            <span class="label">{{ t('卡片圆角') }}</span>
+          </div>
+          <AppSlider
+            v-model="cardRadiusModel"
+            :min="PROJECT_CARD_RADIUS_MIN"
+            :max="PROJECT_CARD_RADIUS_MAX"
+            :step="1"
+            :label="t('圆角')"
+            :format="(v) => `${v} px`"
+            :default="10"
+            @reset="settings.projectCardRadius = 10"
+          />
+        </div>
+        <div class="row">
+          <div class="text">
+            <span class="label">{{ t('显示文件大小') }}<SettingInfo :tip="t('在工作目录与工作项目卡片上显示占用体积；关闭后不再扫描磁盘')" /></span>
+          </div>
+          <AppSwitch v-model="settings.showFileSizes" />
+        </div>
         <div class="row">
           <div class="text">
             <span class="label">{{ t('启动动画') }}<SettingInfo :tip="t('启动时的品牌动画，关闭后直接进入界面')" /></span>
@@ -512,7 +598,7 @@ async function relaunchOobe(): Promise<void> {
         </div>
         <div class="row col">
           <div class="text">
-            <span class="label">{{ t('放大平移安全区') }}<SettingInfo :tip="t('放大后照片边缘保留的边距；数值越大，可平移查看的最大边距越小，0 为可以贴边')" /></span>
+            <span class="label">{{ t('放大平移安全区') }}<SettingInfo :tip="t('放大后可平移查看的额外边距；数值越大，照片可被推得越远，0 为最多贴边')" /></span>
           </div>
           <AppSlider
             v-model="panMarginModel"

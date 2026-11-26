@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from 'vue'
-import { MoreHorizontal, Pencil, Trash2, Upload } from 'lucide-vue-next'
+import { Download, MoreHorizontal, Pencil, Trash2, Upload } from 'lucide-vue-next'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppDialog from '@/components/ui/AppDialog.vue'
 import AppDropdown from '@/components/ui/AppDropdown.vue'
@@ -9,11 +9,11 @@ import { renderTemplateThumb } from '@/core/sample'
 import { fmtSize } from '@/core/format'
 import { isTauri, pickBinaryFile, saveBinaryFile } from '@/core/platform'
 import {
-  AMWM_EXT,
-  AMWM_MIME,
-  amwmFileName,
+  TEMPLATE_EXT,
+  TEMPLATE_MIME,
   packWatermarkTemplate,
   unpackWatermarkTemplate,
+  watermarkFileName,
   watermarkTemplateBytes,
 } from '@/core/watermarkFile'
 import { useI18n } from '@/i18n'
@@ -52,7 +52,7 @@ async function renderAll(): Promise<void> {
   computeSizes()
 }
 
-/** .amwm 真实打包体积：卡片上直接显示，用户导出前就知道文件多大 */
+/** 模板 .zip 的真实打包体积：卡片上直接显示，用户导出前就知道文件多大 */
 const sizes = ref<Record<string, number>>({})
 function computeSizes(): void {
   const next: Record<string, number> = {}
@@ -66,7 +66,7 @@ watch(
   renderAll,
 )
 
-/* ---------- .amwm 导入 / 导出：单文件模板，内含图片素材 ---------- */
+/* ---------- 模板 zip 导入 / 导出：单文件模板，内含图片素材 ---------- */
 
 const fileInput = ref<HTMLInputElement | null>(null)
 
@@ -79,7 +79,7 @@ function importClick(): void {
 }
 
 async function importFromTauri(): Promise<void> {
-  const picked = await pickBinaryFile(t('导入水印模板'), ['amwm'], t('水印模板 (.amwm)'))
+  const picked = await pickBinaryFile(t('导入水印模板'), ['zip'], t('水印模板 (.zip)'))
   if (!picked) return
   await importBytes(picked.bytes)
 }
@@ -109,10 +109,10 @@ async function importBytes(bytes: Uint8Array): Promise<void> {
 async function exportTemplate(tpl: WatermarkTemplate): Promise<void> {
   try {
     const bytes = packWatermarkTemplate(tpl)
-    const saved = await saveBinaryFile(amwmFileName(tpl.name), bytes, {
-      label: t('水印模板 (.amwm)'),
-      extensions: ['amwm'],
-      mime: AMWM_MIME,
+    const saved = await saveBinaryFile(watermarkFileName(tpl.name), bytes, {
+      label: t('水印模板 (.zip)'),
+      extensions: ['zip'],
+      mime: TEMPLATE_MIME,
       sub: 'watermarks',
     })
     if (saved) toast(t('已导出模板「{0}」', tpl.name), 'success')
@@ -130,7 +130,7 @@ const removeTarget = ref<WatermarkTemplate | null>(null)
 function cardItems(tpl: WatermarkTemplate): DropdownItem[] {
   return [
     { label: t('编辑'), action: () => emit('edit', tpl.id) },
-    { label: t('导出 .amwm'), action: () => void exportTemplate(tpl) },
+    { label: t('导出模板'), action: () => void exportTemplate(tpl) },
     { label: t('复制为新模板'), action: () => void templates.duplicate(tpl.id) },
     ...(tpl.builtin
       ? []
@@ -174,7 +174,7 @@ function fmtDate(ts?: number): string {
     <input
       ref="fileInput"
       type="file"
-      :accept="AMWM_EXT"
+      :accept="TEMPLATE_EXT"
       hidden
       @change="onImportFile"
     />
@@ -188,6 +188,14 @@ function fmtDate(ts?: number): string {
           <span class="tinfo">{{ t('{0} 个图层', tpl.layers.length) }}<template v-if="sizes[tpl.id]"> · {{ fmtSize(sizes[tpl.id]) }}</template><template v-if="tpl.updatedAt ?? tpl.createdAt"> · {{ fmtDate(tpl.updatedAt ?? tpl.createdAt) }}</template></span>
         </div>
         <span v-if="tpl.builtin" class="badge">{{ t('内置') }}</span>
+        <button
+          class="texport"
+          :title="t('导出模板')"
+          :aria-label="t('导出模板')"
+          @click.stop="exportTemplate(tpl)"
+        >
+          <Download :size="14" />
+        </button>
         <AppDropdown :items="cardItems(tpl)" align="right">
           <template #trigger>
             <!-- 点击由 .dd-trigger 处理并阻止冒泡，无需在此 stop（会拦断 toggle） -->
@@ -240,7 +248,7 @@ function fmtDate(ts?: number): string {
   scrollbar-gutter: stable;
   padding: 20px calc(16px + var(--safe-right)) calc(16px + var(--safe-bottom)) calc(16px + var(--safe-left));
 }
-/* 模板库工具栏：导入 .amwm 放左上，与卡片网格同一条对齐线 */
+/* 模板库工具栏：导入 zip 放左上，与卡片网格同一条对齐线 */
 .tbar {
   max-width: 1060px;
   margin: 0 auto 12px;
@@ -328,11 +336,28 @@ function fmtDate(ts?: number): string {
   opacity: 0;
   transition: opacity var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
 }
+/* 常驻的导出钮：与 ⋯ 并列、默认可见，避免导出功能只藏在菜单里找不到 */
+.texport {
+  position: absolute;
+  top: 8px;
+  right: 38px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: #f0ede8;
+  background: rgba(0, 0, 0, 0.42);
+  opacity: 1;
+  transition: opacity var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
+}
 .tcard:hover .tmore,
-.tmore:focus-visible {
+.tmore:focus-visible,
+.texport:focus-visible {
   opacity: 1;
 }
-.tmore:hover {
+.tmore:hover,
+.texport:hover {
   background: rgba(0, 0, 0, 0.55);
 }
 .confirm-text {

@@ -4,20 +4,32 @@ import type { SerializedAsset, WatermarkLayer, WatermarkTemplate } from '@/types
 import { migrateLayer } from '@/types/watermark'
 
 /**
- * .amwm（Albumark Watermark）单文件模板：
- * 本质是一个 ZIP，内含 manifest.json + assets/ 下的原始图片（PNG/JPG/SVG），
- * 扩展名固定为 .amwm，方便用户像普通文件一样复制、备份与分享。
+ * 水印模板文件：单个普通 `.zip`，方便用户像普通文件一样复制、备份与分享。
  *
- * manifest.json：
- *   { format:'albumark-watermark', version:1, name, createdAt, layers,
+ * 目录结构：
+ *   albumark-watermark.json  描述文件（导入时唯一识别依据）
+ *   watermark.json           水印数据（图层 JSON）
+ *   assets/0.png …           原始图片 / SVG 素材
+ *
+ * 描述文件：
+ *   { format:'albumark-watermark', kind:'watermark-template', version:2,
+ *     name, createdAt, data:'watermark.json',
  *     assets:[{ id, name, file, mime, aspect }] }
- * 图片以二进制存进 assets/，不把 base64 塞进 JSON，模板文件更小。
+ * 水印数据：
+ *   { format:'albumark-watermark-data', version:1, layers:[…] }
+ *
+ * 导入只认描述文件里的 format：缺少 / 不匹配即拒绝，不再读取旧版 `.amwm`
+ * 或裸 manifest.json。
  */
 
-export const AMWM_EXT = '.amwm'
-export const AMWM_MIME = 'application/x-albumark-watermark'
+export const TEMPLATE_EXT = '.zip'
+export const TEMPLATE_MIME = 'application/zip'
+const DESCRIPTOR_FILE = 'albumark-watermark.json'
+const DEFAULT_DATA_FILE = 'watermark.json'
 const FORMAT = 'albumark-watermark'
-const VERSION = 1
+const DATA_FORMAT = 'albumark-watermark-data'
+const VERSION = 2
+const DATA_VERSION = 1
 /** 解压后的总字节上限：防压缩炸弹 */
 const MAX_UNPACKED = 96 * 1024 * 1024
 
@@ -29,13 +41,20 @@ interface ManifestAsset {
   aspect: number
 }
 
-interface Manifest {
+interface Descriptor {
   format: string
+  kind?: string
   version: number
   name: string
   createdAt?: number
-  layers: WatermarkLayer[]
+  data: string
   assets: ManifestAsset[]
+}
+
+interface DataFile {
+  format: string
+  version: number
+  layers: WatermarkLayer[]
 }
 
 function extForMime(mime: string, name: string): string {
@@ -72,13 +91,13 @@ function bytesDataUrl(bytes: Uint8Array, mime: string): string {
   return `data:${mime};base64,${btoa(bin)}`
 }
 
-/** 文件名合法化：去掉路径分隔符等非法字符 */
-export function amwmFileName(name: string): string {
+/** 文件名合法化：去掉路径分隔符等非法字符，统一后缀为 .zip */
+export function watermarkFileName(name: string): string {
   const clean = name.trim().replace(/[\\/:*?"<>|]/g, '_').slice(0, 80) || 'Albumark watermark'
-  return clean.toLowerCase().endsWith(AMWM_EXT) ? clean : clean + AMWM_EXT
+  return clean.toLowerCase().endsWith(TEMPLATE_EXT) ? clean : clean + TEMPLATE_EXT
 }
 
-/** 把模板（含图片素材）打包为单个 .amwm 字节流 */
+/** 把模板（含图片素材）打包为单个 .zip 字节流 */
 export function packWatermarkTemplate(tpl: WatermarkTemplate): Uint8Array {
   const assets: ManifestAsset[] = []
   const files: Record<string, Uint8Array> = {}
@@ -89,19 +108,26 @@ export function packWatermarkTemplate(tpl: WatermarkTemplate): Uint8Array {
     files[file] = parsed.bytes
     assets.push({ id: a.id, name: a.name, file, mime: parsed.mime, aspect: a.aspect })
   })
-  const manifest: Manifest = {
+  const data: DataFile = {
+    format: DATA_FORMAT,
+    version: DATA_VERSION,
+    layers: tpl.layers,
+  }
+  const descriptor: Descriptor = {
     format: FORMAT,
+    kind: 'watermark-template',
     version: VERSION,
     name: tpl.name,
     createdAt: tpl.createdAt,
-    layers: tpl.layers,
+    data: DEFAULT_DATA_FILE,
     assets,
   }
-  files['manifest.json'] = strToU8(JSON.stringify(manifest))
+  files[DESCRIPTOR_FILE] = strToU8(JSON.stringify(descriptor, null, 2))
+  files[DEFAULT_DATA_FILE] = strToU8(JSON.stringify(data, null, 2))
   return zipSync(files, { level: 6 })
 }
 
-/** 模板文件的真实体积（与导出得到的 .amwm 一致），用于卡片展示 */
+/** 模板文件的真实体积（与导出得到的 .zip 一致），用于卡片展示 */
 export function watermarkTemplateBytes(tpl: WatermarkTemplate): number {
   try {
     return packWatermarkTemplate(tpl).byteLength
@@ -116,7 +142,18 @@ function isSafeAssetFile(file: string): boolean {
   return !!part && !part.includes('..') && !part.includes('\\') && !part.startsWith('/')
 }
 
-/** 解析 .amwm，返回可交给模板 store 的模板数据 */
+/** 水印数据文件允许放在根目录下的任意安全文件名（不含路径穿越） */
+function isSafeDataFile(file: string): boolean {
+  return (
+    !!file &&
+    !file.includes('..') &&
+    !file.includes('\\') &&
+    !file.startsWith('/') &&
+    !file.startsWith('assets/')
+  )
+}
+
+/** 解析水印模板 .zip，返回可交给模板 store 的模板数据 */
 export function unpackWatermarkTemplate(bytes: Uint8Array): WatermarkTemplate {
   if (bytes.byteLength > MAX_UNPACKED) throw new Error(t('水印模板过大，无法导入'))
   let zip: Record<string, Uint8Array>
@@ -130,29 +167,49 @@ export function unpackWatermarkTemplate(bytes: Uint8Array): WatermarkTemplate {
     total += data.byteLength
     if (total > MAX_UNPACKED) throw new Error(t('水印模板过大，无法导入'))
   }
-  const manifestBytes = zip['manifest.json']
-  if (!manifestBytes) throw new Error(t('水印模板缺少 manifest.json'))
-  let manifest: Manifest
+  // 描述文件是导入识别的唯一依据：没有它就不是 Albumark 水印模板
+  const descBytes = zip[DESCRIPTOR_FILE]
+  if (!descBytes) throw new Error(t('水印模板缺少描述文件'))
+  let descriptor: Descriptor
   try {
-    manifest = JSON.parse(strFromU8(manifestBytes)) as Manifest
+    descriptor = JSON.parse(strFromU8(descBytes)) as Descriptor
   } catch {
-    throw new Error(t('水印模板清单损坏'))
+    throw new Error(t('水印模板描述文件损坏'))
   }
   if (
-    !manifest ||
-    manifest.format !== FORMAT ||
-    typeof manifest.version !== 'number' ||
-    manifest.version > VERSION ||
-    !Array.isArray(manifest.layers) ||
-    !Array.isArray(manifest.assets)
+    !descriptor ||
+    descriptor.format !== FORMAT ||
+    typeof descriptor.version !== 'number' ||
+    descriptor.version > VERSION ||
+    !Array.isArray(descriptor.assets)
   ) {
     throw new Error(t('不是有效的 Albumark 水印模板文件'))
   }
-  if (manifest.layers.length > 500 || manifest.assets.length > 200) {
+  // 水印数据：描述文件优先指定路径，缺省回落到 watermark.json
+  const dataPath =
+    typeof descriptor.data === 'string' && isSafeDataFile(descriptor.data)
+      ? descriptor.data
+      : DEFAULT_DATA_FILE
+  const dataBytes = zip[dataPath] ?? zip[DEFAULT_DATA_FILE]
+  if (!dataBytes) throw new Error(t('水印模板缺少水印数据'))
+  let dataFile: DataFile
+  try {
+    dataFile = JSON.parse(strFromU8(dataBytes)) as DataFile
+  } catch {
+    throw new Error(t('水印模板数据损坏'))
+  }
+  if (
+    !dataFile ||
+    !Array.isArray(dataFile.layers) ||
+    (typeof dataFile.version === 'number' && dataFile.version > DATA_VERSION)
+  ) {
+    throw new Error(t('不是有效的 Albumark 水印模板文件'))
+  }
+  if (dataFile.layers.length > 500 || descriptor.assets.length > 200) {
     throw new Error(t('水印模板内容过多，无法导入'))
   }
   const assets: SerializedAsset[] = []
-  for (const a of manifest.assets) {
+  for (const a of descriptor.assets) {
     if (!a || typeof a.id !== 'string' || !isSafeAssetFile(a.file)) continue
     const data = zip[a.file]
     if (!data) throw new Error(t('水印模板缺少图片素材'))
@@ -165,9 +222,9 @@ export function unpackWatermarkTemplate(bytes: Uint8Array): WatermarkTemplate {
   }
   return {
     id: 'imported',
-    name: typeof manifest.name === 'string' ? manifest.name : t('未命名模板'),
-    createdAt: manifest.createdAt,
-    layers: manifest.layers.map((l) => migrateLayer(l)),
+    name: typeof descriptor.name === 'string' ? descriptor.name : t('未命名模板'),
+    createdAt: descriptor.createdAt,
+    layers: dataFile.layers.map((l) => migrateLayer(l)),
     assets,
   }
 }

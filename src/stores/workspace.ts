@@ -42,6 +42,9 @@ export interface ProjectMeta {
   emoji?: string
   /** 项目简介（存 albumark.json，编辑信息对话框编辑） */
   description?: string
+  /** 扫描时带出的首张照片引用（缩略图卡片用，不写盘） */
+  coverStoredAs?: string
+  coverSourcePath?: string
 }
 
 interface PrjImageRef {
@@ -121,6 +124,186 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const importMode = ref<ImportMode>('copy')
   /** 后台装载中 */
   const loading = ref(false)
+
+  /* ---------- 工作区体积与缩略图 ----------
+     体积扫描与首图缩略图都不阻塞项目扫描：工作区页面打开后按需异步补齐，
+     开关关闭时直接清空且不再碰磁盘。 */
+  const projectSizes = ref<Record<string, number | null>>({})
+  const dirSizes = ref<Record<string, number | null>>({})
+  const projectThumbs = ref<Record<string, string>>({})
+  let statsSeq = 0
+  const projectSizeStamp = new Map<string, string>()
+  const dirSizeStamp = new Map<string, string>()
+  const thumbStamp = new Map<string, string>()
+  const thumbUrls = new Map<string, string>()
+
+  function projectStamp(p: ProjectMeta): string {
+    return `${p.path}|${p.count}|${p.coverStoredAs ?? p.coverSourcePath ?? ''}`
+  }
+
+  function setProjectSize(id: string, bytes: number): void {
+    projectSizes.value = { ...projectSizes.value, [id]: bytes }
+  }
+
+  function setDirSize(path: string, bytes: number): void {
+    dirSizes.value = { ...dirSizes.value, [path]: bytes }
+  }
+
+  function setProjectThumb(id: string, url: string): void {
+    const old = thumbUrls.get(id)
+    if (old && old !== url) URL.revokeObjectURL(old)
+    thumbUrls.set(id, url)
+    projectThumbs.value = { ...projectThumbs.value, [id]: url }
+  }
+
+  function dropProjectThumb(id: string): void {
+    const old = thumbUrls.get(id)
+    if (old) URL.revokeObjectURL(old)
+    thumbUrls.delete(id)
+    const next = { ...projectThumbs.value }
+    delete next[id]
+    projectThumbs.value = next
+  }
+
+  /** 首图缩略图：读首张照片，解码时直接缩到 480px 宽生成对象 URL（缩略图卡片背景用） */
+  async function makeThumb(p: ProjectMeta): Promise<string | null> {
+    const path = p.coverStoredAs
+      ? await fs.joinPath(p.path, 'images', p.coverStoredAs)
+      : p.coverSourcePath
+    if (!path) return null
+    const bytes = await fs.readFile(path)
+    const format = resolveImageFormat(bytes, p.coverStoredAs ?? p.coverSourcePath ?? '')
+    const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: imageMime(format ?? 'jpg') })
+    // 解码即降采样：安卓上 50MP 首图整图解码要数秒、上百 MB，
+    // 只给卡片背景用不值得
+    const bmp = await createImageBitmap(blob, {
+      imageOrientation: 'from-image',
+      resizeWidth: 480,
+      resizeQuality: 'high',
+    })
+    try {
+      const oc = new OffscreenCanvas(bmp.width, bmp.height)
+      const ctx = oc.getContext('2d')
+      if (!ctx) return null
+      ctx.drawImage(bmp, 0, 0)
+      const out = await oc.convertToBlob({ type: 'image/jpeg', quality: 0.82 })
+      return URL.createObjectURL(out)
+    } finally {
+      bmp.close()
+    }
+  }
+
+  /**
+   * 刷新工作区统计：当前目录各项目体积、全部工作目录体积、缩略图卡片首图。
+   * 同一时间只认最后一次调用；已按「路径 + 数量 + 首图」缓存的结果不重复扫。
+   */
+  async function refreshStats(force = false): Promise<void> {
+    if (!fsAvailable) return
+    const seq = ++statsSeq
+    const showSizes = settings.showFileSizes
+    const wantThumb = settings.projectCardStyle === 'thumbnail'
+    const ids = new Set(projects.value.map((p) => p.id))
+    let cursor = 0
+    // 清掉已不存在的项目记录
+    for (const id of Object.keys(projectSizes.value)) {
+      if (!ids.has(id)) {
+        delete projectSizes.value[id]
+        projectSizeStamp.delete(id)
+        thumbStamp.delete(id)
+      }
+    }
+    for (const [id] of thumbUrls) {
+      if (!ids.has(id)) dropProjectThumb(id)
+    }
+    // 目录改名 / 移除后，旧路径的统计记录没有归属，一并清掉
+    const dirPaths = new Set(dirs.value.map((d) => d.path))
+    for (const path of Object.keys(dirSizes.value)) {
+      if (!dirPaths.has(path)) {
+        delete dirSizes.value[path]
+        dirSizeStamp.delete(path)
+      }
+    }
+    if (!showSizes) {
+      projectSizes.value = {}
+      dirSizes.value = {}
+      projectSizeStamp.clear()
+      dirSizeStamp.clear()
+    } else {
+      // 项目体积：并发 3，逐个补齐
+      const pool = projects.value.filter(
+        (p) => force || projectSizeStamp.get(p.id) !== projectStamp(p) || !(p.id in projectSizes.value),
+      )
+      for (const p of projects.value) {
+        if (!(p.id in projectSizes.value)) projectSizes.value[p.id] = null
+      }
+      cursor = 0
+      const worker = async (): Promise<void> => {
+        while (cursor < pool.length) {
+          const p = pool[cursor++]
+          try {
+            const r = await fs.dirSize(p.path)
+            if (seq !== statsSeq) return
+            setProjectSize(p.id, r.bytes)
+            projectSizeStamp.set(p.id, projectStamp(p))
+          } catch {
+            if (seq !== statsSeq) return
+            setProjectSize(p.id, 0)
+          }
+        }
+      }
+      await Promise.all([worker(), worker(), worker()])
+      if (seq !== statsSeq) return
+      // 工作目录体积：全部目录并发 2（当前目录的项目已在上一步热缓存，仍是整树统计）
+      const dPool = dirs.value.filter((d) => {
+        const stamp = `${d.path}|${d.projects ?? 0}`
+        return force || dirSizeStamp.get(d.path) !== stamp || !(d.path in dirSizes.value)
+      })
+      for (const d of dirs.value) {
+        if (!(d.path in dirSizes.value)) dirSizes.value[d.path] = null
+      }
+      cursor = 0
+      const dWorker = async (): Promise<void> => {
+        while (cursor < dPool.length) {
+          const d = dPool[cursor++]
+          try {
+            const r = await fs.dirSize(d.path)
+            if (seq !== statsSeq) return
+            setDirSize(d.path, r.bytes)
+            dirSizeStamp.set(d.path, `${d.path}|${d.projects ?? 0}`)
+          } catch {
+            if (seq !== statsSeq) return
+            setDirSize(d.path, 0)
+          }
+        }
+      }
+      await Promise.all([dWorker(), dWorker()])
+    }
+    if (seq !== statsSeq || !wantThumb) return
+    // 首图缩略图：并发 2，结果按「路径 + 数量 + 首图」缓存
+    const tPool = projects.value.filter(
+      (p) => force || thumbStamp.get(p.id) !== projectStamp(p) || !thumbUrls.has(p.id),
+    )
+    cursor = 0
+    const tWorker = async (): Promise<void> => {
+      while (cursor < tPool.length) {
+        const p = tPool[cursor++]
+        try {
+          const url = await makeThumb(p)
+          if (seq !== statsSeq) {
+            if (url) URL.revokeObjectURL(url)
+            return
+          }
+          if (url) {
+            setProjectThumb(p.id, url)
+            thumbStamp.set(p.id, projectStamp(p))
+          }
+        } catch {
+          /* 首图不可读（失联链接）：卡片回落到纯色底 */
+        }
+      }
+    }
+    await Promise.all([tWorker(), tWorker()])
+  }
 
   const inProject = computed(() => current.value !== null)
 
@@ -311,6 +494,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const p = await fs.joinPath(dirPath, e.name)
       const m = (await fs.readJsonFile(await fs.joinPath(p, MANIFEST))) as ProjectManifest | null
       if (!m || !Array.isArray(m.images)) continue
+      const first = m.images.find((r) => r && (r.storedAs || r.sourcePath))
       out.push({
         id: m.id,
         name: m.name || e.name,
@@ -319,6 +503,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
         count: m.images.length,
         emoji: m.emoji,
         description: m.description,
+        coverStoredAs: first?.storedAs,
+        coverSourcePath: first?.sourcePath,
       })
     }
     out.sort((a, b) => b.createdAt - a.createdAt)
@@ -504,6 +690,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   async function findImported(dest: string, m: ProjectManifest, dirName: string): Promise<ProjectMeta> {
     const hit = projects.value.find((p) => p.path === dest)
     if (hit) return hit
+    const first = m.images.find((r) => r && (r.storedAs || r.sourcePath))
     return {
       id: m.id,
       name: m.name || dirName,
@@ -512,6 +699,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       count: m.images.length,
       emoji: m.emoji,
       description: m.description,
+      coverStoredAs: first?.storedAs,
+      coverSourcePath: first?.sourcePath,
     }
   }
 
@@ -1170,6 +1359,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     manifest,
     importMode,
     loading,
+    projectSizes,
+    dirSizes,
+    projectThumbs,
+    refreshStats,
     inProject,
     subPage,
     gotoSubPage,

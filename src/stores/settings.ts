@@ -26,6 +26,23 @@ export type ThemeMode =
  */
 export type PreviewQuality = 'adaptive' | 'ultra' | 'high' | 'balanced' | 'eco' | 'minimal' | 'custom'
 
+/** 工作项目卡片样式：缩略图卡片（首图渐隐铺底）/ 纯净卡片（旧版） */
+export type ProjectCardStyle = 'thumbnail' | 'plain'
+
+/** 工作项目卡片可选样式（设置页分段控件与存档校验共用） */
+export const PROJECT_CARD_STYLES: { value: ProjectCardStyle; label: string }[] = [
+  { value: 'thumbnail', label: '缩略图卡片' },
+  { value: 'plain', label: '纯净卡片' },
+]
+
+/** 卡片布局可调范围的唯一来源（设置页滑杆与存档校验共用） */
+export const PROJECT_CARD_COLUMNS_MIN = 2
+export const PROJECT_CARD_COLUMNS_MAX = 8
+export const PROJECT_CARD_HEIGHT_MIN = 90
+export const PROJECT_CARD_HEIGHT_MAX = 220
+export const PROJECT_CARD_RADIUS_MIN = 0
+export const PROJECT_CARD_RADIUS_MAX = 28
+
 /** 渲染质量选项：设置页与存档校验共用同一份清单 */
 export const PREVIEW_QUALITIES: { value: PreviewQuality; label: string }[] = [
   { value: 'adaptive', label: '自适应' },
@@ -219,10 +236,20 @@ interface AppSettings {
    */
   defaultZoom: number
   /**
-   * 放大平移安全区（像素）：放大后照片边缘保留的呼吸边距。
-   * 0 = 可以一直平移到贴边；数值越大，可平移查看的最大边距越小。
+   * 放大平移安全区（像素）：放大后可平移查看的额外边距。
+   * 0 = 最多平移到贴边；数值越大，照片可以被推得越远（可越过视口边缘）。
    */
   panMargin: number
+  /** 工作目录 / 工作项目是否显示占用体积（关闭后不扫描磁盘） */
+  showFileSizes: boolean
+  /** 工作项目卡片样式：thumbnail 缩略图卡片 / plain 纯净卡片（旧版） */
+  projectCardStyle: ProjectCardStyle
+  /** 工作项目卡片列数 2–8（直接决定卡片宽度） */
+  projectCardColumns: number
+  /** 工作项目卡片高度（px） */
+  projectCardHeight: number
+  /** 工作项目卡片圆角（px） */
+  projectCardRadius: number
   /** 预览渲染质量：预设档位或 custom（配合 previewQualityValue 无极调整） */
   previewQuality: PreviewQuality
   /** 自定义预览精度：精修长边像素（仅 previewQuality = 'custom' 时生效） */
@@ -252,6 +279,11 @@ const DEFAULTS: AppSettings = {
   minZoom: 1,
   defaultZoom: 100,
   panMargin: 12,
+  showFileSizes: true,
+  projectCardStyle: 'thumbnail',
+  projectCardColumns: 4,
+  projectCardHeight: 118,
+  projectCardRadius: 10,
   previewQuality: 'high',
   previewQualityValue: 1200,
   wmSnap: true,
@@ -272,6 +304,33 @@ function load(): AppSettings {
   data.defaultZoom = Number.isFinite(dz) ? Math.min(300, Math.max(30, Math.round(dz / 5) * 5)) : 100
   const pm = Number(data.panMargin)
   data.panMargin = Number.isFinite(pm) ? Math.min(200, Math.max(0, Math.round(pm))) : 12
+  // 工作项目卡片：未知样式回落到缩略图卡片，数值夹回范围并取整
+  if (!PROJECT_CARD_STYLES.some((s) => s.value === data.projectCardStyle)) {
+    data.projectCardStyle = DEFAULTS.projectCardStyle
+  }
+  const intIn = (v: unknown, min: number, max: number, fallback: number): number => {
+    const n = Number(v)
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback
+  }
+  data.projectCardColumns = intIn(
+    data.projectCardColumns,
+    PROJECT_CARD_COLUMNS_MIN,
+    PROJECT_CARD_COLUMNS_MAX,
+    DEFAULTS.projectCardColumns,
+  )
+  data.projectCardHeight = intIn(
+    data.projectCardHeight,
+    PROJECT_CARD_HEIGHT_MIN,
+    PROJECT_CARD_HEIGHT_MAX,
+    DEFAULTS.projectCardHeight,
+  )
+  data.projectCardRadius = intIn(
+    data.projectCardRadius,
+    PROJECT_CARD_RADIUS_MIN,
+    PROJECT_CARD_RADIUS_MAX,
+    DEFAULTS.projectCardRadius,
+  )
+  data.showFileSizes = data.showFileSizes !== false
   // 旧版本 / 手改存档的容错：款式必须存在，时长夹回档位并取整到 100ms
   if (!BOOT_STYLE_CHOICES.some((s) => s.value === data.bootStyle)) data.bootStyle = DEFAULTS.bootStyle
   const dur = Number(data.bootDuration)
@@ -319,6 +378,11 @@ export const useSettingsStore = defineStore('settings', () => {
   const minZoom = ref(initial.minZoom)
   const defaultZoom = ref(initial.defaultZoom)
   const panMargin = ref(initial.panMargin)
+  const showFileSizes = ref(initial.showFileSizes)
+  const projectCardStyle = ref<ProjectCardStyle>(initial.projectCardStyle)
+  const projectCardColumns = ref(initial.projectCardColumns)
+  const projectCardHeight = ref(initial.projectCardHeight)
+  const projectCardRadius = ref(initial.projectCardRadius)
   const previewQuality = ref<PreviewQuality>(initial.previewQuality)
   const previewQualityValue = ref(initial.previewQualityValue)
   const wmSnap = ref(initial.wmSnap)
@@ -342,6 +406,11 @@ export const useSettingsStore = defineStore('settings', () => {
       minZoom: minZoom.value,
       defaultZoom: defaultZoom.value,
       panMargin: panMargin.value,
+      showFileSizes: showFileSizes.value,
+      projectCardStyle: projectCardStyle.value,
+      projectCardColumns: projectCardColumns.value,
+      projectCardHeight: projectCardHeight.value,
+      projectCardRadius: projectCardRadius.value,
       previewQuality: previewQuality.value,
       previewQualityValue: previewQualityValue.value,
       wmSnap: wmSnap.value,
@@ -428,6 +497,11 @@ export const useSettingsStore = defineStore('settings', () => {
     minZoom,
     defaultZoom,
     panMargin,
+    showFileSizes,
+    projectCardStyle,
+    projectCardColumns,
+    projectCardHeight,
+    projectCardRadius,
     previewQuality,
     previewQualityValue,
     wmSnap,

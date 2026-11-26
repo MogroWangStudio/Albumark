@@ -16,8 +16,10 @@ import {
   LoaderCircle,
   MoreHorizontal,
   Pencil,
+  Search,
   SquareDashed,
   Trash2,
+  X,
 } from 'lucide-vue-next'
 import LogoMark from '@/components/brand/LogoMark.vue'
 import AppButton from '@/components/ui/AppButton.vue'
@@ -29,8 +31,9 @@ import ImportProjectDialog from '@/components/ImportProjectDialog.vue'
 import type { ContextMenuItem } from '@/components/AppContextMenu.vue'
 import { useI18n } from '@/i18n'
 import { useLongPress } from '@/core/longpress'
+import { fmtSize } from '@/core/format'
 import { fsAvailable, sandboxedFs } from '@/core/fs'
-import { isTauri } from '@/core/platform'
+import { isTauri, revealInFolder } from '@/core/platform'
 import { openCtxMenu } from '@/stores/ctxMenu'
 import { toast } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
@@ -170,10 +173,42 @@ function toggleSel(id: string): void {
 function selectAllVisible(): void {
   const all =
     selectScope.value === 'dirs'
-      ? ws.dirs.map((d) => d.path)
-      : ws.projects.map((p) => p.id)
+      ? filteredDirs.value.map((d) => d.path)
+      : filteredProjects.value.map((p) => p.id)
   selected.value = new Set(all)
 }
+
+/* ---------- 筛选 / 查找：目录与项目各自一个搜索框 ---------- */
+const dirQuery = ref('')
+const prjQuery = ref('')
+
+function matchesQuery(q: string, ...fields: (string | undefined)[]): boolean {
+  const key = q.trim().toLowerCase()
+  if (!key) return true
+  return fields.some((f) => (f ?? '').toLowerCase().includes(key))
+}
+
+const filteredDirs = computed(() => {
+  const q = dirQuery.value
+  return q.trim() ? ws.dirs.filter((d) => matchesQuery(q, d.name, d.path)) : ws.dirs
+})
+const filteredProjects = computed(() => {
+  const q = prjQuery.value
+  return q.trim()
+    ? ws.projects.filter((p) => matchesQuery(q, p.name, p.description, p.emoji))
+    : ws.projects
+})
+
+// 搜索条件变化时把不可见的选中项剔除，批量操作只作用于当前看到的内容
+watch([dirQuery, prjQuery], () => {
+  if (selectScope.value === 'dirs') {
+    const visible = new Set(filteredDirs.value.map((d) => d.path))
+    selected.value = new Set([...selected.value].filter((id) => visible.has(id)))
+  } else if (selectScope.value === 'projects') {
+    const visible = new Set(filteredProjects.value.map((p) => p.id))
+    selected.value = new Set([...selected.value].filter((id) => visible.has(id)))
+  }
+})
 
 /** 选中项目的元信息(按当前列表过滤,排除已被外部删除的) */
 const selectedProjects = computed(() =>
@@ -544,17 +579,40 @@ function onCoarseChange(e: MediaQueryListEvent): void {
   isCoarse.value = e.matches
 }
 
-function openProjectMenu(p: ProjectMeta, x: number, y: number): void {
-  const items: ContextMenuItem[] = [
-    { label: t('打开'), action: () => void ws.openProject(p) },
-    { label: t('编辑信息…'), action: () => openEditInfo(p) },
-    { label: t('导出…'), action: () => (exportTarget.value = { kind: 'project', name: p.name, path: p.path }) },
-    { label: t('删除'), danger: true, action: () => (removeTarget.value = { id: p.id, name: p.name }) },
-  ]
-  openCtxMenu(x, y, items)
+/** 桌面端在系统文件管理器中定位文件夹（移动端无入口） */
+function revealPath(path: string): void {
+  if (!isTauri) return
+  void revealInFolder(path).catch(() => toast(t('无法在文件管理器中显示'), 'error'))
 }
 
-function openDirMenu(d: WorkDirMeta, x: number, y: number): void {
+function copyOneProject(p: ProjectMeta): void {
+  void ws.copyProjects([p]).then((n) => {
+    if (n) toast(t('已复制 {0} 个项目', n), 'success')
+  })
+}
+
+/** 项目右键 / ⋯ 菜单共用同一份条目 */
+function projectMenuItems(p: ProjectMeta): ContextMenuItem[] {
+  return [
+    { label: t('打开'), action: () => void ws.openProject(p) },
+    { label: t('编辑信息…'), action: () => openEditInfo(p) },
+    { label: t('重命名'), action: () => startRename('project', p) },
+    { label: t('设置图标…'), action: () => (emojiTarget.value = { kind: 'project', meta: p }) },
+    { label: t('导出…'), action: () => (exportTarget.value = { kind: 'project', name: p.name, path: p.path }) },
+    { label: t('复制项目'), action: () => copyOneProject(p) },
+    ...(isTauri
+      ? [{ label: t('在文件管理器中显示'), action: () => revealPath(p.path) }]
+      : []),
+    { label: t('删除'), danger: true, action: () => (removeTarget.value = { id: p.id, name: p.name }) },
+  ]
+}
+
+function openProjectMenu(p: ProjectMeta, x: number, y: number): void {
+  openCtxMenu(x, y, projectMenuItems(p))
+}
+
+/** 目录右键 / ⋯ 菜单共用同一份条目 */
+function dirMenuItems(d: WorkDirMeta): ContextMenuItem[] {
   const items: ContextMenuItem[] = []
   if (ws.dir?.path !== d.path) items.push({ label: t('打开'), action: () => enterDir(d) })
   else items.push({ label: t('进入项目'), action: () => ws.gotoSubPage('projects') })
@@ -562,9 +620,16 @@ function openDirMenu(d: WorkDirMeta, x: number, y: number): void {
     { label: t('重命名'), action: () => startRename('dir', d) },
     { label: t('设置图标…'), action: () => (emojiTarget.value = { kind: 'dir', meta: d }) },
     { label: t('导出…'), action: () => (exportTarget.value = { kind: 'dir', name: d.name, path: d.path }) },
+    ...(isTauri
+      ? [{ label: t('在文件管理器中显示'), action: () => revealPath(d.path) }]
+      : []),
     { label: t('移除记录'), danger: true, action: () => (removeDirTarget.value = d) },
   )
-  openCtxMenu(x, y, items)
+  return items
+}
+
+function openDirMenu(d: WorkDirMeta, x: number, y: number): void {
+  openCtxMenu(x, y, dirMenuItems(d))
 }
 
 const dirPress = useLongPress((e) => {
@@ -589,6 +654,35 @@ function fmtDate(t: number): string {
   if (!t) return ''
   const d = new Date(t)
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
+}
+
+/* ---------- 卡片布局（设置页「外观」里的列数 / 高度 / 圆角） ---------- */
+const gridStyle = computed(() => ({
+  gridTemplateColumns: `repeat(${settings.projectCardColumns}, minmax(0, 1fr))`,
+}))
+const cardStyle = computed(() => ({
+  height: `${settings.projectCardHeight}px`,
+  borderRadius: `${settings.projectCardRadius}px`,
+}))
+
+/** 体积与缩略图按需刷新：工作区页面可见、项目/目录列表或相关设置变化时 */
+watch(
+  () => [
+    step.value,
+    ws.subPage,
+    ws.projects.map((p) => `${p.id}|${p.path}|${p.count}|${p.coverStoredAs ?? p.coverSourcePath ?? ''}`).join(','),
+    ws.dirs.map((d) => `${d.path}|${d.projects ?? 0}`).join(','),
+    settings.showFileSizes,
+    settings.projectCardStyle,
+  ],
+  () => {
+    if (step.value === 'projects') void ws.refreshStats()
+  },
+  { immediate: true },
+)
+
+function sizeText(bytes: number | null | undefined): string {
+  return bytes == null ? '…' : fmtSize(bytes)
 }
 
 onMounted(() => {
@@ -679,15 +773,28 @@ onMounted(() => {
             <p v-if="selectScope === 'dirs'" class="select-hint">
               {{ t('点选或拖框选择目录，操作按钮在上方') }}
             </p>
-            <ul v-if="ws.dirs.length" class="dir-list" @pointerdown="onRubberDown('dirs', $event)">
+            <div class="search-row">
+              <Search :size="13" class="search-ic" />
+              <input
+                v-model="dirQuery"
+                class="search-input"
+                :placeholder="t('搜索工作目录…')"
+                @keyup.esc="dirQuery = ''"
+              />
+              <button v-if="dirQuery" class="search-clear" :title="t('清除搜索')" @click="dirQuery = ''">
+                <X :size="12" />
+              </button>
+            </div>
+            <ul v-if="filteredDirs.length" class="dir-list" @pointerdown="onRubberDown('dirs', $event)">
               <li
-                v-for="d in ws.dirs"
+                v-for="d in filteredDirs"
                 :key="d.path"
                 class="dir-row"
                 :class="{ active: !isSelecting && ws.dir?.path === d.path, selecting: selectScope === 'dirs' && selected.has(d.path) }"
                 :aria-busy="switchingDir === d.path"
                 :data-dir-path="d.path"
                 @click="onDirRowClick(d, $event)"
+                @contextmenu.prevent="openDirMenu(d, $event.clientX, $event.clientY)"
                 v-on="dirPress"
               >
                 <span
@@ -708,16 +815,13 @@ onMounted(() => {
                   <span class="dir-path" :title="d.path">{{ d.path }}</span>
                 </div>
                 <LoaderCircle v-if="switchingDir === d.path" :size="13" class="dir-spin" />
-                <span v-else class="dir-count">{{ t('{0} 个项目', d.projects ?? '—') }}</span>
+                <span v-else class="dir-count">
+                  {{ t('{0} 个项目', d.projects ?? '—') }}<template v-if="settings.showFileSizes"> · {{ sizeText(ws.dirSizes[d.path]) }}</template>
+                </span>
                 <AppDropdown
                   v-if="!isCoarse && selectScope !== 'dirs'"
                   align="right"
-                  :items="[
-                    { label: t('重命名'), action: () => startRename('dir', d) },
-                    { label: t('设置图标…'), action: () => (emojiTarget = { kind: 'dir', meta: d }) },
-                    { label: t('导出…'), action: () => (exportTarget = { kind: 'dir', name: d.name, path: d.path }) },
-                    { label: t('移除记录'), danger: true, action: () => (removeDirTarget = d) },
-                  ]"
+                  :items="dirMenuItems(d)"
                 >
                   <!-- span 触发器：AppDropdown 外层已有 button，slot 内不可再嵌 button，
                        也不能裸 @click.stop——冒泡被截断菜单永远打不开（与项目卡触发器同构） -->
@@ -729,7 +833,9 @@ onMounted(() => {
                 </AppDropdown>
               </li>
             </ul>
-            <p v-else class="empty">{{ t('还没有工作目录') }}</p>
+            <p v-else class="empty">
+              {{ dirQuery ? t('没有匹配的工作目录') : t('还没有工作目录') }}
+            </p>
             <div
               v-if="rubberStyle && selectScope === 'dirs'"
               class="rubber"
@@ -783,6 +889,19 @@ onMounted(() => {
                 {{ t('点选或拖框选择项目，操作按钮在上方') }}
               </p>
 
+            <div class="search-row">
+              <Search :size="13" class="search-ic" />
+              <input
+                v-model="prjQuery"
+                class="search-input"
+                :placeholder="t('搜索工作项目…')"
+                @keyup.esc="prjQuery = ''"
+              />
+              <button v-if="prjQuery" class="search-clear" :title="t('清除搜索')" @click="prjQuery = ''">
+                <X :size="12" />
+              </button>
+            </div>
+
             <div class="create">
               <input
                 v-model="newName"
@@ -795,20 +914,41 @@ onMounted(() => {
               </AppButton>
             </div>
 
-            <div v-if="ws.projects.length" class="grid" @pointerdown="onRubberDown('projects', $event)">
+            <div
+              v-if="filteredProjects.length"
+              class="grid"
+              :style="gridStyle"
+              @pointerdown="onRubberDown('projects', $event)"
+            >
               <!-- div[role=button]：卡片内要挂操作菜单，button 不能嵌套 button -->
               <div
-                v-for="p in ws.projects"
+                v-for="p in filteredProjects"
                 :key="p.id"
                 class="prj-card"
+                :class="[
+                  `style-${settings.projectCardStyle}`,
+                  { selecting: selectScope === 'projects' && selected.has(p.id) },
+                ]"
                 role="button"
                 tabindex="0"
-                :class="{ selecting: selectScope === 'projects' && selected.has(p.id) }"
+                :style="cardStyle"
                 :data-prj-id="p.id"
                 @click="onPrjCardClick(p)"
                 @keyup.enter="onPrjCardClick(p)"
+                @contextmenu.prevent="openProjectMenu(p, $event.clientX, $event.clientY)"
                 v-on="prjPress"
               >
+                <div
+                  v-if="settings.projectCardStyle === 'thumbnail' && ws.projectThumbs[p.id]"
+                  class="prj-cover"
+                  :style="{ backgroundImage: `url(${ws.projectThumbs[p.id]})` }"
+                  aria-hidden="true"
+                ></div>
+                <div
+                  v-if="settings.projectCardStyle === 'thumbnail' && ws.projectThumbs[p.id]"
+                  class="prj-wash"
+                  aria-hidden="true"
+                ></div>
                 <span
                   v-if="selectScope === 'projects'"
                   class="sel-dot"
@@ -824,18 +964,15 @@ onMounted(() => {
                 </span>
                 <span class="prj-name">{{ p.name }}</span>
                 <span v-if="p.description" class="prj-desc">{{ p.description }}</span>
-                <span class="prj-count">{{ t('{0} 张照片', p.count) }}</span>
+                <span class="prj-count">
+                  {{ t('{0} 张照片', p.count) }}<template v-if="settings.showFileSizes"> · {{ sizeText(ws.projectSizes[p.id]) }}</template>
+                </span>
                 <span v-if="p.createdAt" class="prj-date">{{ fmtDate(p.createdAt) }}</span>
                 <AppDropdown
                   v-if="!isCoarse && selectScope !== 'projects'"
                   class="prj-menu"
                   align="right"
-                  :items="[
-                    { label: t('重命名'), action: () => startRename('project', p) },
-                    { label: t('设置图标…'), action: () => (emojiTarget = { kind: 'project', meta: p }) },
-                    { label: t('导出…'), action: () => (exportTarget = { kind: 'project', name: p.name, path: p.path }) },
-                    { label: t('删除'), danger: true, action: () => (removeTarget = { id: p.id, name: p.name }) },
-                  ]"
+                  :items="projectMenuItems(p)"
                 >
                   <template #trigger>
                     <span class="prj-rm" role="button" :aria-label="t('项目操作')" :title="t('重命名 / 导出 / 删除')">
@@ -845,7 +982,9 @@ onMounted(() => {
                 </AppDropdown>
               </div>
             </div>
-            <p v-else class="empty">{{ t('这个目录里还没有工作项目') }}</p>
+            <p v-else class="empty">
+              {{ prjQuery ? t('没有匹配的工作项目') : t('这个目录里还没有工作项目') }}
+            </p>
             <div
               v-if="rubberStyle && selectScope === 'projects'"
               class="rubber"
@@ -1225,6 +1364,7 @@ onMounted(() => {
   position: absolute;
   left: 8px;
   top: 8px;
+  z-index: 3;
 }
 .prj-desc {
   font-size: calc(11px * var(--ui-zoom, 1));
@@ -1446,6 +1586,55 @@ h1 {
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 10px;
 }
+/* 工作区搜索：与输入框同高的小胶囊，图标在左、清除在右 */
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  margin-bottom: 10px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  transition: border-color var(--dur-hover) var(--ease-soft);
+}
+.search-row:focus-within {
+  border-color: var(--accent);
+}
+.search-ic {
+  flex: none;
+  color: var(--text-3);
+}
+.search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: calc(12.5px * var(--ui-zoom, 1));
+}
+.search-input:focus-visible {
+  outline: none;
+}
+.search-input::placeholder {
+  color: var(--text-3);
+}
+.search-clear {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--text-3);
+  transition: color var(--dur-hover) var(--ease-soft), background var(--dur-hover) var(--ease-soft);
+}
+.search-clear:hover {
+  color: var(--text);
+  background: var(--hover);
+}
 .prj-card {
   position: relative;
   display: flex;
@@ -1458,6 +1647,7 @@ h1 {
   background: var(--bg);
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
   transition:
     border-color var(--dur-hover) var(--ease-soft),
     background var(--dur-hover) var(--ease-soft),
@@ -1469,6 +1659,50 @@ h1 {
 }
 .prj-card:active {
   transform: scale(0.98);
+}
+/* 缩略图卡片：首图铺底，自左上到右下渐显；左上留给图标与文字 */
+.prj-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0.82;
+  transform: scale(1);
+  transform-origin: center;
+  -webkit-mask-image: linear-gradient(135deg, transparent 0%, #000 100%);
+  mask-image: linear-gradient(135deg, transparent 0%, #000 100%);
+  transition:
+    opacity 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 640ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+.prj-card.style-thumbnail:hover .prj-cover {
+  opacity: 1;
+  transform: scale(1.06);
+}
+/* 缩略图之上的内容统一抬一层，保证图标 / 名称 / 统计始终可读
+   （绝对定位的封面 / 压暗层 / 选框 / 菜单不能套用 relative，否则会破坏原有定位） */
+.prj-card > :not(.prj-cover):not(.prj-wash):not(.sel-dot):not(.prj-menu) {
+  position: relative;
+  z-index: 2;
+}
+/* 压在封面之上、文字之下的左上渐隐层：首图内容再花，名称与统计也有底。
+   前 38% 用实色页面底铺满（文字都落在这一段），随后渐隐到 78%，
+   右下仍保留首图的不透明度渐变观感 */
+.prj-wash {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(
+    135deg,
+    var(--bg) 0%,
+    var(--bg) 38%,
+    color-mix(in srgb, var(--bg) 62%, transparent) 58%,
+    transparent 78%
+  );
+  pointer-events: none;
 }
 .prj-icon {
   color: var(--accent);
@@ -1499,6 +1733,7 @@ h1 {
   position: absolute;
   top: 8px;
   right: 8px;
+  z-index: 3;
   opacity: 0;
   transition: opacity var(--dur-hover) var(--ease-soft);
 }

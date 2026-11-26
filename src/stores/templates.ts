@@ -283,9 +283,9 @@ export const useTemplatesStore = defineStore('templates', () => {
     return `${base} ${i}`
   }
 
-  /** 从 .amwm 导入的模板：写入自建模板库（重新生成 id，重名自动追加序号） */
+  /** 从水印模板 zip 导入的模板：写入自建模板库（重新生成 id，重名自动追加序号） */
   function importTemplate(tpl: WatermarkTemplate): string | null {
-    // 素材 id 全局共用一张表：导入时重映射，避免两个 .amwm 携带同一 id
+    // 素材 id 全局共用一张表：导入时重映射，避免两个模板 zip 携带同一 id
     // 但内容不同时互相顶掉图片
     const idMap = new Map<string, string>()
     for (const a of tpl.assets) idMap.set(a.id, uid())

@@ -191,6 +191,11 @@ const active = computed(() => images.active)
 /** 当前照片源文件失联：底图渲染不出内容，占位视图说明原因并给重定位入口 */
 const activeMissing = computed(() => active.value?.missing === true)
 const hasSelection = computed(() => !!wm.selectedId)
+/** 可缩放 / 旋转的选中层：边框与背景层没有独立几何，不显示变换手柄 */
+const transformableSel = computed(() => {
+  const s = wm.selected
+  return !!s && s.type !== 'border' && s.type !== 'background'
+})
 // 安全区下限会随「默认缩放」下探：默认 30% 时首次视图必须停得住，
 // 否则会被 100% 的最小缩放顶回适应窗口，设置等于失效；默认 ≥100% 时
 // 仍按安全区本身限制缩小边界
@@ -614,7 +619,9 @@ async function renderBase(draft: boolean): Promise<void> {
     // 新几何（换照片 / 进出裁剪）可能让当前平移越界：按新画面夹紧一次
     hardClampPan()
     drawBase()
-    drawOverlay()
+    // 走 scheduleOverlay 而不是直接 drawOverlay：首次渲染时素材位图尚未加载，
+    // 需要它内部的 syncAssets 补齐后再画一帧，否则要点一下画布才出水印
+    scheduleOverlay()
   } catch (err) {
     console.error("底图渲染失败", err)
     srcBitmap = null
@@ -1082,6 +1089,109 @@ function updateSelRect(): void {
     height: (box.h * s) / dpr,
     rotate: box.rotation,
   }
+}
+
+/* ---------- 选中框手柄：缩放 / 旋转 ---------- */
+
+type SelHandle = 'nw' | 'ne' | 'se' | 'sw' | 'rotate'
+const SEL_HANDLES: SelHandle[] = ['nw', 'ne', 'se', 'sw']
+
+type SelGesture =
+  | {
+      type: 'scale'
+      id: string
+      center: { x: number; y: number }
+      startDist: number
+      startScale: number
+      minScale: number
+      maxScale: number
+    }
+  | {
+      type: 'rotate'
+      id: string
+      center: { x: number; y: number }
+      startAngle: number
+      startRotation: number
+    }
+let selGesture: SelGesture | null = null
+
+function normDeg(v: number): number {
+  let r = v
+  while (r > 180) r -= 360
+  while (r <= -180) r += 360
+  return r
+}
+
+/** 手柄按下：以选中框中心为基准开始缩放 / 旋转（DOM 手柄，不进入画布手势） */
+function startSelHandle(handle: SelHandle, e: PointerEvent): void {
+  const s = wm.selected
+  const rect = selRect.value
+  const canvas = cvBase.value
+  if (!s || !rect || !canvas || s.type === 'border' || s.type === 'background') return
+  const layer = wm.editTarget().find((l) => l.id === s.id)
+  if (!layer || layer.type === 'border' || layer.type === 'background') return
+  stopViewAnim()
+  const cRect = canvas.getBoundingClientRect()
+  const center = {
+    x: cRect.left + rect.left + rect.width / 2,
+    y: cRect.top + rect.top + rect.height / 2,
+  }
+  const dist = Math.hypot(e.clientX - center.x, e.clientY - center.y) || 1
+  selGesture =
+    handle === 'rotate'
+      ? {
+          type: 'rotate',
+          id: layer.id,
+          center,
+          startAngle: Math.atan2(e.clientY - center.y, e.clientX - center.x),
+          startRotation: layer.rotation,
+        }
+      : {
+          type: 'scale',
+          id: layer.id,
+          center,
+          startDist: dist,
+          startScale: layer.scale,
+          minScale: 0.5,
+          maxScale: layer.type === 'text' ? 40 : 100,
+        }
+  window.addEventListener('pointermove', onSelMove)
+  window.addEventListener('pointerup', onSelUp)
+  window.addEventListener('pointercancel', onSelUp)
+}
+
+function onSelMove(e: PointerEvent): void {
+  const g = selGesture
+  if (!g) return
+  e.preventDefault()
+  if (g.type === 'scale') {
+    const dist = Math.hypot(e.clientX - g.center.x, e.clientY - g.center.y) || 1
+    const scale = Math.min(g.maxScale, Math.max(g.minScale, g.startScale * (dist / g.startDist)))
+    wm.update(g.id, { scale })
+  } else {
+    const cur = Math.atan2(e.clientY - g.center.y, e.clientX - g.center.x)
+    let delta = cur - g.startAngle
+    if (delta > Math.PI) delta -= Math.PI * 2
+    else if (delta < -Math.PI) delta += Math.PI * 2
+    const rot = normDeg(g.startRotation + (delta * 180) / Math.PI)
+    wm.update(g.id, { rotation: Math.round(rot * 10) / 10 })
+  }
+  drawOverlay()
+}
+
+function onSelUp(): void {
+  const g = selGesture
+  selGesture = null
+  window.removeEventListener('pointermove', onSelMove)
+  window.removeEventListener('pointerup', onSelUp)
+  window.removeEventListener('pointercancel', onSelUp)
+  if (!g) return
+  const layer = wm.editTarget().find((l) => l.id === g.id)
+  if (layer && layer.type !== 'border' && layer.type !== 'background') {
+    if (g.type === 'scale') wm.update(g.id, { scale: Math.round(layer.scale * 10) / 10 })
+    else wm.update(g.id, { rotation: Math.round(normDeg(layer.rotation)) })
+  }
+  drawOverlay()
 }
 
 function toImagePx(clientX: number, clientY: number): { x: number; y: number } {
@@ -1744,8 +1854,14 @@ function onPointerMove(e: PointerEvent): void {
     const proposedX = gesture.startCx + (e.clientX - gesture.startClient.x) / cssPerImg
     const proposedY = gesture.startCy + (e.clientY - gesture.startClient.y) / cssPerImg
     const snapped = applySnap(proposedX, proposedY, gid)
-    const cx = Math.min(imgW, Math.max(0, snapped.cx))
-    const cy = Math.min(imgH, Math.max(0, snapped.cy))
+    // 钳制基准是整幅合成画布而不是照片区域：有背景水印时，跟随照片锚点的
+    // 水印也应该能拖到背景区（照片矩形之外），否则外扩区域永远用不上
+    const minX = -region.x
+    const maxX = resultMap.w - region.x
+    const minY = -region.y
+    const maxY = resultMap.h - region.y
+    const cx = Math.min(maxX, Math.max(minX, snapped.cx))
+    const cy = Math.min(maxY, Math.max(minY, snapped.cy))
     const layer = wm.editTarget().find((l) => l.id === gid)
     if (!layer || layer.type === 'border' || layer.type === 'background') return
     const a = layerAnchor(layer, imgW, imgH, overlayPxScale(), resolvedLayers(), measureContext())
@@ -2157,6 +2273,8 @@ function onCropKey(e: KeyboardEvent): void {
 
 onMounted(() => {
   window.addEventListener('keydown', onCropKey)
+  // 首帧前先把水印素材位图加载好：首次渲染完成后会直接画叠加层
+  void syncAssets()
   if (frame.value) {
     ro = new ResizeObserver((entries) => {
       const r = entries[0]?.contentRect
@@ -2239,7 +2357,24 @@ onBeforeUnmount(() => {
           height: `${selRect.height}px`,
           transform: `rotate(${selRect.rotate}deg)`,
         }"
-      />
+      >
+        <template v-if="transformableSel">
+          <span class="sel-stem" aria-hidden="true" />
+          <span
+            v-for="h in SEL_HANDLES"
+            :key="h"
+            class="sel-handle"
+            :class="`h-${h}`"
+            :aria-label="t('调整大小')"
+            @pointerdown.stop.prevent="startSelHandle(h, $event)"
+          />
+          <span
+            class="sel-handle sel-rot"
+            :aria-label="t('旋转')"
+            @pointerdown.stop.prevent="startSelHandle('rotate', $event)"
+          />
+        </template>
+      </div>
     </div>
     <Transition name="fade">
       <div v-if="rendering && !adjust.pickingWb" class="render-hint" aria-hidden="true">
@@ -2338,6 +2473,59 @@ onBeforeUnmount(() => {
   border-radius: 3px;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   transition: box-shadow var(--dur-fast) var(--ease);
+}
+/* 四角缩放手柄 + 顶部旋转手柄：父级选框仍不拦截画布手势，只有手柄可点 */
+.sel-handle {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  margin: -6.5px 0 0 -6.5px;
+  border-radius: 3px;
+  background: var(--accent);
+  border: 1.5px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  touch-action: none;
+}
+.h-nw {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+.h-ne {
+  left: 100%;
+  top: 0;
+  cursor: nesw-resize;
+}
+.h-se {
+  left: 100%;
+  top: 100%;
+  cursor: nwse-resize;
+}
+.h-sw {
+  left: 0;
+  top: 100%;
+  cursor: nesw-resize;
+}
+.sel-rot {
+  left: 50%;
+  top: -28px;
+  width: 15px;
+  height: 15px;
+  margin: -7.5px 0 0 -7.5px;
+  border-radius: 50%;
+  cursor: grab;
+}
+.sel-stem {
+  position: absolute;
+  left: 50%;
+  top: -28px;
+  width: 1px;
+  height: 28px;
+  margin-left: -0.5px;
+  background: var(--accent);
+  opacity: 0.6;
+  pointer-events: none;
 }
 /* 渲染中提示：与缩放药丸同风格的小徽章 */
 .render-hint {

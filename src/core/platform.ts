@@ -166,7 +166,7 @@ export async function pickSavePath(
   return path ?? null
 }
 
-/** 桌面端选择单个文件并读取字节（水印模板 .amwm 导入等）。 */
+/** 桌面端选择单个文件并读取字节（水印模板 .zip 导入等）。 */
 export async function pickBinaryFile(
   title: string,
   extensions: string[],

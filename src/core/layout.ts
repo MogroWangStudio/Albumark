@@ -229,3 +229,33 @@ export function hitTest(box: LayerBox, px: number, py: number): boolean {
   const y = dx * Math.sin(rad) + dy * Math.cos(rad)
   return Math.abs(x) <= box.w / 2 && Math.abs(y) <= box.h / 2
 }
+
+/** 选中框手柄：四角缩放点 + 顶部旋转点（坐标已是图片坐标系，含旋转）。 */
+export type LayerHandleId = 'nw' | 'ne' | 'se' | 'sw' | 'rotate'
+
+export interface LayerHandle {
+  id: LayerHandleId
+  x: number
+  y: number
+}
+
+/**
+ * 选中框手柄的唯一几何入口：预览叠加层与工作室样张共用。
+ * rotateDist 为旋转手柄离包围盒上沿的距离（图片坐标），调用方按屏幕尺度折算。
+ */
+export function layerHandles(box: LayerBox, rotateDist: number): LayerHandle[] {
+  const rad = (box.rotation * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const at = (lx: number, ly: number): { x: number; y: number } => ({
+    x: box.cx + lx * cos - ly * sin,
+    y: box.cy + lx * sin + ly * cos,
+  })
+  return [
+    { id: 'nw', ...at(-box.w / 2, -box.h / 2) },
+    { id: 'ne', ...at(box.w / 2, -box.h / 2) },
+    { id: 'se', ...at(box.w / 2, box.h / 2) },
+    { id: 'sw', ...at(-box.w / 2, box.h / 2) },
+    { id: 'rotate', ...at(0, -box.h / 2 - rotateDist) },
+  ]
+}

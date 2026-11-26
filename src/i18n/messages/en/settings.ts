@@ -175,6 +175,27 @@ const messages: Record<string, string> = {
   "GitHub 代理": "GitHub proxy",
   "直接连接 github.com": "Connects directly to github.com",
   "经 gh-proxy.org 加速": "Accelerated through gh-proxy.org",
+
+  // 工作项目卡片与工作区体积
+  "工作项目卡片": "Project cards",
+  "缩略图卡片用项目第一张照片做背景，自左上到右下渐显；纯净卡片为旧版样式":
+    "Thumbnail cards use the project's first photo as a background, fading in from the top-left to the bottom-right; plain cards are the previous style",
+  "缩略图卡片": "Thumbnail card",
+  "纯净卡片": "Plain card",
+  "卡片列数": "Card columns",
+  "工作项目卡片一行显示几个；列数越多，卡片越窄":
+    "How many project cards appear per row; more columns make cards narrower",
+  "列数": "Columns",
+  "{0} 列": "{0} columns",
+  "卡片高度": "Card height",
+  "高度": "Height",
+  "卡片圆角": "Card corner radius",
+  "圆角": "Corner radius",
+  "显示文件大小": "Show file size",
+  "在工作目录与工作项目卡片上显示占用体积；关闭后不再扫描磁盘":
+    "Show storage usage on work directories and project cards; turning this off stops disk scanning",
+  "放大后可平移查看的额外边距；数值越大，照片可被推得越远，0 为最多贴边":
+    "Extra pan range when zoomed in; larger values let the photo be pushed further, 0 stops at the edge",
 }
 
 export default messages

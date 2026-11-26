@@ -120,6 +120,14 @@ const messages: Record<string, string> = {
     "Relinked {0} photos ({1} had the same name but different content)",
   "已重新链接 {0} 张源文件": "Relinked {0} source files",
   "{0} 张未能重新链接": "{0} photos could not be relinked",
+  "搜索工作目录…": "Search work directories…",
+  "搜索工作项目…": "Search work projects…",
+  "清除搜索": "Clear search",
+  "没有匹配的工作目录": "No matching work directories",
+  "没有匹配的工作项目": "No matching work projects",
+  "复制项目": "Duplicate project",
+  "在文件管理器中显示": "Show in file manager",
+  "无法在文件管理器中显示": "Could not show it in the file manager",
 }
 
 export default messages
